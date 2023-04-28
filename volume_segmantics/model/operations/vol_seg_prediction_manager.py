@@ -19,6 +19,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
         model_file_path: str,
         data_vol: Union[str, np.ndarray],
         settings: SimpleNamespace,
+        use_dask=False
     ) -> None:
         """Inits VolSeg2DPredictionManager.
 
@@ -28,7 +29,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
             settings (SimpleNamespace): A prediction settings object.
         """
         super().__init__(data_vol, settings)
-        self.predictor = VolSeg2dPredictor(model_file_path, settings)
+        self.predictor = VolSeg2dPredictor(model_file_path, settings, use_dask)
         self.settings = settings
 
     def get_label_codes(self) -> dict:
