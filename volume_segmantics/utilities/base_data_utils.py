@@ -16,8 +16,6 @@ from skimage.measure import block_reduce
 import volume_segmantics.utilities.config as cfg
 from types import SimpleNamespace
 from pathlib import Path
-from dask import array as da
-
 
 class Quality(Enum):
     """An Enum that holds values describing the quality of segmentation
@@ -251,21 +249,16 @@ def clip_to_uint8(data: np.array, data_mean: float, st_dev_factor: float) -> np.
     Returns:
         np.array: A unit8 data array.
     """
-
-    data= da.array(data)
-
     logging.info("Clipping data and converting to uint8.")
     logging.info(f"Calculating standard deviation.")
-
-    data_st_dev = da.nanstd(da.array(data)).compute()
-        
+    data_st_dev = np.nanstd(data)
     logging.info(f"Std dev: {data_st_dev}. Calculating stats.")
     num_vox = data.size
     lower_bound = data_mean - (data_st_dev * st_dev_factor)
     upper_bound = data_mean + (data_st_dev * st_dev_factor)
     with np.errstate(invalid="ignore"):
-        gt_ub = (data > upper_bound).sum().compute()
-        lt_lb = (data < lower_bound).sum().compute()
+        gt_ub = (data > upper_bound).sum()
+        lt_lb = (data < lower_bound).sum()
     logging.info(f"Lower bound: {lower_bound}, upper bound: {upper_bound}")
     logging.info(
         f"Number of voxels above upper bound to be clipped {gt_ub} - percentage {gt_ub/num_vox * 100:.3f}%"
@@ -273,25 +266,24 @@ def clip_to_uint8(data: np.array, data_mean: float, st_dev_factor: float) -> np.
     logging.info(
         f"Number of voxels below lower bound to be clipped {lt_lb} - percentage {lt_lb/num_vox * 100:.3f}%"
     )
-    if da.isnan(data).any():
+    if np.isnan(data).any():
         logging.info(f"Replacing NaN values.")
-        data = da.nan_to_num(data, copy=False, nan=data_mean)
+        data = np.nan_to_num(data, copy=False, nan=data_mean)
     logging.info("Rescaling intensities.")
-    logging.info(f"Data type is {data.dtype}")
     if np.issubdtype(data.dtype, np.integer):
         logging.info(
             "Data is already in integer dtype, converting to float for rescaling."
         )
         data = data.astype(float)
-    data = da.clip(data, lower_bound, upper_bound, out=data)
-    data = da.subtract(data, lower_bound, out=data)
-    data = da.divide(data, (upper_bound - lower_bound), out=data)
+    data = np.clip(data, lower_bound, upper_bound, out=data)
+    data = np.subtract(data, lower_bound, out=data)
+    data = np.divide(data, (upper_bound - lower_bound), out=data)
     # data = (data - lower_bound) / (upper_bound - lower_bound)
-    data = da.clip(data, 0.0, 1.0, out=data)
+    data = np.clip(data, 0.0, 1.0, out=data)
     # data = exposure.rescale_intensity(data, in_range=(lower_bound, upper_bound))
     logging.info("Converting to uint8.")
-    data = da.multiply(data, 255, out=data)
-    return data.astype(np.uint8).compute()
+    data = np.multiply(data, 255, out=data)
+    return data.astype(np.uint8)
 
 
 def get_num_of_ims(vol_shape: Tuple, axis_enum: Axis):
