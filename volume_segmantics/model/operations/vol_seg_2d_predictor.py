@@ -130,7 +130,7 @@ class VolSeg2dPredictor:
         labels = np.concatenate(output_vol_list)
         labels = utils.rotate_array_to_axis(labels, axis)
         probs = np.concatenate(output_prob_list) if output_prob_list else None
-        print(f"3. probs.shape:{probs.shape}")
+        #print(f"3. probs.shape:{probs.shape}")
 
         # Don't use rotate_array_to_axis, because probs has one extra dimension for class label
         if probs is not None:
@@ -143,7 +143,7 @@ class VolSeg2dPredictor:
             if axis == Axis.X:
                 probs=probs.swapaxes(0, 2)
             
-        print(f"4. probs.shape:{probs.shape}")
+        #print(f"4. probs.shape:{probs.shape}")
 
         return labels, probs
     
