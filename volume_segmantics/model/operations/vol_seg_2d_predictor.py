@@ -21,8 +21,10 @@ class VolSeg2dPredictor:
         self.model_file_path = Path(model_file_path)
         self.settings = settings
         self.model_device_num = int(settings.cuda_device)
+        print("VolSeg2dPredictor.__init__() ,settings.cuda_device:", settings.cuda_device)
+
         model_tuple = create_model_from_file(
-            self.model_file_path, self.model_device_num
+            self.model_file_path, device_num = self.model_device_num
         )
         self.model, self.num_labels, self.label_codes = model_tuple
 
@@ -203,13 +205,15 @@ class VolSeg2dPredictor:
                 np.take_along_axis(label_container, max_prob_idx, axis=0)
             )
         else:
-            max_prob_idx = da.argmax(prob_container, axis=0)
+            #There is no impplementation of take_along_axis in dask,
+            # so use only the da.squeeze function
+            max_prob_idx = np.argmax(prob_container, axis=0)
             max_prob_idx = max_prob_idx[np.newaxis, :, :, :]
             prob_container[0] = da.squeeze(
-                da.take_along_axis(prob_container, max_prob_idx, axis=0)
+                np.take_along_axis(prob_container, max_prob_idx, axis=0)
             )
             label_container[0] = da.squeeze(
-                da.take_along_axis(label_container, max_prob_idx, axis=0)
+                np.take_along_axis(label_container, max_prob_idx, axis=0)
             )
 
     # def _predict_12_ways_max_probs(self, data_vol):
