@@ -12,7 +12,7 @@ class BaseDataManager:
         self, data_vol: Union[Path, str, np.ndarray], settings: SimpleNamespace
     ) -> None:
         
-        print("BaseDataManager.__init__()")
+        logging.debug("BaseDataManager.__init__()")
 
         self.data_vol_shape = None
         self.data_mean = None
@@ -30,17 +30,17 @@ class BaseDataManager:
         self._preprocess_data()
 
     def _preprocess_data(self):
-        print("BaseDataManager._preprocess_data()")
+        logging.debug("BaseDataManager._preprocess_data()")
         if self.downsample:
             self.data_vol = utils.downsample_data(self.data_vol)
         self.data_vol_shape = self.data_vol.shape
-        print("Calculating mean of data...")
+        logging.info("Calculating mean of data...")
         self.data_mean = np.nanmean(self.data_vol)
-        print(f"Mean value: {self.data_mean}")
+        logging.info(f"Mean value: {self.data_mean}")
         if self.settings.clip_data:
             self.data_vol = utils.clip_to_uint8(
                 self.data_vol, self.data_mean, self.st_dev_factor
             )
         if np.isnan(self.data_vol).any():
-            print(f"Replacing NaN values.")
+            logging.info(f"Replacing NaN values.")
             self.data_vol = np.nan_to_num(self.data_vol, copy=False)

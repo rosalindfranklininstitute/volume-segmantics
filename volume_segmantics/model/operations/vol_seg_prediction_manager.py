@@ -28,7 +28,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
             data_vol (Union[str, np.ndarray]): String of filepath to data volume or numpy array of data to predict segmentation of.
             settings (SimpleNamespace): A prediction settings object.
         """
-        print("VolSeg2DPredictionManager.__init__()")
+        logging.debug("VolSeg2DPredictionManager.__init__()")
         
         super().__init__(data_vol, settings)
         self.predictor = VolSeg2dPredictor(model_file_path, settings, use_dask)

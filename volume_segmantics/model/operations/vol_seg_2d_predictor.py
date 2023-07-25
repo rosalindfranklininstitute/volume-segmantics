@@ -21,7 +21,7 @@ class VolSeg2dPredictor:
         self.model_file_path = Path(model_file_path)
         self.settings = settings
         self.model_device_num = int(settings.cuda_device)
-        print("VolSeg2dPredictor.__init__() ,settings.cuda_device:", settings.cuda_device)
+        logging.debug("VolSeg2dPredictor.__init__() ,settings.cuda_device:", settings.cuda_device)
 
         model_tuple = create_model_from_file(
             self.model_file_path, device_num = self.model_device_num
@@ -118,12 +118,6 @@ class VolSeg2dPredictor:
                 # Collects only the probability of the label that gives maximum probability!!
                 
                 #By default, collect all the probabilities
-                # # Get indices of max probs
-                # max_prob_idx = torch.argmax(probs, dim=1, keepdim=True)
-                # # Extract along axis from outputs
-                # probs = torch.gather(probs, 1, max_prob_idx)
-                # # Remove the label dimension
-                # probs = torch.squeeze(probs, dim=1)
                 #print(f"1. probs.shape:{probs.shape}")
                 probs = utils.crop_tensor_to_array(probs, yx_dims)
                 #print(f"2. probs.shape:{probs.shape}")

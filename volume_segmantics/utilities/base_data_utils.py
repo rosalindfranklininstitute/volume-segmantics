@@ -114,7 +114,7 @@ def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
     else:
         batch_size = cfg.BIG_CUDA_PRED_BATCH
 
-    print(
+    logging.info(
         f"Free GPU memory is {free_gpu_mem:0.2f} GB. Batch size will be "
         f"{batch_size}."
     )
@@ -158,7 +158,7 @@ def prepare_training_batch(
 
 
 def downsample_data(data, factor=2):
-    print(f"Downsampling data by a factor of {factor}.")
+    logging.info(f"Downsampling data by a factor of {factor}.")
     return block_reduce(data, block_size=(factor, factor, factor), func=np.nanmean)
 
 
@@ -249,29 +249,29 @@ def clip_to_uint8(data: np.array, data_mean: float, st_dev_factor: float) -> np.
     Returns:
         np.array: A unit8 data array.
     """
-    print("Clipping data and converting to uint8.")
-    print(f"Calculating standard deviation.")
+    logging.info("Clipping data and converting to uint8.")
+    logging.info(f"Calculating standard deviation.")
     data_st_dev = np.nanstd(data)
-    print(f"Std dev: {data_st_dev}. Calculating stats.")
+    logging.info(f"Std dev: {data_st_dev}. Calculating stats.")
     num_vox = data.size
     lower_bound = data_mean - (data_st_dev * st_dev_factor)
     upper_bound = data_mean + (data_st_dev * st_dev_factor)
     with np.errstate(invalid="ignore"):
         gt_ub = (data > upper_bound).sum()
         lt_lb = (data < lower_bound).sum()
-    print(f"Lower bound: {lower_bound}, upper bound: {upper_bound}")
-    print(
+    logging.info(f"Lower bound: {lower_bound}, upper bound: {upper_bound}")
+    logging.info(
         f"Number of voxels above upper bound to be clipped {gt_ub} - percentage {gt_ub/num_vox * 100:.3f}%"
     )
-    print(
+    logging.info(
         f"Number of voxels below lower bound to be clipped {lt_lb} - percentage {lt_lb/num_vox * 100:.3f}%"
     )
     if np.isnan(data).any():
-        print(f"Replacing NaN values.")
+        logging.info(f"Replacing NaN values.")
         data = np.nan_to_num(data, copy=False, nan=data_mean)
-    print("Rescaling intensities.")
+    logging.info("Rescaling intensities.")
     if np.issubdtype(data.dtype, np.integer):
-        print(
+        logging.info(
             "Data is already in integer dtype, converting to float for rescaling."
         )
         data = data.astype(float)
@@ -281,7 +281,7 @@ def clip_to_uint8(data: np.array, data_mean: float, st_dev_factor: float) -> np.
     # data = (data - lower_bound) / (upper_bound - lower_bound)
     data = np.clip(data, 0.0, 1.0, out=data)
     # data = exposure.rescale_intensity(data, in_range=(lower_bound, upper_bound))
-    print("Converting to uint8.")
+    logging.info("Converting to uint8.")
     data = np.multiply(data, 255, out=data)
     return data.astype(np.uint8)
 
@@ -348,7 +348,7 @@ def axis_index_to_slice(vol, axis, index):
 
 
 def save_data_to_hdf5(data, file_path, internal_path="/data", chunking=True):
-    print(f"Saving data of shape {data.shape} to {file_path}.")
+    logging.info(f"Saving data of shape {data.shape} to {file_path}.")
     with h5.File(file_path, "w") as f:
         f.create_dataset(
             internal_path, data=data, chunks=chunking, compression=cfg.HDF5_COMPRESSION
