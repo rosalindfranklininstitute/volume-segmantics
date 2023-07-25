@@ -40,7 +40,7 @@ class TestVolSegPredictionManager:
     def test_predict_volume_to_path_low_single_axis(
         self, model_path, rand_int_volume, prediction_settings, tmp_path
     ):
-        #Tests are failingg here, hence the print statements to debug
+        #Tests are failing here, hence the print statements to debug
         
         original_shape = deepcopy(list(rand_int_volume.shape))
         print(original_shape)
