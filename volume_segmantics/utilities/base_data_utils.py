@@ -50,6 +50,7 @@ class ModelType(Enum):
 
 
 def create_enum_from_setting(setting_str, enum):
+    logging.debug("create_enum_from_setting()")
     if isinstance(setting_str, Enum):
         return setting_str
     try:
@@ -64,16 +65,19 @@ def create_enum_from_setting(setting_str, enum):
 
 
 def get_prediction_quality(settings: SimpleNamespace) -> Enum:
+    logging.debug("get_prediction_quality()")
     pred_quality = create_enum_from_setting(settings.quality, Quality)
     return pred_quality
 
 
 def get_model_type(settings: SimpleNamespace) -> Enum:
+    logging.debug("get_model_type()")
     model_type = create_enum_from_setting(settings.model["type"], ModelType)
     return model_type
 
 
 def get_training_axis(settings: SimpleNamespace) -> Enum:
+    logging.debug("get_model_type()")
     try:
         axis_setting = settings.training_axes
     except AttributeError:
@@ -83,6 +87,7 @@ def get_training_axis(settings: SimpleNamespace) -> Enum:
 
 
 def get_prediction_axis(settings: SimpleNamespace) -> Enum:
+    logging.debug("get_prediction_axis()")
     try:
         axis_setting = settings.prediction_axis
     except AttributeError:
@@ -92,6 +97,7 @@ def get_prediction_axis(settings: SimpleNamespace) -> Enum:
 
 
 def setup_path_if_exists(input_param):
+    logging.debug("setup_path_if_exists()")
     if isinstance(input_param, str):
         return Path(input_param)
     elif isinstance(input_param, Path):
@@ -101,7 +107,7 @@ def setup_path_if_exists(input_param):
 
 
 def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
-
+    logging.debug("get_batch_size()")
     cuda_device_num = settings.cuda_device
     total_gpu_mem = torch.cuda.get_device_properties(cuda_device_num).total_memory
     allocated_gpu_mem = torch.cuda.memory_allocated(cuda_device_num)
@@ -122,6 +128,7 @@ def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
 
 
 def crop_tensor_to_array(tensor: torch.Tensor, yx_dims: List[int]) -> np.array:
+    logging.debug("crop_tensor_to_array()")
     if tensor.is_cuda:
         tensor = tensor.cpu()
     tensor = F.center_crop(tensor, yx_dims)
@@ -129,6 +136,7 @@ def crop_tensor_to_array(tensor: torch.Tensor, yx_dims: List[int]) -> np.array:
 
 
 def rotate_array_to_axis(array: np.array, axis: Axis = Axis.Z) -> np.array:
+    logging.debug("rotate_array_to_axis()")
     if axis == Axis.Z:
         return array
     if axis == Axis.Y:
@@ -139,6 +147,7 @@ def rotate_array_to_axis(array: np.array, axis: Axis = Axis.Z) -> np.array:
 
 def one_hot_encode_array(input_array: np.array, num_labels: int) -> np.array:
     """Modified from https://stackoverflow.com/questions/36960320/convert-a-2d-matrix-to-a-3d-one-hot-matrix-numpy"""
+    logging.debug("one_hot_encode_array()")
     ncols = num_labels
     out = np.zeros((ncols, input_array.size), dtype=np.uint8)
     out[input_array.ravel(), np.arange(input_array.size)] = 1
@@ -149,6 +158,7 @@ def one_hot_encode_array(input_array: np.array, num_labels: int) -> np.array:
 def prepare_training_batch(
     batch: "list[torch.Tensor]", device: int, num_labels: int
 ) -> "tuple[torch.Tensor, torch.Tensor]":
+    logging.debug("prepare_training_batch()")
     inputs = batch[0].to(device)
     targets = batch[1].to(torch.int64)
     # One hot encode the channels
@@ -158,7 +168,7 @@ def prepare_training_batch(
 
 
 def downsample_data(data, factor=2):
-    logging.info(f"Downsampling data by a factor of {factor}.")
+    logging.debug(f"downsample_data() factor:{factor}.")
     return block_reduce(data, block_size=(factor, factor, factor), func=np.nanmean)
 
 
@@ -214,6 +224,7 @@ def numpy_from_hdf5(path, hdf5_path="/data", nexus=False):
 def get_numpy_from_path(
     path: pathlib.Path, internal_path: str = "/data"
 ) -> Tuple[np.array, Union[Tuple[int, int], bool]]:
+    logging.debug(f"get_numpy_from_path()")
     """Helper function that returns numpy array and chunking(if used)
     according to file extension.
 
@@ -233,6 +244,7 @@ def get_numpy_from_path(
 
 
 def sequential_labels(unique_labels: np.array) -> bool:
+    logging.debug(f"sequential_labels()")
     if not np.where(np.diff(unique_labels) != 1)[0].size:
         return True
     else:
@@ -249,7 +261,7 @@ def clip_to_uint8(data: np.array, data_mean: float, st_dev_factor: float) -> np.
     Returns:
         np.array: A unit8 data array.
     """
-    logging.info("Clipping data and converting to uint8.")
+    logging.debug(f"clip_to_uint8()")
     logging.info(f"Calculating standard deviation.")
     data_st_dev = np.nanstd(data)
     logging.info(f"Std dev: {data_st_dev}. Calculating stats.")
@@ -298,6 +310,7 @@ def get_num_of_ims(vol_shape: Tuple, axis_enum: Axis):
         int: Total number of images that will be created when the volume is
         sliced.
     """
+    logging.debug("get_num_of_ims()")
     if axis_enum == Axis.ALL:
         return sum(vol_shape)
     else:
@@ -316,6 +329,7 @@ def get_axis_index_pairs(vol_shape: Tuple, axis_enum: Axis):
         itertools.chain: An iterable containing all combinations of axis
         and image index that are found in the volume.
     """
+    logging.debug("get_axis_index_pairs()")
 
     if axis_enum == Axis.ALL:
         return chain(
@@ -339,6 +353,7 @@ def axis_index_to_slice(vol, axis, index):
     Returns:
         2d array: A 2d image slice corresponding to the axis and index.
     """
+    logging.debug("axis_index_to_slice()")
     if axis == "z":
         return vol[index, :, :]
     if axis == "y":
@@ -348,6 +363,7 @@ def axis_index_to_slice(vol, axis, index):
 
 
 def save_data_to_hdf5(data, file_path, internal_path="/data", chunking=True):
+    logging.debug("save_data_to_hdf5()")
     logging.info(f"Saving data of shape {data.shape} to {file_path}.")
     with h5.File(file_path, "w") as f:
         f.create_dataset(

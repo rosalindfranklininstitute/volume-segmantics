@@ -18,10 +18,11 @@ class VolSeg2dPredictor:
     """Class that performs U-Net prediction operations. Does not interact with disk."""
 
     def __init__(self, model_file_path: str, settings: SimpleNamespace, use_dask=False) -> None:
+        logging.debug(f"VolSeg2dPredictor.__init__() ,settings.cuda_device:{settings.cuda_device}")
+        
         self.model_file_path = Path(model_file_path)
         self.settings = settings
         self.model_device_num = int(settings.cuda_device)
-        logging.debug("VolSeg2dPredictor.__init__() ,settings.cuda_device:", settings.cuda_device)
 
         model_tuple = create_model_from_file(
             self.model_file_path, device_num = self.model_device_num
@@ -47,6 +48,7 @@ class VolSeg2dPredictor:
             (labels, probs)
             If output_probs was set to False, then probs will return None
         '''
+        logging.debug(f"_predict_single_axis() with output_probs:{output_probs}, axis:{axis}")
         output_vol_list = []
         output_prob_list = []
         data_vol = utils.rotate_array_to_axis(data_vol, axis)
@@ -76,10 +78,16 @@ class VolSeg2dPredictor:
                     probs = utils.crop_tensor_to_array(probs, yx_dims)
                     output_prob_list.append(probs.astype(np.float16))
 
+        logging.info(f"Completed prediction. Now manipulating result before returning.")
+        logging.debug("labels concatenate")
         labels = np.concatenate(output_vol_list)
+        logging.debug("labels rotate to axis")
         labels = utils.rotate_array_to_axis(labels, axis)
+
+        logging.debug("probs concatenate")
         probs = np.concatenate(output_prob_list) if output_prob_list else None
         if probs is not None:
+            logging.debug("probs rotate to axis")
             probs = utils.rotate_array_to_axis(probs, axis)
         return labels, probs
 
@@ -97,6 +105,7 @@ class VolSeg2dPredictor:
             (labels, probs)
             If output_probs was set to False, then probs will return None
         '''
+        logging.debug(f"_predict_single_axis_all_probs() with axis:{axis}")
         output_vol_list = []
         output_prob_list = []
         data_vol = utils.rotate_array_to_axis(data_vol, axis)
@@ -122,14 +131,20 @@ class VolSeg2dPredictor:
                 probs = utils.crop_tensor_to_array(probs, yx_dims)
                 #print(f"2. probs.shape:{probs.shape}")
                 output_prob_list.append(probs.astype(np.float16))
+        
+        logging.info(f"Completed prediction. Now manipulating result before returning.")
 
+        logging.debug("labels concatenate")
         labels = np.concatenate(output_vol_list)
+        logging.debug("labels rotate to axis")
         labels = utils.rotate_array_to_axis(labels, axis)
+
+        logging.debug("probs concatenate")
         probs = np.concatenate(output_prob_list) if output_prob_list else None
         #print(f"3. probs.shape:{probs.shape}")
-
         # Don't use rotate_array_to_axis, because probs has one extra dimension for class label
         if probs is not None:
+            logging.debug("probs rotate to axis")
             probs=np.transpose(probs,(0,2,3,1))
             #probs= probs.swapaxes(0,1)
             if axis == Axis.Z:
@@ -155,6 +170,7 @@ class VolSeg2dPredictor:
     #         return label_container0_da.compute(), prob_container0_da.compute()
     
     def _predict_3_ways_max_probs(self, data_vol):
+        logging.debug(f"_predict_3_ways_max_probs()")
         shape_tup = data_vol.shape
         logging.info("Creating empty data volumes in RAM to combine 3 axis prediction.")
         if not self.use_dask:
@@ -181,14 +197,16 @@ class VolSeg2dPredictor:
         logging.info("Merging max of XY and ZX volumes with ZY volume.")
         self._merge_vols_in_mem(prob_container, label_container)
         if not self.use_dask:
+            logging.debug("Nor using dask")
             return label_container[0], prob_container[0]
         else:
+            logging.debug("Using dask, so compute before returning")
             label_container0_da =  label_container[0]
             prob_container0_da = prob_container[0]
             return label_container0_da.compute(), prob_container0_da.compute()
 
     def _merge_vols_in_mem(self, prob_container, label_container):
-        logging.info("_merge_vols_in_mem")
+        logging.debug("_merge_vols_in_mem()")
         if not self.use_dask:
             max_prob_idx = np.argmax(prob_container, axis=0)
             max_prob_idx = max_prob_idx[np.newaxis, :, :, :]
@@ -221,6 +239,7 @@ class VolSeg2dPredictor:
     #         return label_container0_da.compute(), prob_container0_da.compute()
         
     def _predict_12_ways_max_probs(self, data_vol):
+        logging.debug("_predict_12_ways_max_probs()")
         shape_tup = data_vol.shape
         logging.info("Creating empty data volumes in RAM to combine 12 way prediction.")
         if not self.use_dask:
@@ -243,8 +262,10 @@ class VolSeg2dPredictor:
             self._merge_vols_in_mem(prob_container, label_container)
         
         if not self.use_dask:
+            logging.debug("Not using dask")
             return label_container[0], prob_container[0]
         else:
+            logging.debug("Using dask, so compute before returning")
             label_container0_da =  label_container[0]
             prob_container0_da = prob_container[0]
             return label_container0_da.compute(), prob_container0_da.compute()
@@ -255,12 +276,14 @@ class VolSeg2dPredictor:
 
     #TODO: implement dask for large volumes that fail to predict
     def _predict_3_ways_one_hot(self, data_vol):
+        logging.debug("_predict_3_ways_one_hot()")
         one_hot_out = self._predict_single_axis_to_one_hot(data_vol)
         one_hot_out += self._predict_single_axis_to_one_hot(data_vol, Axis.Y)
         one_hot_out += self._predict_single_axis_to_one_hot(data_vol, Axis.X)
         return one_hot_out
 
     def _predict_12_ways_one_hot(self, data_vol):
+        logging.debug("_predict_12_ways_one_hot()")
         one_hot_out = self._predict_3_ways_one_hot(data_vol)
         for k in range(1, 4):
             logging.info(f"Rotating volume {k * 90} degrees")
