@@ -50,7 +50,7 @@ class ModelType(Enum):
 
 
 def create_enum_from_setting(setting_str, enum):
-    logging.debug("create_enum_from_setting()")
+    #logging.debug("create_enum_from_setting()")
     if isinstance(setting_str, Enum):
         return setting_str
     try:
@@ -65,19 +65,19 @@ def create_enum_from_setting(setting_str, enum):
 
 
 def get_prediction_quality(settings: SimpleNamespace) -> Enum:
-    logging.debug("get_prediction_quality()")
+    #logging.debug("get_prediction_quality()")
     pred_quality = create_enum_from_setting(settings.quality, Quality)
     return pred_quality
 
 
 def get_model_type(settings: SimpleNamespace) -> Enum:
-    logging.debug("get_model_type()")
+    #logging.debug("get_model_type()")
     model_type = create_enum_from_setting(settings.model["type"], ModelType)
     return model_type
 
 
 def get_training_axis(settings: SimpleNamespace) -> Enum:
-    logging.debug("get_model_type()")
+    #logging.debug("get_model_type()")
     try:
         axis_setting = settings.training_axes
     except AttributeError:
@@ -87,7 +87,7 @@ def get_training_axis(settings: SimpleNamespace) -> Enum:
 
 
 def get_prediction_axis(settings: SimpleNamespace) -> Enum:
-    logging.debug("get_prediction_axis()")
+    #logging.debug("get_prediction_axis()")
     try:
         axis_setting = settings.prediction_axis
     except AttributeError:
@@ -97,7 +97,7 @@ def get_prediction_axis(settings: SimpleNamespace) -> Enum:
 
 
 def setup_path_if_exists(input_param):
-    logging.debug("setup_path_if_exists()")
+    #logging.debug("setup_path_if_exists()")
     if isinstance(input_param, str):
         return Path(input_param)
     elif isinstance(input_param, Path):
@@ -107,7 +107,7 @@ def setup_path_if_exists(input_param):
 
 
 def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
-    logging.debug("get_batch_size()")
+    #logging.debug("get_batch_size()")
     cuda_device_num = settings.cuda_device
     total_gpu_mem = torch.cuda.get_device_properties(cuda_device_num).total_memory
     allocated_gpu_mem = torch.cuda.memory_allocated(cuda_device_num)
@@ -128,7 +128,7 @@ def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
 
 
 def crop_tensor_to_array(tensor: torch.Tensor, yx_dims: List[int]) -> np.array:
-    logging.debug("crop_tensor_to_array()")
+    #logging.debug("crop_tensor_to_array()")
     if tensor.is_cuda:
         tensor = tensor.cpu()
     tensor = F.center_crop(tensor, yx_dims)
