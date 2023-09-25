@@ -92,7 +92,7 @@ class VolSeg2dPredictor:
         return labels, probs
 
 
-    def _predict_single_axis_all_probs(self, data_vol, axis=Axis.Z):
+    def _predict_single_axis_all_probs(self, data_vol0, axis=Axis.Z):
         '''
         Make 2D predictions using the current model along the axis specified
 
@@ -108,7 +108,7 @@ class VolSeg2dPredictor:
         logging.debug(f"_predict_single_axis_all_probs() with axis:{axis}")
         output_vol_list = []
         output_prob_list = []
-        data_vol = utils.rotate_array_to_axis(data_vol, axis)
+        data_vol = utils.rotate_array_to_axis(data_vol0, axis)
         yx_dims = list(data_vol.shape[1:])
         s_max = nn.Softmax(dim=1)
         data_loader = get_2d_prediction_dataloader(data_vol, self.settings)
@@ -127,25 +127,29 @@ class VolSeg2dPredictor:
                 # Collects only the probability of the label that gives maximum probability!!
                 
                 #By default, collect all the probabilities
-                #print(f"1. probs.shape:{probs.shape}")
+                #logging.debug(f"1. probs.shape:{probs.shape}")
                 probs = utils.crop_tensor_to_array(probs, yx_dims)
-                #print(f"2. probs.shape:{probs.shape}")
-                output_prob_list.append(probs.astype(np.float16))
+                #logging.debug(f"2. probs.shape:{probs.shape}")
+                output_prob_list.append(probs.astype(np.float16)) #Accumulate slices
         
         logging.info(f"Completed prediction. Now manipulating result before returning.")
 
+        #convert list of slices to array, note that z is now axis=0
         logging.debug("labels concatenate")
         labels = np.concatenate(output_vol_list)
+
         logging.debug("labels rotate to axis")
         labels = utils.rotate_array_to_axis(labels, axis)
 
         logging.debug("probs concatenate")
         probs = np.concatenate(output_prob_list) if output_prob_list else None
-        #print(f"3. probs.shape:{probs.shape}")
+
+
+        logging.debug(f"3. probs.shape:{probs.shape}")
         # Don't use rotate_array_to_axis, because probs has one extra dimension for class label
         if probs is not None:
             logging.debug("probs rotate to axis")
-            probs=np.transpose(probs,(0,2,3,1))
+            probs=np.transpose(probs,(0,2,3,1)) # Move calss prob to end
             #probs= probs.swapaxes(0,1)
             if axis == Axis.Z:
                 pass
@@ -154,7 +158,7 @@ class VolSeg2dPredictor:
             if axis == Axis.X:
                 probs=probs.swapaxes(0, 2)
             
-        #print(f"4. probs.shape:{probs.shape}")
+        logging.debug(f"4. probs.shape:{probs.shape}")
 
         return labels, probs
     
