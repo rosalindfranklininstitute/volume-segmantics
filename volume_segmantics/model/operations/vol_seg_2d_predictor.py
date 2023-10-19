@@ -79,15 +79,15 @@ class VolSeg2dPredictor:
                     output_prob_list.append(probs.astype(np.float16))
 
         logging.info(f"Completed prediction. Now manipulating result before returning.")
+
         logging.debug("labels concatenate")
         labels = np.concatenate(output_vol_list)
-        logging.debug("labels rotate to axis")
+        
         labels = utils.rotate_array_to_axis(labels, axis)
 
         logging.debug("probs concatenate")
         probs = np.concatenate(output_prob_list) if output_prob_list else None
         if probs is not None:
-            logging.debug("probs rotate to axis")
             probs = utils.rotate_array_to_axis(probs, axis)
         return labels, probs
 
@@ -138,18 +138,19 @@ class VolSeg2dPredictor:
         logging.debug("labels concatenate")
         labels = np.concatenate(output_vol_list)
 
-        logging.debug("labels rotate to axis")
+        #logging.debug("labels rotate to axis")
         labels = utils.rotate_array_to_axis(labels, axis)
 
         logging.debug("probs concatenate")
         probs = np.concatenate(output_prob_list) if output_prob_list else None
 
 
-        logging.debug(f"3. probs.shape:{probs.shape}")
+        #logging.debug(f"3. probs.shape:{probs.shape}")
         # Don't use rotate_array_to_axis, because probs has one extra dimension for class label
+        # and rotate_array_to_axis() was not designed to handle this type
         if probs is not None:
-            logging.debug("probs rotate to axis")
-            probs=np.transpose(probs,(0,2,3,1)) # Move calss prob to end
+            logging.debug("probs rotate (transpose+swapaxis) to axis")
+            probs=np.transpose(probs,(0,2,3,1)) # Move class dim probab to end
             #probs= probs.swapaxes(0,1)
             if axis == Axis.Z:
                 pass
@@ -158,7 +159,7 @@ class VolSeg2dPredictor:
             if axis == Axis.X:
                 probs=probs.swapaxes(0, 2)
             
-        logging.debug(f"4. probs.shape:{probs.shape}")
+        #logging.debug(f"4. probs.shape:{probs.shape}")
 
         return labels, probs
     
