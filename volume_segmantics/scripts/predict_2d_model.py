@@ -36,7 +36,7 @@ def main():
     settings = get_settings_data(settings_path)
     # Create prediction manager and predict
     #pred_manager = VolSeg2DPredictionManager(model_file_path, data_vol_path, settings)
-    pred_manager = VolSeg2DPredictionManager(model_file_path, data_vol_path, settings, True) #version that uses dask
+    pred_manager = VolSeg2DPredictionManager(model_file_path, data_vol_path, settings)
     pred_manager.predict_volume_to_path(output_path)
 
     logging.info(f"Prediction completed, saved to file: {output_path}")

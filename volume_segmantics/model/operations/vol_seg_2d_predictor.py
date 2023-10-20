@@ -11,8 +11,6 @@ from tqdm import tqdm
 from volume_segmantics.data.dataloaders import get_2d_prediction_dataloader
 from volume_segmantics.model.model_2d import create_model_from_file
 from volume_segmantics.utilities.base_data_utils import Axis
-from dask import array as da
-
 
 class VolSeg2dPredictor:
     """Class that performs U-Net prediction operations. Does not interact with disk."""
@@ -186,7 +184,6 @@ class VolSeg2dPredictor:
         )
         logging.info("Merging max of XY and ZX volumes with ZY volume.")
         self._merge_vols_in_mem(prob_container, label_container)
-        logging.debug("Nor using dask")
         return label_container[0], prob_container[0]
 
 
@@ -221,14 +218,12 @@ class VolSeg2dPredictor:
             )
             self._merge_vols_in_mem(prob_container, label_container)
 
-        logging.debug("Not using dask")
         return label_container[0], prob_container[0]
 
     def _predict_single_axis_to_one_hot(self, data_vol, axis=Axis.Z):
         prediction, _ = self._predict_single_axis(data_vol, axis=axis)
         return utils.one_hot_encode_array(prediction, self.num_labels)
 
-    #TODO: implement dask for large volumes that fail to predict
     def _predict_3_ways_one_hot(self, data_vol):
         logging.debug("_predict_3_ways_one_hot()")
         one_hot_out = self._predict_single_axis_to_one_hot(data_vol)
