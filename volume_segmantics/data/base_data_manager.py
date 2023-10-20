@@ -11,6 +11,9 @@ class BaseDataManager:
     def __init__(
         self, data_vol: Union[Path, str, np.ndarray], settings: SimpleNamespace
     ) -> None:
+        
+        logging.debug("BaseDataManager.__init__()")
+
         self.data_vol_shape = None
         self.data_mean = None
         self.data_vol_path = utils.setup_path_if_exists(data_vol)
@@ -27,6 +30,7 @@ class BaseDataManager:
         self._preprocess_data()
 
     def _preprocess_data(self):
+        logging.debug("BaseDataManager._preprocess_data()")
         if self.downsample:
             self.data_vol = utils.downsample_data(self.data_vol)
         self.data_vol_shape = self.data_vol.shape

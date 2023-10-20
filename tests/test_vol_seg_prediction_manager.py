@@ -41,7 +41,6 @@ class TestVolSegPredictionManager:
         self, model_path, rand_int_volume, prediction_settings, tmp_path
     ):
         original_shape = deepcopy(list(rand_int_volume.shape))
-        print(original_shape)
         output_dir = Path(tmp_path, "prediction_dir")
         output_dir.mkdir(exist_ok=True)
         output_path = Path(output_dir, "output_low.h5")
@@ -50,7 +49,6 @@ class TestVolSegPredictionManager:
             model_path, rand_int_volume, prediction_settings
         )
         prediction = prediction_manager.predict_volume_to_path(output_path, Quality.LOW)
-        print(prediction.shape)
         assert len(list(output_dir.glob("*.h5"))) == 1
         assert output_path.exists()
         assert (

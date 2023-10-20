@@ -44,13 +44,16 @@ def create_model_from_file(
 ) -> Tuple[torch.nn.Module, int, dict]:
     """Creates and returns a model and the number of segmentation labels
     that are predicted by the model."""
+
     if gpu:
         map_location = f"cuda:{device_num}"
     else:
         map_location = "cpu"
+    #map_location="cpu" #Test
+
     weights_fn = weights_fn.resolve()
     logging.info("Loading model dictionary from file.")
-    model_dict = torch.load(weights_fn, map_location=map_location)
+    model_dict = torch.load(weights_fn, map_location=map_location) #Can cause CUDA_OUT_OF_MEMORY
     model = create_model_on_device(device_num, model_dict["model_struc_dict"])
     logging.info("Loading in the saved weights.")
     model.load_state_dict(model_dict["model_state_dict"])

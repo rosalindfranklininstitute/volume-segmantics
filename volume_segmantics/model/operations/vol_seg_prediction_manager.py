@@ -7,7 +7,7 @@ import numpy as np
 import volume_segmantics.utilities.base_data_utils as utils
 from volume_segmantics.data.base_data_manager import BaseDataManager
 from volume_segmantics.model.operations.vol_seg_2d_predictor import VolSeg2dPredictor
-
+import logging
 
 class VolSeg2DPredictionManager(BaseDataManager):
     """Class that manages prediction of data volumes to disk using a
@@ -18,7 +18,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
         self,
         model_file_path: str,
         data_vol: Union[str, np.ndarray],
-        settings: SimpleNamespace,
+        settings: SimpleNamespace
     ) -> None:
         """Inits VolSeg2DPredictionManager.
 
@@ -27,6 +27,8 @@ class VolSeg2DPredictionManager(BaseDataManager):
             data_vol (Union[str, np.ndarray]): String of filepath to data volume or numpy array of data to predict segmentation of.
             settings (SimpleNamespace): A prediction settings object.
         """
+        logging.debug("VolSeg2DPredictionManager.__init__()")
+        
         super().__init__(data_vol, settings)
         self.predictor = VolSeg2dPredictor(model_file_path, settings)
         self.settings = settings
@@ -57,6 +59,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
         Returns:
             np.ndarray: _description_
         """
+        logging.debug("predict_volume_to_path()")
         probs = None
         one_hot = self.settings.one_hot
         preferred_axis = utils.get_prediction_axis(

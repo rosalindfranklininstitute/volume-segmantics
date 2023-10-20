@@ -7,11 +7,11 @@ import time
 from types import SimpleNamespace
 from typing import Union
 
-import matplotlib as mpl
+#import matplotlib as mpl
 import numpy as np
 import termplotlib as tpl
 
-mpl.use("Agg")
+#mpl.use("Agg")
 import torch
 import torch.nn as nn
 import volume_segmantics.utilities.base_data_utils as utils

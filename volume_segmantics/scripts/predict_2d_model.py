@@ -31,12 +31,15 @@ def main():
     model_file_path = getattr(args, cfg.MODEL_PTH_ARG)
     data_vol_path = Path(getattr(args, cfg.PREDICT_DATA_ARG))
     output_path = create_output_path(root_path, data_vol_path)
+    logging.info(f"output_path: {output_path}")
     # Get settings object
     settings = get_settings_data(settings_path)
     # Create prediction manager and predict
+    #pred_manager = VolSeg2DPredictionManager(model_file_path, data_vol_path, settings)
     pred_manager = VolSeg2DPredictionManager(model_file_path, data_vol_path, settings)
     pred_manager.predict_volume_to_path(output_path)
 
+    logging.info(f"Prediction completed, saved to file: {output_path}")
 
 if __name__ == "__main__":
     main()

@@ -12,16 +12,18 @@ from volume_segmantics.data.dataloaders import get_2d_prediction_dataloader
 from volume_segmantics.model.model_2d import create_model_from_file
 from volume_segmantics.utilities.base_data_utils import Axis
 
-
 class VolSeg2dPredictor:
     """Class that performs U-Net prediction operations. Does not interact with disk."""
 
     def __init__(self, model_file_path: str, settings: SimpleNamespace) -> None:
+        logging.debug(f"VolSeg2dPredictor.__init__() ,settings.cuda_device:{settings.cuda_device}")
+        
         self.model_file_path = Path(model_file_path)
         self.settings = settings
         self.model_device_num = int(settings.cuda_device)
+
         model_tuple = create_model_from_file(
-            self.model_file_path, self.model_device_num
+            self.model_file_path, device_num = self.model_device_num
         )
         self.model, self.num_labels, self.label_codes = model_tuple
 
@@ -29,6 +31,20 @@ class VolSeg2dPredictor:
         self.model = trainer.model
 
     def _predict_single_axis(self, data_vol, output_probs=True, axis=Axis.Z):
+        '''
+        Make 2D predictions using the current model along the axis specified
+
+        Parameters:
+            data_vol: data volume
+            output_probs: True if want to return probabilities
+            axis: Can be Axis.Z, Axis.Y or Axis.X
+
+        Returns:
+            volume data in in a tuple
+            (labels, probs)
+            If output_probs was set to False, then probs will return None
+        '''
+        logging.debug(f"_predict_single_axis() with output_probs:{output_probs}, axis:{axis}")
         output_vol_list = []
         output_prob_list = []
         data_vol = utils.rotate_array_to_axis(data_vol, axis)
@@ -47,6 +63,7 @@ class VolSeg2dPredictor:
                 labels = torch.argmax(probs, dim=1)  # flatten channels
                 labels = utils.crop_tensor_to_array(labels, yx_dims)
                 output_vol_list.append(labels.astype(np.uint8))
+                # Collects only the probability of the label that gives maximum probability!!
                 if output_probs:
                     # Get indices of max probs
                     max_prob_idx = torch.argmax(probs, dim=1, keepdim=True)
@@ -57,18 +74,100 @@ class VolSeg2dPredictor:
                     probs = utils.crop_tensor_to_array(probs, yx_dims)
                     output_prob_list.append(probs.astype(np.float16))
 
+        logging.info(f"Completed prediction. Now manipulating result before returning.")
+
+        logging.debug("labels concatenate")
         labels = np.concatenate(output_vol_list)
+        
         labels = utils.rotate_array_to_axis(labels, axis)
+
+        logging.debug("probs concatenate")
         probs = np.concatenate(output_prob_list) if output_prob_list else None
         if probs is not None:
             probs = utils.rotate_array_to_axis(probs, axis)
         return labels, probs
 
+
+    def _predict_single_axis_all_probs(self, data_vol0, axis=Axis.Z):
+        '''
+        Make 2D predictions using the current model along the axis specified
+
+        Parameters:
+            data_vol: data volume
+            axis: Can be Axis.Z, Axis.Y or Axis.X
+
+        Returns:
+            volume data in in a tuple
+            (labels, probs)
+            If output_probs was set to False, then probs will return None
+        '''
+        logging.debug(f"_predict_single_axis_all_probs() with axis:{axis}")
+        output_vol_list = []
+        output_prob_list = []
+        data_vol = utils.rotate_array_to_axis(data_vol0, axis)
+        yx_dims = list(data_vol.shape[1:])
+        s_max = nn.Softmax(dim=1)
+        data_loader = get_2d_prediction_dataloader(data_vol, self.settings)
+        self.model.eval()
+        logging.info(f"Predicting segmentation for volume of shape {data_vol.shape}.")
+        with torch.no_grad():
+            for batch in tqdm(
+                data_loader, desc="Prediction batch", bar_format=cfg.TQDM_BAR_FORMAT
+            ):
+                output = self.model(batch.to(self.model_device_num))  # Forward pass
+                probs = s_max(output)  # Convert the logits to probs
+
+                labels = torch.argmax(probs, dim=1)  # flatten channels
+                labels = utils.crop_tensor_to_array(labels, yx_dims)
+                output_vol_list.append(labels.astype(np.uint8))
+                # Collects only the probability of the label that gives maximum probability!!
+                
+                #By default, collect all the probabilities
+                #logging.debug(f"1. probs.shape:{probs.shape}")
+                probs = utils.crop_tensor_to_array(probs, yx_dims)
+                #logging.debug(f"2. probs.shape:{probs.shape}")
+                output_prob_list.append(probs.astype(np.float16)) #Accumulate slices
+        
+        logging.info(f"Completed prediction. Now manipulating result before returning.")
+
+        #convert list of slices to array, note that z is now axis=0
+        logging.debug("labels concatenate")
+        labels = np.concatenate(output_vol_list)
+
+        #logging.debug("labels rotate to axis")
+        labels = utils.rotate_array_to_axis(labels, axis)
+
+        logging.debug("probs concatenate")
+        probs = np.concatenate(output_prob_list) if output_prob_list else None
+
+
+        #logging.debug(f"3. probs.shape:{probs.shape}")
+        # Don't use rotate_array_to_axis, because probs has one extra dimension for class label
+        # and rotate_array_to_axis() was not designed to handle this type
+        if probs is not None:
+            logging.debug("probs rotate (transpose+swapaxis) to axis")
+            probs=np.transpose(probs,(0,2,3,1)) # Move class dim probab to end
+            #probs= probs.swapaxes(0,1)
+            if axis == Axis.Z:
+                pass
+            if axis == Axis.Y:
+                probs=probs.swapaxes(0, 1)
+            if axis == Axis.X:
+                probs=probs.swapaxes(0, 2)
+            
+        #logging.debug(f"4. probs.shape:{probs.shape}")
+
+        return labels, probs
+    
+    
     def _predict_3_ways_max_probs(self, data_vol):
+        logging.debug(f"_predict_3_ways_max_probs()")
         shape_tup = data_vol.shape
         logging.info("Creating empty data volumes in RAM to combine 3 axis prediction.")
+
         label_container = np.empty((2, *shape_tup), dtype=np.uint8)
         prob_container = np.empty((2, *shape_tup), dtype=np.float16)
+
         logging.info("Predicting YX slices:")
         label_container[0], prob_container[0] = self._predict_single_axis(
             data_vol, output_probs=True
@@ -87,7 +186,9 @@ class VolSeg2dPredictor:
         self._merge_vols_in_mem(prob_container, label_container)
         return label_container[0], prob_container[0]
 
+
     def _merge_vols_in_mem(self, prob_container, label_container):
+        logging.debug("_merge_vols_in_mem()")
         max_prob_idx = np.argmax(prob_container, axis=0)
         max_prob_idx = max_prob_idx[np.newaxis, :, :, :]
         prob_container[0] = np.squeeze(
@@ -96,12 +197,15 @@ class VolSeg2dPredictor:
         label_container[0] = np.squeeze(
             np.take_along_axis(label_container, max_prob_idx, axis=0)
         )
-
+ 
     def _predict_12_ways_max_probs(self, data_vol):
+        logging.debug("_predict_12_ways_max_probs()")
         shape_tup = data_vol.shape
         logging.info("Creating empty data volumes in RAM to combine 12 way prediction.")
+
         label_container = np.empty((2, *shape_tup), dtype=np.uint8)
         prob_container = np.empty((2, *shape_tup), dtype=np.float16)
+        
         label_container[0], prob_container[0] = self._predict_3_ways_max_probs(data_vol)
         for k in range(1, 4):
             logging.info(f"Rotating volume {k * 90} degrees")
@@ -113,6 +217,7 @@ class VolSeg2dPredictor:
                 f"Merging rot {k * 90} deg volume with rot {(k-1) * 90} deg volume."
             )
             self._merge_vols_in_mem(prob_container, label_container)
+
         return label_container[0], prob_container[0]
 
     def _predict_single_axis_to_one_hot(self, data_vol, axis=Axis.Z):
@@ -120,12 +225,14 @@ class VolSeg2dPredictor:
         return utils.one_hot_encode_array(prediction, self.num_labels)
 
     def _predict_3_ways_one_hot(self, data_vol):
+        logging.debug("_predict_3_ways_one_hot()")
         one_hot_out = self._predict_single_axis_to_one_hot(data_vol)
         one_hot_out += self._predict_single_axis_to_one_hot(data_vol, Axis.Y)
         one_hot_out += self._predict_single_axis_to_one_hot(data_vol, Axis.X)
         return one_hot_out
 
     def _predict_12_ways_one_hot(self, data_vol):
+        logging.debug("_predict_12_ways_one_hot()")
         one_hot_out = self._predict_3_ways_one_hot(data_vol)
         for k in range(1, 4):
             logging.info(f"Rotating volume {k * 90} degrees")
