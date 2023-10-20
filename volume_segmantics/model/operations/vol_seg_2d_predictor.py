@@ -17,7 +17,7 @@ from dask import array as da
 class VolSeg2dPredictor:
     """Class that performs U-Net prediction operations. Does not interact with disk."""
 
-    def __init__(self, model_file_path: str, settings: SimpleNamespace, use_dask=False) -> None:
+    def __init__(self, model_file_path: str, settings: SimpleNamespace) -> None:
         logging.debug(f"VolSeg2dPredictor.__init__() ,settings.cuda_device:{settings.cuda_device}")
         
         self.model_file_path = Path(model_file_path)
@@ -28,8 +28,6 @@ class VolSeg2dPredictor:
             self.model_file_path, device_num = self.model_device_num
         )
         self.model, self.num_labels, self.label_codes = model_tuple
-
-        self.use_dask=use_dask #For multi-predictions
 
     def _get_model_from_trainer(self, trainer):
         self.model = trainer.model
@@ -163,27 +161,14 @@ class VolSeg2dPredictor:
 
         return labels, probs
     
-
-    # def _predict_3_ways_max_probs(self, data_vol):
-    #     logging.info("_predict_3_ways_max_probs")
-    #     try:
-    #         return self._predict_3_ways_max_probs_cont(data_vol)
-    #     except:
-    #         logging.info("Failed to run prediction. Trying now with dask.")
-    #         self.use_dask=True
-    #         label_container0_da, prob_container0_da = self._predict_3_ways_max_probs_cont(data_vol)
-    #         return label_container0_da.compute(), prob_container0_da.compute()
     
     def _predict_3_ways_max_probs(self, data_vol):
         logging.debug(f"_predict_3_ways_max_probs()")
         shape_tup = data_vol.shape
         logging.info("Creating empty data volumes in RAM to combine 3 axis prediction.")
-        if not self.use_dask:
-            label_container = np.empty((2, *shape_tup), dtype=np.uint8)
-            prob_container = np.empty((2, *shape_tup), dtype=np.float16)
-        else:
-            label_container = da.empty((2, *shape_tup), dtype=np.uint8)
-            prob_container = da.empty((2, *shape_tup), dtype=np.float16)
+
+        label_container = np.empty((2, *shape_tup), dtype=np.uint8)
+        prob_container = np.empty((2, *shape_tup), dtype=np.float16)
 
         logging.info("Predicting YX slices:")
         label_container[0], prob_container[0] = self._predict_single_axis(
@@ -201,58 +186,28 @@ class VolSeg2dPredictor:
         )
         logging.info("Merging max of XY and ZX volumes with ZY volume.")
         self._merge_vols_in_mem(prob_container, label_container)
-        if not self.use_dask:
-            logging.debug("Nor using dask")
-            return label_container[0], prob_container[0]
-        else:
-            logging.debug("Using dask, so compute before returning")
-            label_container0_da =  label_container[0]
-            prob_container0_da = prob_container[0]
-            return label_container0_da.compute(), prob_container0_da.compute()
+        logging.debug("Nor using dask")
+        return label_container[0], prob_container[0]
+
 
     def _merge_vols_in_mem(self, prob_container, label_container):
         logging.debug("_merge_vols_in_mem()")
-        if not self.use_dask:
-            max_prob_idx = np.argmax(prob_container, axis=0)
-            max_prob_idx = max_prob_idx[np.newaxis, :, :, :]
-            prob_container[0] = np.squeeze(
-                np.take_along_axis(prob_container, max_prob_idx, axis=0)
-            )
-            label_container[0] = np.squeeze(
-                np.take_along_axis(label_container, max_prob_idx, axis=0)
-            )
-        else:
-            #There is no impplementation of take_along_axis in dask,
-            # so use only the da.squeeze function
-            max_prob_idx = np.argmax(prob_container, axis=0)
-            max_prob_idx = max_prob_idx[np.newaxis, :, :, :]
-            prob_container[0] = da.squeeze(
-                np.take_along_axis(prob_container, max_prob_idx, axis=0)
-            )
-            label_container[0] = da.squeeze(
-                np.take_along_axis(label_container, max_prob_idx, axis=0)
-            )
-
-    # def _predict_12_ways_max_probs(self, data_vol):
-    #     logging.info("_predict_12_ways_max_probs")
-    #     try:
-    #         return self._predict_12_ways_max_probs_cont(data_vol)
-    #     except:
-    #         logging.info("Failed to run prediction. Trying now with dask.")
-    #         self.use_dask=True
-    #         label_container0_da, prob_container0_da = self._predict_12_ways_max_probs_cont(data_vol)
-    #         return label_container0_da.compute(), prob_container0_da.compute()
-        
+        max_prob_idx = np.argmax(prob_container, axis=0)
+        max_prob_idx = max_prob_idx[np.newaxis, :, :, :]
+        prob_container[0] = np.squeeze(
+            np.take_along_axis(prob_container, max_prob_idx, axis=0)
+        )
+        label_container[0] = np.squeeze(
+            np.take_along_axis(label_container, max_prob_idx, axis=0)
+        )
+ 
     def _predict_12_ways_max_probs(self, data_vol):
         logging.debug("_predict_12_ways_max_probs()")
         shape_tup = data_vol.shape
         logging.info("Creating empty data volumes in RAM to combine 12 way prediction.")
-        if not self.use_dask:
-            label_container = np.empty((2, *shape_tup), dtype=np.uint8)
-            prob_container = np.empty((2, *shape_tup), dtype=np.float16)
-        else:
-            label_container = da.empty((2, *shape_tup), dtype=np.uint8)
-            prob_container = da.empty((2, *shape_tup), dtype=np.float16)
+
+        label_container = np.empty((2, *shape_tup), dtype=np.uint8)
+        prob_container = np.empty((2, *shape_tup), dtype=np.float16)
         
         label_container[0], prob_container[0] = self._predict_3_ways_max_probs(data_vol)
         for k in range(1, 4):
@@ -265,15 +220,9 @@ class VolSeg2dPredictor:
                 f"Merging rot {k * 90} deg volume with rot {(k-1) * 90} deg volume."
             )
             self._merge_vols_in_mem(prob_container, label_container)
-        
-        if not self.use_dask:
-            logging.debug("Not using dask")
-            return label_container[0], prob_container[0]
-        else:
-            logging.debug("Using dask, so compute before returning")
-            label_container0_da =  label_container[0]
-            prob_container0_da = prob_container[0]
-            return label_container0_da.compute(), prob_container0_da.compute()
+
+        logging.debug("Not using dask")
+        return label_container[0], prob_container[0]
 
     def _predict_single_axis_to_one_hot(self, data_vol, axis=Axis.Z):
         prediction, _ = self._predict_single_axis(data_vol, axis=axis)
