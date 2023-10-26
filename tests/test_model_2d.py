@@ -23,11 +23,11 @@ import torch
 )
 def test_create_model_on_device(binary_model_struc_dict, model_type):
     binary_model_struc_dict["type"] = model_type
-    model = create_model_on_device(0, binary_model_struc_dict)
+    device_type = utils.get_available_device_type()
+    model = create_model_on_device(device_type, binary_model_struc_dict)
     assert isinstance(model, torch.nn.Module)
     device = next(model.parameters()).device
-    assert device.type == "cuda"
-    assert device.index == 0
+    assert device.type == device_type
 
 
 @pytest.mark.gpu
@@ -45,19 +45,19 @@ def test_create_model_on_device(binary_model_struc_dict, model_type):
 )
 def test_create_model_on_device_encoders(binary_model_struc_dict, encoder_type):
     binary_model_struc_dict["encoder_name"] = encoder_type
-    model = create_model_on_device(0, binary_model_struc_dict)
+    device_type = utils.get_available_device_type()
+    model = create_model_on_device(device_type, binary_model_struc_dict)
     assert isinstance(model, torch.nn.Module)
     device = next(model.parameters()).device
-    assert device.type == "cuda"
-    assert device.index == 0
+    assert device.type == device_type
 
 
 @pytest.mark.gpu
 def test_create_model_from_file(model_path):
+    device_type = utils.get_available_device_type()
     model, classes, codes = create_model_from_file(model_path)
     assert isinstance(model, torch.nn.Module)
     device = next(model.parameters()).device
-    assert device.type == "cuda"
-    assert device.index == 0
+    assert device.type == device_type
     assert isinstance(classes, int)
     assert isinstance(codes, dict)

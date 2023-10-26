@@ -100,7 +100,20 @@ def setup_path_if_exists(input_param):
     else:
         return None
 
-
+def get_available_device_type() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    else:
+        try:
+            mps_bool = torch.backends.mps.is_available()
+        except Exception as e:
+            logging.info("Pytorch version pre-dates MPS support.")
+            return "cpu"
+        if mps_bool:
+            return "mps"
+        else:
+            return "cpu"
+        
 def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
 
     cuda_device_num = settings.cuda_device

@@ -180,7 +180,8 @@ def model_path(tmp_path, training_settings):
     model_struc_dict["type"] = model_type
     model_struc_dict["in_channels"] = cfg.MODEL_INPUT_CHANNELS
     model_struc_dict["classes"] = 4
-    model = create_model_on_device(0, model_struc_dict)
+    device_type = utils.get_available_device_type()
+    model = create_model_on_device(device_type, model_struc_dict)
     model_dict = {
             "model_state_dict": model.state_dict(),
             "model_struc_dict": model_struc_dict,
