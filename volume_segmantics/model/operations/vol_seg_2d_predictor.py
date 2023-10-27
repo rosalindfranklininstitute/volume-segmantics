@@ -19,9 +19,13 @@ class VolSeg2dPredictor:
     def __init__(self, model_file_path: str, settings: SimpleNamespace) -> None:
         self.model_file_path = Path(model_file_path)
         self.settings = settings
-        self.model_device_num = int(settings.cuda_device)
+        device_type = utils.get_available_device_type()
+        if device_type == "cuda":
+            self.model_device = f"cuda:{int(settings.cuda_device)}"
+        else:
+            self.model_device = device_type
         model_tuple = create_model_from_file(
-            self.model_file_path, self.model_device_num
+            self.model_file_path, self.model_device
         )
         self.model, self.num_labels, self.label_codes = model_tuple
 
@@ -41,7 +45,7 @@ class VolSeg2dPredictor:
             for batch in tqdm(
                 data_loader, desc="Prediction batch", bar_format=cfg.TQDM_BAR_FORMAT
             ):
-                output = self.model(batch.to(self.model_device_num))  # Forward pass
+                output = self.model(batch.to(self.model_device))  # Forward pass
                 probs = s_max(output)  # Convert the logits to probs
                 # TODO: Don't flatten channels if one-hot output is needed
                 labels = torch.argmax(probs, dim=1)  # flatten channels

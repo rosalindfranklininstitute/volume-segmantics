@@ -100,6 +100,7 @@ def setup_path_if_exists(input_param):
     else:
         return None
 
+
 def get_available_device_type() -> str:
     if torch.cuda.is_available():
         return "cuda"
@@ -113,30 +114,35 @@ def get_available_device_type() -> str:
             return "mps"
         else:
             return "cpu"
-        
+
+
 def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
-
-    cuda_device_num = settings.cuda_device
-    total_gpu_mem = torch.cuda.get_device_properties(cuda_device_num).total_memory
-    allocated_gpu_mem = torch.cuda.memory_allocated(cuda_device_num)
-    free_gpu_mem = (total_gpu_mem - allocated_gpu_mem) / 1024**3
-
-    if free_gpu_mem < cfg.BIG_CUDA_THRESHOLD:
-        batch_size = cfg.SMALL_CUDA_BATCH
-    elif not prediction:
-        batch_size = cfg.BIG_CUDA_TRAIN_BATCH
+    device_type = get_available_device_type()
+    if device_type == "cuda":
+        cuda_device_num = settings.cuda_device
+        total_gpu_mem = torch.cuda.get_device_properties(cuda_device_num).total_memory
+        allocated_gpu_mem = torch.cuda.memory_allocated(cuda_device_num)
+        free_gpu_mem = (total_gpu_mem - allocated_gpu_mem) / 1024**3
+        logging.info(f"Free GPU memory is {free_gpu_mem:0.2f} GB.")
+        if free_gpu_mem < cfg.BIG_CUDA_THRESHOLD:
+            batch_size = cfg.SMALL_CUDA_BATCH
+        elif not prediction:
+            batch_size = cfg.BIG_CUDA_TRAIN_BATCH
+        else:
+            batch_size = cfg.BIG_CUDA_PRED_BATCH
     else:
-        batch_size = cfg.BIG_CUDA_PRED_BATCH
-
-    logging.info(
-        f"Free GPU memory is {free_gpu_mem:0.2f} GB. Batch size will be "
-        f"{batch_size}."
-    )
+        logging.info("MPS Device or CPU used.")
+        batch_size = cfg.MPS_CPU_BATCH
+    logging.info(f"Batch size will be {batch_size}.")
     return batch_size
 
 
 def crop_tensor_to_array(tensor: torch.Tensor, yx_dims: List[int]) -> np.array:
-    if tensor.is_cuda:
+    try:
+        is_mps = tensor.is_mps
+    except AttributeError:
+        is_mps = False
+    if tensor.is_cuda or is_mps:
         tensor = tensor.cpu()
     tensor = F.center_crop(tensor, yx_dims)
     return tensor.detach().numpy()

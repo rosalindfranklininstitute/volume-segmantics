@@ -30,6 +30,7 @@ BIG_CUDA_THRESHOLD = 8 # GPU Memory (GB), above this value batch size is increas
 BIG_CUDA_TRAIN_BATCH = 12 # Size of training batch on big GPU
 BIG_CUDA_PRED_BATCH = 4 # Size of prediction batch on big GPU
 SMALL_CUDA_BATCH = 2 # Size of batch on small GPU
+MPS_CPU_BATCH = 6 # Size of batch on MPS device or CPU
 NUM_WORKERS = 4 # Number of parallel workers for training/validation dataloaders
 PIN_CUDA_MEMORY = True # Whether to pin CUDA memory for faster data transfer
 IM_SIZE_DIVISOR = 32 # Image dimensions need to be a multiple of this value
