@@ -21,7 +21,7 @@ def test_get_2d_training_dataloader_types(train_loaders):
 @pytest.mark.gpu()
 def test_get_2d_training_dataloader_length(train_loaders):
     train_loader, valid_loader = train_loaders
-    assert len(train_loader) > len(valid_loader)
+    assert len(train_loader.dataset) > len(valid_loader.dataset)
 
 
 @pytest.mark.gpu()
