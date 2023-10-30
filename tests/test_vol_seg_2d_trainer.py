@@ -29,7 +29,6 @@ class TestVolSeg2dTrainer:
         volseg_2d_trainer._create_model_and_optimiser(learning_rate=0.001, frozen=True)
         assert isinstance(volseg_2d_trainer.model, torch.nn.Module)
         device = next(volseg_2d_trainer.model.parameters()).device
-        assert device.type == "cuda"
         assert device.index == 0
         assert isinstance(volseg_2d_trainer.optimizer, torch.optim.AdamW)
 

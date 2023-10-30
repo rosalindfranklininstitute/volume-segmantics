@@ -5,13 +5,15 @@
 
 import importlib
 
-import numpy as np
 import torch
 
 from skimage.metrics import peak_signal_noise_ratio, mean_squared_error
 
 from volume_segmantics.data.pytorch3dunet_losses import compute_per_channel_dice
-from volume_segmantics.utilities.pytorch3dunet_utils import expand_as_one_hot, convert_to_numpy
+from volume_segmantics.utilities.pytorch3dunet_utils import (
+    expand_as_one_hot,
+    convert_to_numpy,
+)
 
 
 class DiceCoefficient:
@@ -55,14 +57,14 @@ class MeanIoU:
         n_classes = input.size()[1]
 
         if target.dim() == 4:
-            target = expand_as_one_hot(target, C=n_classes, ignore_index=self.ignore_index)
+            target = expand_as_one_hot(
+                target, C=n_classes, ignore_index=self.ignore_index
+            )
 
         assert input.size() == target.size()
-
         per_batch_iou = []
         for _input, _target in zip(input, target):
             binary_prediction = self._binarize_predictions(_input, n_classes)
-
             if self.ignore_index is not None:
                 # zero out ignore_index
                 mask = _target == self.ignore_index
@@ -78,12 +80,13 @@ class MeanIoU:
                 if c in self.skip_channels:
                     continue
 
-                per_channel_iou.append(self._jaccard_index(binary_prediction[c], _target[c]))
+                per_channel_iou.append(
+                    self._jaccard_index(binary_prediction[c], _target[c])
+                )
 
             assert per_channel_iou, "All channels were ignored from the computation"
             mean_iou = torch.mean(torch.tensor(per_channel_iou))
             per_batch_iou.append(mean_iou)
-
         return torch.mean(torch.tensor(per_batch_iou))
 
     def _binarize_predictions(self, input, n_classes):
@@ -95,15 +98,25 @@ class MeanIoU:
             # for single channel input just threshold the probability map
             result = input > 0.5
             return result.long()
-
+        device = input.device
+        if str(device)[:3] == "mps":
+            input = input.cpu()
         _, max_index = torch.max(input, dim=0, keepdim=True)
-        return torch.zeros_like(input, dtype=torch.uint8).scatter_(0, max_index, 1)
+        input.to(device)
+        max_index.to(device)
+        return (
+            torch.zeros_like(input, dtype=torch.uint8)
+            .scatter_(0, max_index, 1)
+            .to(device)
+        )
 
     def _jaccard_index(self, prediction, target):
         """
         Computes IoU for a given target and prediction tensors
         """
-        return torch.sum(prediction & target).float() / torch.clamp(torch.sum(prediction | target).float(), min=1e-8)
+        return torch.sum(prediction & target).float() / torch.clamp(
+            torch.sum(prediction | target).float(), min=1e-8
+        )
 
 
 class PSNR:
@@ -140,11 +153,11 @@ def get_evaluation_metric(config):
     """
 
     def _metric_class(class_name):
-        m = importlib.import_module('pytorch3dunet.unet3d.metrics')
+        m = importlib.import_module("pytorch3dunet.unet3d.metrics")
         clazz = getattr(m, class_name)
         return clazz
 
-    assert 'eval_metric' in config, 'Could not find evaluation metric configuration'
-    metric_config = config['eval_metric']
-    metric_class = _metric_class(metric_config['name'])
+    assert "eval_metric" in config, "Could not find evaluation metric configuration"
+    metric_config = config["eval_metric"]
+    metric_class = _metric_class(metric_config["name"])
     return metric_class(**metric_config)

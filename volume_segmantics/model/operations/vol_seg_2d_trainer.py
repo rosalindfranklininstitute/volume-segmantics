@@ -66,7 +66,11 @@ class VolSeg2dTrainer:
         self.lr_find_epochs = settings.lr_find_epochs
         self.lr_reduce_factor = settings.lr_reduce_factor
         # Params for model training
-        self.model_device_num = int(settings.cuda_device)
+        device_type = utils.get_available_device_type()
+        if device_type == "cuda":
+            self.model_device = f"cuda:{int(settings.cuda_device)}"
+        else:
+            self.model_device = device_type
         self.patience = settings.patience
         self.loss_criterion = self._get_loss_criterion()
         self.eval_metric = self._get_eval_metric()
@@ -89,7 +93,7 @@ class VolSeg2dTrainer:
     def _create_model_and_optimiser(self, learning_rate, frozen=False):
         logging.info(f"Setting up the model on device {self.settings.cuda_device}.")
         self.model = create_model_on_device(
-            self.model_device_num, self.model_struc_dict
+            self.model_device, self.model_struc_dict
         )
         if frozen:
             self._freeze_model()
@@ -181,6 +185,7 @@ class VolSeg2dTrainer:
         train_losses = []
         valid_losses = []
         eval_scores = []
+        print("testing")
 
         if create:
             self._create_model_and_optimiser(self.starting_lr, frozen=frozen)
@@ -227,7 +232,7 @@ class VolSeg2dTrainer:
                     bar_format=cfg.TQDM_BAR_FORMAT,
                 ):
                     inputs, targets = utils.prepare_training_batch(
-                        batch, self.model_device_num, self.label_no
+                        batch, self.model_device, self.label_no
                     )
                     output = self.model(inputs)  # Forward pass
                     # calculate the loss
@@ -241,9 +246,7 @@ class VolSeg2dTrainer:
                     probs = torch.unsqueeze(probs, 2)
                     targets = torch.unsqueeze(targets, 2)
                     eval_score = self.eval_metric(probs, targets)
-                    if eval_score.is_cuda:
-                        eval_score = eval_score.cpu().detach().numpy()
-                    eval_scores.append(eval_score)  # record eval metric
+                    eval_scores.append(eval_score.item())  # record eval metric
 
             toc = time.perf_counter()
             # calculate average loss/metric over an epoch
@@ -284,7 +287,7 @@ class VolSeg2dTrainer:
     def _load_in_weights(self, output_path, optimizer=False, gpu=True):
         # load the last checkpoint with the best model
         if gpu:
-            map_location = f"cuda:{self.model_device_num}"
+            map_location = self.model_device
         else:
             map_location = "cpu"
         model_dict = torch.load(output_path, map_location=map_location)
@@ -320,6 +323,7 @@ class VolSeg2dTrainer:
                 bar_format=cfg.TQDM_BAR_FORMAT,
             ):
                 loss = self._train_one_batch(lr_scheduler, batch)
+                loss = loss.item()
                 lr_step = self.optimizer.state_dict()["param_groups"][0]["lr"]
                 lr_find_lr.append(lr_step)
                 if iters == 0:
@@ -361,10 +365,6 @@ class VolSeg2dTrainer:
         """
         default_min_lr = cfg.DEFAULT_MIN_LR  # Add as default value to fix bug
         # Get loss values and their corresponding gradients, and get lr values
-        for i in range(0, len(lr_find_loss)):
-            if lr_find_loss[i].is_cuda:
-                lr_find_loss[i] = lr_find_loss[i].cpu()
-            lr_find_loss[i] = lr_find_loss[i].detach().numpy()
         losses = np.array(lr_find_loss)
         try:
             gradients = np.gradient(losses)
@@ -418,7 +418,7 @@ class VolSeg2dTrainer:
 
     def _train_one_batch(self, lr_scheduler, batch):
         inputs, targets = utils.prepare_training_batch(
-            batch, self.model_device_num, self.label_no
+            batch, self.model_device, self.label_no
         )
         self.optimizer.zero_grad()
         output = self.model(inputs)  # Forward pass
@@ -498,7 +498,7 @@ class VolSeg2dTrainer:
         batch = next(iter(self.validation_loader))  # Get first batch
         with torch.no_grad():
             inputs, targets = utils.prepare_training_batch(
-                batch, self.model_device_num, self.label_no
+                batch, self.model_device, self.label_no
             )
             output = self.model(inputs)  # Forward pass
             s_max = nn.Softmax(dim=1)

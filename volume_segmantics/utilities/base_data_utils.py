@@ -167,7 +167,7 @@ def one_hot_encode_array(input_array: np.array, num_labels: int) -> np.array:
 
 
 def prepare_training_batch(
-    batch: "list[torch.Tensor]", device: int, num_labels: int
+    batch: "list[torch.Tensor]", device: Union[int, str], num_labels: int
 ) -> "tuple[torch.Tensor, torch.Tensor]":
     inputs = batch[0].to(device)
     targets = batch[1].to(torch.int64)
