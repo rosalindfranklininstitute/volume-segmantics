@@ -1,12 +1,8 @@
-## Development is moving
-
-Development of this package is moving to the Rosalind Franklin Institute. A fork is now available at https://github.com/rosalindfranklininstitute/volume-segmantics
-
 # Volume Segmantics
 
 A toolkit for semantic segmentation of volumetric data using PyTorch deep learning models.
 
-[![DOI](https://joss.theoj.org/papers/10.21105/joss.04691/status.svg)](https://doi.org/10.21105/joss.04691) ![example workflow](https://github.com/DiamondLightSource/volume-segmantics/actions/workflows/tests.yml/badge.svg) ![example workflow](https://github.com/DiamondLightSource/volume-segmantics/actions/workflows/release.yml/badge.svg)
+[![DOI](https://joss.theoj.org/papers/10.21105/joss.04691/status.svg)](https://doi.org/10.21105/joss.04691) ![example workflow](https://github.com/rosalindfranklininstitute/volume-segmantics/actions/workflows/tests.yml/badge.svg) ![example workflow](https://github.com/rosalindfranklininstitute/volume-segmantics/actions/workflows/release.yml/badge.svg)
 
 Volume Segmantics provides a simple command-line interface and API that allows researchers to quickly train a variety of 2D PyTorch segmentation models (e.g.  U-Net, U-Net++, FPN, DeepLabV3+) on their 3D datasets. These models use pre-trained encoders, enabling fast training on small datasets. Subsequently, the library enables using these trained models to segment larger 3D datasets, automatically merging predictions made in orthogonal planes and rotations to reduce artifacts that may result from predicting 3D segmentation using a 2D network.  
 
@@ -16,7 +12,7 @@ This work utilises the abilities afforded by the excellent [segmentation-models-
 
 ## Requirements
 
-A machine capable of running CUDA enabled PyTorch version 1.7.1 or greater is required. This generally means a reasonably modern NVIDIA GPU. The exact requirements differ according to operating system. For example on Windows you will need Visual Studio Build Tools as well as CUDA Toolkit installed see [the CUDA docs](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html) for more details. 
+Either an Apple Silicon (M1 or M2) Mac (PyTorch version 2 or above) or a machine capable of running CUDA-enabled PyTorch version 1.7.1 or greater is required. For the CUDA-enabled version, this generally means a reasonably modern NVIDIA GPU. The exact requirements differ according to operating system. For example on Windows you will need Visual Studio Build Tools as well as CUDA Toolkit installed see [the CUDA docs](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html) for more details.
 
 ## Installation
 
@@ -26,7 +22,7 @@ The easiest way to install the package is to first create a new conda environmen
 
 After installation, two new commands will be available from your terminal whilst your environment is activated, `model-train-2d` and `model-predict-2d`.
 
-These commands require access to some settings stored in YAML files. These need to be located in a directory named `volseg-settings` within the directory where you are running the commands. The settings files can be copied from [here](https://github.com/DiamondLightSource/volume-segmantics/releases/download/v0.3.2/volseg-settings.zip). 
+These commands require access to some settings stored in YAML files. These need to be located in a directory named `volseg-settings` within the directory where you are running the commands. The settings files can be copied from [here](https://github.com/rosalindfranklininstitute/volume-segmantics/releases/download/v0.3.2/volseg-settings.zip). 
 
 The file `2d_model_train_settings.yaml` can be edited in order to change training parameters such as number of epochs, loss functions, evaluation metrics and also model and encoder architectures. The file `2d_model_predict_settings.yaml` can be edited to change parameters such as the prediction "quality" e.g "low" quality refers to prediction of the volume segmentation by taking images along a single axis (images in the (x,y) plane). For "medium" and "high" quality, predictions are done along 3 axes and in 12 directions (3 axes, 4 rotations) respectively, before being combined by maximum probability. 
 
