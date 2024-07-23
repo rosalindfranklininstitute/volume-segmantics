@@ -8,8 +8,351 @@ import torch.nn.functional as F
 from torch import nn as nn
 from torch.autograd import Variable
 from torch.nn import MSELoss, SmoothL1Loss, L1Loss
+import numpy as np
 
 from volume_segmantics.utilities.pytorch3dunet_utils import expand_as_one_hot
+
+from scipy.ndimage import distance_transform_edt as distance
+from skimage import segmentation as skimage_seg
+import cv2
+
+from matplotlib import pyplot as plt
+
+from typing import Optional
+
+from surface_distance import create_table_neighbour_code_to_surface_area
+
+
+class BoundaryDoUDiceLoss(nn.Module):
+    """Linear combination of Boundary DoU and Dice losses"""
+
+    def __init__(self, alpha, beta):
+        super(BoundaryDoUDiceLoss, self).__init__()
+        self.alpha = alpha
+        self.bdou = BoundaryDoULoss()
+        self.beta = beta
+        self.dice = DiceLoss()
+
+    def forward(self, input, target):
+        return self.alpha * self.bdou(input, target) + self.beta * self.dice(input, target)
+
+
+
+class FastSurfaceDiceLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        power = 2**np.arange(0, 8).reshape(1, 1, 2, 2, 2).astype(np.float32)
+        area = create_table_neighbour_code_to_surface_area((1, 1, 1)).astype(np.float32)
+        self.power = nn.Parameter(torch.from_numpy(power), requires_grad=False)
+        self.kernel = nn.Parameter(torch.ones(1, 1, 2, 2, 2), requires_grad=False)
+        self.area = nn.Parameter(torch.from_numpy(area), requires_grad=False)
+        
+    def forward(self, preds, targets, eps=1e-5):
+        """
+        preds: tensor of shape [bs, 1, d, h, w]
+        targets: tensor of shape [bs, 1, d, h, w]
+        """
+        
+        print(preds.shape)
+        
+        bsz = preds.shape[0]
+
+        # voxel logits to cube logits
+        foreground_probs = F.conv3d(F.logsigmoid(preds), self.kernel).exp().flatten(1)
+        background_probs = F.conv3d(F.logsigmoid(-preds), self.kernel).exp().flatten(1)
+        surface_probs = 1 - foreground_probs - background_probs
+
+        # ground truth to neighbour code
+        with torch.no_grad():
+            cubes_byte = F.conv3d(targets, self.power).to(torch.int32)
+            gt_area = self.area[cubes_byte.reshape(-1)].reshape(bsz, -1)
+            gt_foreground = (cubes_byte == 255).to(torch.float32).reshape(bsz, -1)
+            gt_background = (cubes_byte == 0).to(torch.float32).reshape(bsz, -1)
+            gt_surface = (gt_area > 0).to(torch.float32).reshape(bsz, -1)
+        
+        # dice
+        foreground_dice = (2*(foreground_probs*gt_foreground).sum(-1)+eps) / (foreground_probs.sum(-1)+gt_foreground.sum(-1)+eps)
+        background_dice = (2*(background_probs*gt_background).sum(-1)+eps) / (background_probs.sum(-1)+gt_background.sum(-1)+eps)
+        surface_dice = (2*(surface_probs*gt_area).sum(-1)+eps) / (((surface_probs+gt_surface)*gt_area).sum(-1)+eps)
+        dice = (foreground_dice + background_dice + surface_dice) / 3
+        return 1 - dice.mean()
+
+class BoundaryLoss(nn.Module):
+    # def __init__(self, **kwargs):
+    def __init__(self, classes=1) -> None:
+        super().__init__()
+        # # Self.idc is used to filter out some classes of the target mask. Use fancy indexing
+        # self.idc: List[int] = kwargs["idc"]
+        self.idx = [i for i in range(classes)]
+
+    def compute_sdf1_1(self, img_gt, out_shape):
+        """
+        compute the normalized signed distance map of binary mask
+        input: segmentation, shape = (batch_size, x, y, z)
+        output: the Signed Distance Map (SDM)
+        sdf(x) = 0; x in segmentation boundary
+                -inf|x-y|; x in segmentation
+                +inf|x-y|; x out of segmentation
+        normalize sdf to [-1, 1]
+        """
+        img_gt = img_gt.cpu().numpy()
+        img_gt = img_gt.astype(np.uint8)
+
+        normalized_sdf = np.zeros(out_shape)
+        #print(out_shape)
+        for b in range(out_shape[0]):  # batch size
+            # ignore background
+            for c in range(0, out_shape[1]):
+                posmask = img_gt[b][c].astype(np.bool)
+                if posmask.any():
+                    negmask = ~posmask
+                    posdis = distance(posmask)
+                    negdis = distance(negmask)
+                    boundary = skimage_seg.find_boundaries(
+                        posmask, mode="inner"
+                    ).astype(np.uint8)
+                    #plt.figure()
+                    #plt.imshow(boundary)
+                    #plt.savefig('boundary_t1.png')
+                    sdf = (negdis - np.min(negdis)) / (
+                        np.max(negdis) - np.min(negdis)
+                    ) - (posdis - np.min(posdis)) / (np.max(posdis) - np.min(posdis))
+                    sdf[boundary == 1] = 0
+                    normalized_sdf[b][c] = sdf
+
+        return normalized_sdf
+
+    def forward(self, outputs, gt):
+        """
+        compute boundary loss for binary segmentation
+        input: outputs_soft: sigmoid results,  shape=(b,2,x,y,z)
+            gt_sdf: sdf of ground truth (can be original or normalized sdf); shape=(b,2,x,y,z)
+        output: boundary_loss; sclar
+        """
+        # outputs_soft = F.softmax(outputs, dim=1)
+        outputs_soft = outputs.sigmoid()
+        gt_sdf = self.compute_sdf1_1(gt, outputs_soft.shape)
+        pc = outputs_soft[:, self.idx, ...]
+        dc = torch.from_numpy(gt_sdf[:, self.idx, ...]).cuda()
+        multipled = torch.einsum("bxyz, bxyz->bxyz", pc, dc)
+        bd_loss = multipled.mean()
+        
+        print(bd_loss)
+        return bd_loss
+
+
+class BoundaryDoULoss(nn.Module):
+    def __init__(self, n_classes=1):
+        super(BoundaryDoULoss, self).__init__()
+        self.n_classes = n_classes
+
+    def _one_hot_encoder(self, input_tensor):
+        tensor_list = []
+        for i in range(self.n_classes):
+            temp_prob = input_tensor == i
+            tensor_list.append(temp_prob.unsqueeze(1))
+        output_tensor = torch.cat(tensor_list, dim=1)
+        return output_tensor.float()
+
+    def _adaptive_size(self, score, target):
+        kernel = torch.Tensor([[0, 1, 0], [1, 1, 1], [0, 1, 0]]).half()
+        padding_out = torch.zeros(
+            (target.shape[0], target.shape[-2] + 2, target.shape[-1] + 2)
+        )
+        padding_out[:, 1:-1, 1:-1] = target
+        h, w = 3, 3
+
+        Y = torch.zeros(
+            (
+                padding_out.shape[0],
+                padding_out.shape[1] - h + 1,
+                padding_out.shape[2] - w + 1,
+            )
+        ).cuda()
+        for i in range(Y.shape[0]):
+            Y[i, :, :] = torch.conv2d(
+                target[i].unsqueeze(0).unsqueeze(0).half(),
+                kernel.unsqueeze(0).unsqueeze(0).cuda(),
+                padding=1,
+            )
+
+        Y = Y * target
+        Y[Y == 5] = 0
+        C = torch.count_nonzero(Y)
+        S = torch.count_nonzero(target)
+        smooth = 1e-5
+        alpha = 1 - (C + smooth) / (S + smooth)
+        alpha = 2 * alpha - 1
+
+        intersect = torch.sum(score * target)
+        y_sum = torch.sum(target * target)
+        z_sum = torch.sum(score * score)
+        alpha = min(
+            alpha, 0.8
+        )  ## We recommend using a truncated alpha of 0.8, as using truncation gives better results on some datasets and has rarely effect on others.
+        loss = (z_sum + y_sum - 2 * intersect + smooth) / (
+            z_sum + y_sum - (1 + alpha) * intersect + smooth
+        )
+
+        return loss
+
+    def forward(self, inputs, target):
+        # inputs = torch.softmax(inputs, dim=1)
+        inputs = inputs.sigmoid()
+        # target = self._one_hot_encoder(target)
+
+        assert (
+            inputs.size() == target.size()
+        ), "predict {} & target {} shape do not match".format(
+            inputs.size(), target.size()
+        )
+
+        # return self._adaptive_size(inputs, target)
+        loss = 0.0
+        for i in range(0, self.n_classes):
+            loss += self._adaptive_size(inputs[:, i], target[:, i])
+        return loss / self.n_classes
+
+
+class BoundaryDoULossV2(nn.Module):
+    def __init__(self, n_classes=1, allowed_outlier_fraction=0.25):
+        super(BoundaryDoULossV2, self).__init__()
+        self.n_classes = n_classes
+        self.allowed_outlier_fraction = allowed_outlier_fraction
+
+    def _one_hot_encoder(self, input_tensor):
+        tensor_list = []
+        for i in range(self.n_classes):
+            temp_prob = input_tensor == i
+            tensor_list.append(temp_prob.unsqueeze(1))
+        output_tensor = torch.cat(tensor_list, dim=1)
+        return output_tensor.float()
+
+    def _adaptive_size(self, score, target):
+        kernel = torch.Tensor([[0, 1, 0], [1, 1, 1], [0, 1, 0]]).half()
+        padding_out = torch.zeros(
+            (target.shape[0], target.shape[-2] + 2, target.shape[-1] + 2)
+        )
+        padding_out[:, 1:-1, 1:-1] = target
+        h, w = 3, 3
+
+        Y = torch.zeros(
+            (
+                padding_out.shape[0],
+                padding_out.shape[1] - h + 1,
+                padding_out.shape[2] - w + 1,
+            )
+        ).cuda()
+        for i in range(Y.shape[0]):
+            Y[i, :, :] = torch.conv2d(
+                target[i].unsqueeze(0).unsqueeze(0).half(),
+                kernel.unsqueeze(0).unsqueeze(0).cuda(),
+                padding=1,
+            )
+
+        Y = Y * target
+        Y[Y == 5] = 0
+        C = torch.count_nonzero(Y)
+        S = torch.count_nonzero(target)
+        smooth = 1e-5
+        alpha = 1 - (C + smooth) / (S + smooth)
+        alpha = 2 * alpha - 1
+
+        intersect = torch.sum(score * target)
+        y_sum = torch.sum(target * target)
+        z_sum = torch.sum(score * score)
+        alpha = min(
+            alpha, 0.8
+        )  ## We recommend using a truncated alpha of 0.8, as using truncation gives better results on some datasets and has rarely effect on others.
+        loss = (z_sum + y_sum - 2 * intersect + smooth) / (
+            z_sum + y_sum - (1 + alpha) * intersect + smooth
+        )
+
+        return loss
+
+    def forward(self, inputs, target):
+        inputs = inputs.sigmoid()
+
+        assert (
+            inputs.size() == target.size()
+        ), "predict {} & target {} shape do not match".format(
+            inputs.size(), target.size()
+        )
+
+        loss = 0.0
+        for i in range(0, self.n_classes):
+            loss += self._adaptive_size(inputs[:, i], target[:, i])
+
+        # Apply outlier fraction logic to BoundaryDoULoss
+        output = inputs[:, 0]  # Assuming binary classification
+
+        output = output.float()
+        target = target.float()
+
+        pos_mask = target.eq(1.0)
+        neg_mask = ~pos_mask
+
+        pt = output.sigmoid().clamp(1e-6, 1 - 1e-6)
+
+        neg_loss = (
+            -torch.pow(pt, 2) * torch.nn.functional.logsigmoid(-output) * neg_mask
+        )
+
+        if self.allowed_outlier_fraction < 1:
+            neg_loss = neg_loss.flatten()
+            M = neg_loss.numel()
+            num_elements_to_keep = int(M * (1 - self.allowed_outlier_fraction))
+            neg_loss, _ = torch.topk(
+                neg_loss, k=num_elements_to_keep, largest=False, sorted=False
+            )
+
+        neg_loss_reduced = neg_loss.sum() / (neg_mask.sum() + 1e-6)
+        loss_outlier = neg_loss_reduced
+
+        return (loss + loss_outlier) / (self.n_classes + 1)
+
+
+class TverskyLoss(nn.Module):
+    def __init__(self, classes, alpha=0.7, beta=0.3) -> None:
+        super().__init__()
+        self.classes = classes
+        self.alpha = alpha
+        self.beta = beta
+
+    def _one_hot_encoder(self, input_tensor):
+        tensor_list = []
+        for i in range(self.classes):
+            temp_prob = input_tensor == i  # * torch.ones_like(input_tensor)
+            tensor_list.append(temp_prob.unsqueeze(1))
+        output_tensor = torch.cat(tensor_list, dim=1)
+        return output_tensor.float()
+
+    def forward(self, y_pred, y_true):
+        y_pred = torch.softmax(y_pred, dim=1)
+        y_true = self._one_hot_encoder(y_true)
+        loss = 0
+        print(self.classes)
+        for i in range(1, self.classes):
+            p0 = y_pred[:, i, :, :]
+            print(y_pred.shape)
+            ones = torch.ones_like(p0)
+            print(ones.shape)
+            # p1: prob that the pixel is of class 0
+            p1 = ones - p0
+            g0 = y_true[:, i, :, :]
+            g1 = ones - g0
+            # terms in the Tversky loss function combined with weights
+            tp = torch.sum(p0 * g0)
+            fp = self.alpha * torch.sum(p0 * g1)
+            fn = self.beta * torch.sum(p1 * g0)
+            # add to the denominator a small epsilon to prevent the value from being undefined
+            EPS = 1e-5
+            num = tp
+            den = tp + fp + fn + EPS
+            result = num / den
+            loss += result
+            print(loss)
+        return 1 - loss / self.classes
 
 
 def compute_per_channel_dice(input, target, epsilon=1e-6, weight=None):
@@ -25,6 +368,7 @@ def compute_per_channel_dice(input, target, epsilon=1e-6, weight=None):
     """
 
     # input and target shapes must match
+    #print(input.size(), target.size())
     assert input.size() == target.size(), "'input' and 'target' must have the same shape"
 
     input = flatten(input)
