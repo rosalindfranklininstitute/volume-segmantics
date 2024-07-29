@@ -23,13 +23,43 @@ from volume_segmantics.data.pytorch3dunet_losses import (
     BCEDiceLoss,
     DiceLoss,
     GeneralizedDiceLoss,
+    BoundaryDoULoss,
+    BoundaryDoULossV2,
+    TverskyLoss,
+    BoundaryLoss,
+    FastSurfaceDiceLoss,
+    BoundaryDoUDiceLoss
 )
 from volume_segmantics.data.pytorch3dunet_metrics import (
     DiceCoefficient,
     MeanIoU,
 )
-from volume_segmantics.model.model_2d import create_model_on_device
+from volume_segmantics.model.model_2d import create_model_on_device, create_model_from_file2
 from volume_segmantics.utilities.early_stopping import EarlyStopping
+from torch import nn, einsum
+from functools import wraps, partial
+from math import floor
+
+import torch
+from torchvision import models
+
+
+import math
+import copy
+import random
+from functools import wraps, partial
+from math import floor
+
+import torch
+from torch import nn, einsum
+import torch.nn.functional as F
+
+from einops import rearrange
+import numpy as np
+# helper functions
+
+import torch
+from torchvision import models
 
 
 class VolSeg2dTrainer:
@@ -74,7 +104,15 @@ class VolSeg2dTrainer:
         self.avg_train_losses = []  # per epoch training loss
         self.avg_valid_losses = []  #  per epoch validation loss
         self.avg_eval_scores = []  #  per epoch evaluation score
-
+        if str(settings.encoder_weights_path) != "False":
+            self.encoder_weights_path = Path(settings.encoder_weights_path)
+        else:
+            self.encoder_weights_path = False
+        if str(settings.full_weights_path) != "False":
+            self.full_weights_path = Path(settings.full_weights_path)
+        else:
+            self.full_weights_path = False
+        
     def _get_model_struc_dict(self, settings):
         model_struc_dict = settings.model
         model_type = utils.get_model_type(settings)
@@ -99,6 +137,32 @@ class VolSeg2dTrainer:
         self.optimizer = self._create_optimizer(learning_rate)
         logging.info("Trainer created.")
 
+    def _load_encoder_weights(self, weights_fname: Path, gpu: bool = True, device_num: int = 0):
+        if gpu:
+            map_location = f"cuda:{device_num}"
+        else:
+            map_location = "cpu"
+        weights_fname = weights_fname.resolve()
+        from torchvision import models
+        
+        model = models.resnet50(pretrained=True)
+        logging.info(f"Loading in the saved weights from path: {weights_fname}")
+           
+        checkpoint = torch.load(weights_fname, map_location=map_location)
+        model.load_state_dict(checkpoint, strict=False)
+        
+        new_in_channels = 1
+        default_in_channels=3    
+        for module in model.modules():
+            if isinstance(module, nn.Conv2d) and module.in_channels == default_in_channels:
+                break
+        weight = module.weight.detach()
+        module.in_channels = new_in_channels
+        new_weight = weight.sum(1, keepdim=True)
+        module.weight = nn.parameter.Parameter(new_weight)
+        
+        self.model.encoder.load_state_dict(model.state_dict(), strict=False)
+        self.model.to(map_location)
     def _freeze_model(self):
         logging.info(
             f"Freezing model with {self._count_trainable_parameters()} trainable parameters, {self._count_parameters()} total parameters."
@@ -142,6 +206,24 @@ class VolSeg2dTrainer:
         elif self.settings.loss_criterion == "GeneralizedDiceLoss":
             logging.info("Using GeneralizedDiceLoss")
             loss_criterion = GeneralizedDiceLoss()
+        elif self.settings.loss_criterion == "TverskyLoss":
+            logging.info("Using TverskyLoss")
+            loss_criterion = TverskyLoss(self.label_no + 1)
+        elif self.settings.loss_criterion == "BoundaryDoULoss":
+            logging.info("Using BoundaryDoULoss")
+            loss_criterion = BoundaryDoULoss()
+        elif self.settings.loss_criterion == "BoundaryDoUDiceLoss":
+            logging.info("Using BoundaryDoUDiceLoss")
+            loss_criterion = BoundaryDoUDiceLoss(alpha=0.5, beta=0.5)
+        elif self.settings.loss_criterion == "BoundaryDoULossV2":
+            logging.info("Using BoundaryDoULossV2")
+            loss_criterion = BoundaryDoULossV2()
+        elif self.settings.loss_criterion == "BoundaryLoss":
+            logging.info("Using BoundaryLoss")
+            loss_criterion = BoundaryLoss()
+        elif self.settings.loss_criterion == "FastSurfaceDiceLoss":
+            logging.info("Using FastSurfaceDiceLoss")
+            loss_criterion = FastSurfaceDiceLoss()
         else:
             logging.error("No loss criterion specified, exiting")
             sys.exit(1)
@@ -184,10 +266,39 @@ class VolSeg2dTrainer:
 
         if create:
             self._create_model_and_optimiser(self.starting_lr, frozen=frozen)
+            
+            if self.full_weights_path:
+                print("Loading pretrained weights for encoder and decoder for lr finder.")
+                # load model weights from file
+                model_tuple = create_model_from_file2(self.full_weights_path, self.model_struc_dict, self.model_device_num)
+                self.model, self.num_labels, self.label_codes = model_tuple
+            
+            if self.encoder_weights_path:
+                print("Loading encoder weights for lr finder.")
+                self._load_encoder_weights(self.encoder_weights_path)
+            else:
+                print("Using existing encoder weights.")
+
             lr_to_use = self._run_lr_finder()
             # Recreate model and start training
+            
+            # if no model provided, create a fresh model
             self._create_model_and_optimiser(lr_to_use, frozen=frozen)
+
+            if self.full_weights_path:
+                print("Loading pretrained weights for encoder and decoder.")
+                # load model weights from file
+                model_tuple = create_model_from_file2(self.full_weights_path,  self.model_struc_dict, self.model_device_num)
+                self.model, self.num_labels, self.label_codes = model_tuple
+
+            if self.encoder_weights_path:
+                print("Loading encoder weights.")
+                self._load_encoder_weights(self.encoder_weights_path)
+            else:
+                print("Using existing encoder weights.")
+
             early_stopping = self._create_early_stopping(output_path, patience)
+            
         else:
             # Reduce starting LR, since model alreadiy partiallly trained
             self.starting_lr /= self.lr_reduce_factor
@@ -207,6 +318,9 @@ class VolSeg2dTrainer:
         # Initialise the One Cycle learning rate scheduler
         lr_scheduler = self._create_oc_lr_scheduler(num_epochs, lr_to_use)
 
+
+        #self.model = torch.compile(self.model)
+        
         for epoch in range(1, num_epochs + 1):
             self.model.train()
             tic = time.perf_counter()
