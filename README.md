@@ -1,7 +1,3 @@
-## Development is moving
-
-Development of this package is moving to the Rosalind Franklin Institute. A fork is now available at https://github.com/rosalindfranklininstitute/volume-segmantics
-
 # Volume Segmantics
 
 A toolkit for semantic segmentation of volumetric data using PyTorch deep learning models.
