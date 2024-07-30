@@ -8,10 +8,10 @@ import volume_segmantics.utilities.base_data_utils as utils
 import volume_segmantics.utilities.config as cfg
 from torch import nn as nn
 from tqdm import tqdm
-from volume_segmantics.data.dataloaders import get_2d_prediction_dataloader
+from volume_segmantics.data.dataloaders import get_2d_prediction_dataloader, get_2d_image_dir_prediction_dataloader
 from volume_segmantics.model.model_2d import create_model_from_file
 from volume_segmantics.utilities.base_data_utils import Axis
-
+from volume_segmantics.data import get_settings_data
 
 class VolSeg2dPredictor:
     """Class that performs U-Net prediction operations. Does not interact with disk."""
@@ -134,3 +134,61 @@ class VolSeg2dPredictor:
                 self._predict_3_ways_one_hot(data_vol), -k, axes=(-3, -2)
             )
         return one_hot_out
+
+
+
+
+class VolSeg2dImageDirPredictor:
+    """Class that performs U-Net prediction operations. Does not interact with disk."""
+
+    def __init__(self, model_file_path: str, settings: SimpleNamespace) -> None:
+        self.model_file_path = Path(model_file_path)
+        self.settings = settings
+        self.model_device_num = int(settings.cuda_device)
+        model_tuple = create_model_from_file(
+            self.model_file_path, self.model_device_num
+        )
+        self.model, self.num_labels, self.label_codes = model_tuple
+
+    def _get_model_from_trainer(self, trainer):
+        self.model = trainer.model
+
+    def _predict_image_dir(self, image_dir, output_probs=False):
+        output_vol_list = []
+        output_prob_list = []
+        #data_vol = utils.rotate_array_to_axis(data_vol, axis)
+        #yx_dims = list(data_vol.shape[1:])
+        print(self.settings)
+        yx_dims = (self.settings.output_size, self.settings.output_size)
+        
+        s_max = nn.Softmax(dim=1)
+        data_loader, images_fps = get_2d_image_dir_prediction_dataloader(image_dir, self.settings)
+        self.model.eval()
+        logging.info(f"Predicting segmentation for image dir.")
+        with torch.no_grad():
+            for batch in tqdm(
+                data_loader, desc="Prediction batch", bar_format=cfg.TQDM_BAR_FORMAT
+            ):
+                output = self.model(batch.to(self.model_device_num))  # Forward pass
+                probs = s_max(output)  # Convert the logits to probs
+                # TODO: Don't flatten channels if one-hot output is needed
+                labels = torch.argmax(probs, dim=1)  # flatten channels
+                labels = utils.crop_tensor_to_array(labels, yx_dims)
+                output_vol_list.append(labels.astype(np.uint8))
+                if output_probs:
+                    # Get indices of max probs
+                    max_prob_idx = torch.argmax(probs, dim=1, keepdim=True)
+                    # Extract along axis from outputs
+                    probs = torch.gather(probs, 1, max_prob_idx)
+                    # Remove the label dimension
+                    probs = torch.squeeze(probs, dim=1)
+                    probs = utils.crop_tensor_to_array(probs, yx_dims)
+                    output_prob_list.append(probs.astype(np.float16))
+
+        
+        return output_vol_list, output_prob_list, images_fps
+
+    def _predict_image_dir_to_one_hot(self, data_vol):
+        prediction, _, images_fps = self._predict_single_axis(data_vol)
+        return utils.one_hot_encode_array(prediction, self.num_labels), images_fps
+
