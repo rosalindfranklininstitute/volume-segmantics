@@ -11,6 +11,7 @@ from volume_segmantics.data import (TrainingDataSlicer,
 from volume_segmantics.model import VolSeg2dTrainer
 from volume_segmantics.utilities import get_2d_training_parser
 
+import torch
 
 def main():
     logging.basicConfig(
@@ -22,16 +23,33 @@ def main():
     data_vols = getattr(args, cfg.TRAIN_DATA_ARG)
     label_vols = getattr(args, cfg.LABEL_DATA_ARG)
     root_path = Path(getattr(args, cfg.DATA_DIR_ARG)).resolve()
-    if len(data_vols) != len(label_vols):
-        logging.error(
-            "Number of data volumes and number of label volumes must be equal!"
-        )
-        sys.exit(1)
+    mode = getattr(args, "mode")
+    max_label_no = getattr(args, "max_label_no")
+    print("Mode: ",mode )
+    
     # Create the settings object
     settings_path = Path(root_path, cfg.SETTINGS_DIR, cfg.TRAIN_SETTINGS_FN)
     settings = get_settings_data(settings_path)
     data_im_out_dir = root_path / settings.data_im_dirname  # dir for data imgs
     seg_im_out_dir = root_path / settings.seg_im_out_dirname  # dir for seg imgs
+    
+    if(mode=='slicer'):
+        _, max_label_no = run_slicer(data_vols, label_vols, data_im_out_dir, seg_im_out_dir,settings)
+    elif(mode=='trainer'):
+        run_trainer(data_im_out_dir, seg_im_out_dir, max_label_no, settings, root_path)
+    else:
+        slicer, max_label_no = run_slicer(data_vols, label_vols, data_im_out_dir, seg_im_out_dir, settings)
+        run_trainer(data_im_out_dir, seg_im_out_dir, max_label_no, settings, root_path)
+        # Clean up all the saved slices
+        slicer.clean_up_slices()
+
+def run_slicer(data_vols, label_vols, data_im_out_dir, seg_im_out_dir, settings):
+    if len(data_vols) != len(label_vols):
+        logging.error(
+            "Number of data volumes and number of label volumes must be equal!"
+        )
+        sys.exit(1)
+
     # Keep track of the number of labels
     max_label_no = 0
     label_codes = None
@@ -45,6 +63,10 @@ def main():
             max_label_no = slicer.num_seg_classes
             label_codes = slicer.codes
     assert label_codes is not None
+    print("max_label_no: ", max_label_no)
+    return slicer, max_label_no
+
+def run_trainer(data_im_out_dir, seg_im_out_dir, max_label_no, settings, root_path):
     # Set up the 2dTrainer
     trainer = VolSeg2dTrainer(data_im_out_dir, seg_im_out_dir, max_label_no, settings)
     # Train the model, first frozen, then unfrozen
@@ -53,6 +75,9 @@ def main():
     model_type = settings.model["type"].name
     model_fn = f"{date.today()}_{model_type}_{settings.model_output_fn}.pytorch"
     model_out = Path(root_path, model_fn)
+
+    #trainer.train_model = torch.compile(trainer.train_model, mode="reduce-overhead")
+
     if num_cyc_frozen > 0:
         trainer.train_model(
             model_out, num_cyc_frozen, settings.patience, create=True, frozen=True
@@ -67,8 +92,7 @@ def main():
         )
     trainer.output_loss_fig(model_out)
     trainer.output_prediction_figure(model_out)
-    # Clean up all the saved slices
-    slicer.clean_up_slices()
+
 
 
 if __name__ == "__main__":
