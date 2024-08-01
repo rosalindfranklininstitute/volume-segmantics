@@ -8,3 +8,4 @@ cuda_device: 0 # Change this if you would like to run the prediction on a differ
 downsample: False # If True, data will be downsampled by 2 and segmentation will be upsampled by 2
 one_hot: False # Output one-hot encoded data
 prediction_axis: Z # One of [Z, Y, X]. Specify axis along which to predict if doing single-axis prediction.
+output_size: 512
