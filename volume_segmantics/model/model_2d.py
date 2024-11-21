@@ -21,6 +21,12 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
             import segmentation_models_pytorch as smp_old
 
             model = smp_old.Unet(**struct_dict_copy)
+        if struct_dict_copy['encoder_name'] == 'convnext_base' or struct_dict_copy['encoder_name'] == 'convnext_large' or struct_dict_copy['encoder_name'] == 'swin_base_patch4_window12_384':
+            #model = smp.Unet(**struct_dict_copy)
+            model = smp.Unet(**struct_dict_copy, encoder_depth=4,
+                decoder_channels=(256, 128, 64, 32),
+                head_upsampling=2,)
+                #encoder_params={"img_size": 704}
         else:
             model = smp.Unet(**struct_dict_copy)
             # model = smp.Unet(**struct_dict_copy, encoder_depth=4,

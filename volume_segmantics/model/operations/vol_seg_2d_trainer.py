@@ -43,6 +43,7 @@ from math import floor
 import torch
 from torchvision import models
 
+from volume_segmantics.model.sam import SAM
 
 import math
 import copy
@@ -112,6 +113,8 @@ class VolSeg2dTrainer:
             self.full_weights_path = Path(settings.full_weights_path)
         else:
             self.full_weights_path = False
+        self.use_sam = settings.use_sam
+        self.adaptive_sam = settings.adaptive_sam
         
     def _get_model_struc_dict(self, settings):
         model_struc_dict = settings.model
@@ -134,7 +137,18 @@ class VolSeg2dTrainer:
         logging.info(
             f"Model has {self._count_trainable_parameters()} trainable parameters, {self._count_parameters()} total parameters."
         )
-        self.optimizer = self._create_optimizer(learning_rate)
+        
+        if self.use_sam:
+            base_optimizer = torch.optim.AdamW
+            if self.adaptive_sam:
+                self.optimizer = SAM(self.model.parameters(), base_optimizer, lr=learning_rate, adaptive=True)
+            else:
+                self.optimizer = SAM(self.model.parameters(), base_optimizer, lr=learning_rate)
+            
+
+        else:
+            self.optimizer = self._create_optimizer(learning_rate)
+
         logging.info("Trainer created.")
 
     def _load_encoder_weights(self, weights_fname: Path, gpu: bool = True, device_num: int = 0):
@@ -534,14 +548,37 @@ class VolSeg2dTrainer:
         inputs, targets = utils.prepare_training_batch(
             batch, self.model_device_num, self.label_no
         )
-        self.optimizer.zero_grad()
-        output = self.model(inputs)  # Forward pass
-        if self.settings.loss_criterion == "CrossEntropyLoss":
-            loss = self.loss_criterion(output, torch.argmax(targets, dim=1))
+
+        if self.use_sam:
+            self.optimizer.zero_grad()
+            output = self.model(inputs)  # Forward pass
+            if self.settings.loss_criterion == "CrossEntropyLoss":
+                loss = self.loss_criterion(output, torch.argmax(targets, dim=1))
+            else:
+                loss = self.loss_criterion(output, targets.float())
+            loss.backward()  # Backward pass
+            self.optimizer.first_step(zero_grad=True)
+
+
+            if self.settings.loss_criterion == "CrossEntropyLoss":
+                loss = self.loss_criterion(self.model(inputs), torch.argmax(targets, dim=1))
+            else:
+                loss = self.loss_criterion(self.model(inputs), targets.float())
+        
+            loss.backward()
+            self.optimizer.second_step(zero_grad=True)
         else:
-            loss = self.loss_criterion(output, targets.float())
-        loss.backward()  # Backward pass
-        self.optimizer.step()
+            self.optimizer.zero_grad()
+            output = self.model(inputs)  # Forward pass
+            if self.settings.loss_criterion == "CrossEntropyLoss":
+                loss = self.loss_criterion(output, torch.argmax(targets, dim=1))
+            else:
+                loss = self.loss_criterion(output, targets.float())
+            loss.backward()  # Backward pass
+            self.optimizer.step()
+
+
+
         lr_scheduler.step()  # update the learning rate
         return loss
 
