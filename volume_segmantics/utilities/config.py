@@ -6,13 +6,16 @@ LABEL_DATA_ARG = "labels"
 MODEL_PTH_ARG = "model"
 PREDICT_DATA_ARG = "data"
 DATA_DIR_ARG = "data_dir"
+PREDICT_DATADIR_ARG = "data_image_dir"
+OUTPUT_DATA_DIR_ARG = "output"
 # File extensions
 TIFF_SUFFIXES = {".tiff", ".tif"}
 HDF5_SUFFIXES = {".h5", ".hdf5", ".nxs"}
+PNG_SUFFIXES = {".png"}
 TRAIN_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES}
 LABEL_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES}
 MODEL_DATA_EXT = {".pytorch", ".pth"}
-PREDICT_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES}
+PREDICT_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES, *PNG_SUFFIXES}
 # TODO Required settings - check required keys are in settings files
 # Logging format
 LOGGING_FMT = "%(asctime)s - %(levelname)s - %(message)s"

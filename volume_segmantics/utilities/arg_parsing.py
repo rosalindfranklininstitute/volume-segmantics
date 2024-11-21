@@ -57,7 +57,7 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         type=str,
         action=CheckExt(cfg.TRAIN_DATA_EXT),
         nargs="+",
-        required=True,
+        #required=True,
         help="the path(s) to file(s) containing the imaging data volume for training",
     )
     parser.add_argument(
@@ -66,7 +66,7 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         type=str,
         action=CheckExt(cfg.LABEL_DATA_EXT),
         nargs="+",
-        required=True,
+        #required=True,
         help="the path(s) to file(s) containing a segmented volume for training",
     )
     parser.add_argument(
@@ -77,7 +77,25 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         default=Path.cwd(),
         help='path to a directory containing the "volseg-settings", data will be also be output to this location',
     )
+    parser.add_argument(
+        "--" + "mode",
+        metavar="Run slicer",
+        type=str,
+        nargs="?",
+        default="slicer",
+        help='Run in either slicer or trainer mode',
+    )
+    parser.add_argument(
+        "--" + "max_label_no",
+        metavar="Maximum label value",
+        type=int,
+        nargs="?",
+        default=2,
+        help="Needed if slicer run separately"
+    )
     return parser
+    
+
 
 
 def get_2d_prediction_parser() -> argparse.ArgumentParser:
@@ -109,6 +127,56 @@ def get_2d_prediction_parser() -> argparse.ArgumentParser:
         action=CheckExt(cfg.PREDICT_DATA_EXT),
         help="the path to an HDF5 file containing the imaging data to segment",
     )
+    parser.add_argument(
+        "--" + cfg.DATA_DIR_ARG,
+        metavar="Path to settings and output directory (optional)",
+        type=str,
+        nargs="?",
+        default=Path.cwd(),
+        help='path to a directory containing the "volseg-settings", data will be also be output to this location',
+    )
+    return parser
+
+
+
+def get_2d_prediction_image_dir_parser() -> argparse.ArgumentParser:
+    """Argument parser for scripts that use a 2d network to predict segmenation for a 3d volume.
+
+    Returns:
+        argparse.ArgumentParser: An argument parser with the appropriate
+        command line args contained within.
+    """
+    parser = argparse.ArgumentParser(
+        usage="%(prog)s path/to/model/file.zip path/to/data/image_dir --output=path/to/output/dir",
+        description="Predict segmentation of a 3d data volume using the 2d"
+        " model provided.",
+    )
+    parser.add_argument(
+        "-v", "--version", action="version", version=f"{parser.prog} version 1.0.0"
+    )
+    parser.add_argument(
+        cfg.MODEL_PTH_ARG,
+        metavar="Model file path",
+        type=str,
+        action=CheckExt(cfg.MODEL_DATA_EXT),
+        help="the path to a zip file containing the model weights.",
+    )
+    parser.add_argument(
+        cfg.PREDICT_DATADIR_ARG,
+        metavar="Path to prediction image dir",
+        type=str,
+        #action=CheckExt(cfg.PREDICT_DATA_EXT),
+        help="the path to a directory containing the imaging data to segment",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="Path to output directory",
+        type=str,
+        nargs="?",
+        default=Path.cwd(),
+        help='path to a directory for data to be output to this location',
+    )
+
     parser.add_argument(
         "--" + cfg.DATA_DIR_ARG,
         metavar="Path to settings and output directory (optional)",

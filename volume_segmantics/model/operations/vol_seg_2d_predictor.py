@@ -185,7 +185,11 @@ class VolSeg2dImageDirPredictor:
                     probs = utils.crop_tensor_to_array(probs, yx_dims)
                     output_prob_list.append(probs.astype(np.float16))
 
-        
+        #labels = np.concatenate(output_vol_list)
+        #labels = utils.rotate_array_to_axis(labels, axis)
+        #probs = np.concatenate(output_prob_list) if output_prob_list else None
+        #if probs is not None:
+        #    probs = utils.rotate_array_to_axis(probs, axis)
         return output_vol_list, output_prob_list, images_fps
 
     def _predict_image_dir_to_one_hot(self, data_vol):

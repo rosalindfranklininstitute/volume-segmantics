@@ -145,6 +145,83 @@ class VolSeg2dPredictionDataset(BaseDataset):
         return self.data_vol.shape[0]
 
 
+class VolSeg2dImageDirDataset(BaseDataset):
+    """Read images, apply augmentation and preprocessing transformations.
+
+    Args:
+        images_dir (pathlib.Path): path to images folder
+        masks_dir (pathlib.Path): path to segmentation masks folder
+        preprocessing (albumentations.Compose): data pre-processing
+            (e.g. padding, resizing)
+        augmentation (albumentations.Compose): data transformation pipeline
+            (e.g. flip, scale, contrast adjustments)
+        imagenet_norm (bool): Whether to normalise according to imagenet stats
+        postprocessing (albumentations.Compose): data post-processing
+            (e.g. Convert to Tensor)
+
+
+    """
+
+    imagenet_mean = cfg.IMAGENET_MEAN
+    imagenet_std = cfg.IMAGENET_STD
+
+    def __init__(
+        self,
+        images_dir,
+        preprocessing=None,
+        augmentation=None,
+        imagenet_norm=True,
+        postprocessing=None,
+    ):
+
+        self.images_fps = sorted(list(images_dir.glob("*.png")), key=self.natsort)
+        
+        self.augmentation = augmentation
+        self.preprocessing = preprocessing
+        self.imagenet_norm = imagenet_norm
+        self.postprocessing = postprocessing
+
+    def __getitem__(self, i):
+
+        # read data
+        image = cv2.imread(str(self.images_fps[i]), cv2.IMREAD_GRAYSCALE)
+        
+
+        # apply pre-processing
+        if self.preprocessing:
+            sample = self.preprocessing(image=image)
+            image = sample["image"]
+
+        # apply augmentations
+        if self.augmentation:
+            sample = self.augmentation(image=image)
+            image = sample["image"]
+
+        if self.imagenet_norm:
+            if np.issubdtype(image.dtype, np.integer):
+                # Convert to float
+                image = image.astype(np.float32)
+                image = image / 255
+            image = image - self.imagenet_mean
+            image = image / self.imagenet_std
+
+        # apply post-processing
+        if self.postprocessing:
+            sample = self.postprocessing(image=image)
+            image = sample["image"]
+
+        return image
+
+    def __len__(self):
+        return len(self.images_fps)
+
+    @staticmethod
+    def natsort(item):
+        return [
+            int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(item))
+        ]
+
+
 def get_2d_training_dataset(
     image_dir: Path, label_dir: Path, settings: SimpleNamespace
 ) -> VolSeg2dDataset:
@@ -179,3 +256,13 @@ def get_2d_prediction_dataset(data_vol: np.array) -> VolSeg2dPredictionDataset:
         preprocessing=augs.get_pred_preprocess_augs(y_dim, x_dim),
         postprocessing=augs.get_postprocess_augs(),
     )
+
+def get_2d_image_dir_prediction_dataset(image_dir: Path, settings: SimpleNamespace) -> VolSeg2dPredictionDataset:
+    img_size = settings.output_size
+
+    return VolSeg2dImageDirDataset(
+        image_dir,
+        preprocessing=augs.get_pred_preprocess_augs(img_size, img_size),
+        postprocessing=augs.get_postprocess_augs(),
+    )
+
