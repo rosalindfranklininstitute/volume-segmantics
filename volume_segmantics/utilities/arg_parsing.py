@@ -57,7 +57,7 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         type=str,
         action=CheckExt(cfg.TRAIN_DATA_EXT),
         nargs="+",
-        #required=True,
+        required=True,
         help="the path(s) to file(s) containing the imaging data volume for training",
     )
     parser.add_argument(
@@ -66,7 +66,7 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         type=str,
         action=CheckExt(cfg.LABEL_DATA_EXT),
         nargs="+",
-        #required=True,
+        required=True,
         help="the path(s) to file(s) containing a segmented volume for training",
     )
     parser.add_argument(
@@ -79,10 +79,10 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--" + "mode",
-        metavar="Run slicer",
+        metavar="Mode to run in (slicer or trainer)",
         type=str,
         nargs="?",
-        default="slicer",
+        default="",
         help='Run in either slicer or trainer mode',
     )
     parser.add_argument(

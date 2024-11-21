@@ -28,6 +28,8 @@ end_lr: 1e-3 # Upper Bound of learning rate search
 lr_find_epochs: 1 # Number of training epochs for learning rate search
 lr_reduce_factor: 500 # Divisor for start and end LR when finding LR on reloaded model
 plot_lr_graph: False # Set to True if gnuplot is installed and a terminal plot of learning rate is required 
+use_sam: False
+adaptive_sam: True
 encoder_weights_path: False
 #encoder_weights_path: "/somewhere/improved-resnet4.pt"
 full_weights_path: False
