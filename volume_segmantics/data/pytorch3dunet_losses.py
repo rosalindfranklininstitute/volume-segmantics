@@ -38,7 +38,7 @@ class BoundaryDoUDiceLoss(nn.Module):
 
 
 class FastSurfaceDiceLoss(nn.Module):
-    from surface_distance import create_table_neighbour_code_to_surface_area
+    #from surface_distance import create_table_neighbour_code_to_surface_area
 
     def __init__(self):
         super().__init__()
