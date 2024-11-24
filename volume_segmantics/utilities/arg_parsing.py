@@ -30,8 +30,8 @@ def CheckExt(choices):
             if ext not in choices:
                 parser.error(f"Wrong filetype: file {fname} doesn't end with {choices}")
                 # Check that file exists
-            if not fname.is_file():
-                parser.error(f"The file {str(fname)} does not appear to exist.")
+            #if not fname.is_file() or not fname.is_dir():
+             #   parser.error(f"The file {str(fname)} does not appear to exist.")
 
     return Act
 

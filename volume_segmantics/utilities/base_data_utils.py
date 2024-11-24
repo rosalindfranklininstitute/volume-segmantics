@@ -8,6 +8,7 @@ from typing import List, Union, Tuple
 
 import h5py as h5
 import imageio
+import zarr
 import numpy as np
 import torch
 import torchvision.transforms.functional as F
@@ -175,6 +176,17 @@ def numpy_from_tiff(path):
 
     return imageio.volread(path)
 
+def numpy_from_zarr(path):
+    """Returns a numpy array when given a path to a zarr file (folder).
+
+    Args:
+        path(pathlib.Path): The path to the Zarr file.
+
+    Returns:
+        numpy.array: A numpy array object for the data stored in the Zarr file.
+    """
+
+    return np.array(zarr.open(path)[0])
 
 def numpy_from_hdf5(path, hdf5_path="/data", nexus=False):
     """Returns a numpy array  and chunking info when given a path
@@ -231,6 +243,8 @@ def get_numpy_from_path(
     elif path.suffix in cfg.HDF5_SUFFIXES:
         nexus = path.suffix == ".nxs"
         return numpy_from_hdf5(path, hdf5_path=internal_path, nexus=nexus)
+    elif path.suffix in cfg.ZARR_SUFFIXES:
+        return numpy_from_zarr(path), True
 
 
 def sequential_labels(unique_labels: np.array) -> bool:

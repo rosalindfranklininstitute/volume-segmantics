@@ -11,11 +11,12 @@ OUTPUT_DATA_DIR_ARG = "output"
 # File extensions
 TIFF_SUFFIXES = {".tiff", ".tif"}
 HDF5_SUFFIXES = {".h5", ".hdf5", ".nxs"}
+ZARR_SUFFIXES = {".zarr"}
 PNG_SUFFIXES = {".png"}
 TRAIN_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES}
 LABEL_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES}
 MODEL_DATA_EXT = {".pytorch", ".pth"}
-PREDICT_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES, *PNG_SUFFIXES}
+PREDICT_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES, *PNG_SUFFIXES, *ZARR_SUFFIXES}
 # TODO Required settings - check required keys are in settings files
 # Logging format
 LOGGING_FMT = "%(asctime)s - %(levelname)s - %(message)s"
