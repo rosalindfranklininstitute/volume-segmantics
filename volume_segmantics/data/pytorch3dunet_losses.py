@@ -20,7 +20,6 @@ from matplotlib import pyplot as plt
 
 from typing import Optional
 
-from surface_distance import create_table_neighbour_code_to_surface_area
 
 
 class BoundaryDoUDiceLoss(nn.Module):
@@ -39,6 +38,8 @@ class BoundaryDoUDiceLoss(nn.Module):
 
 
 class FastSurfaceDiceLoss(nn.Module):
+    from surface_distance import create_table_neighbour_code_to_surface_area
+
     def __init__(self):
         super().__init__()
         power = 2**np.arange(0, 8).reshape(1, 1, 2, 2, 2).astype(np.float32)
