@@ -27,7 +27,7 @@ from volume_segmantics.data.pytorch3dunet_losses import (
     BoundaryDoULossV2,
     TverskyLoss,
     BoundaryLoss,
-    FastSurfaceDiceLoss,
+    #FastSurfaceDiceLoss,
     BoundaryDoUDiceLoss
 )
 from volume_segmantics.data.pytorch3dunet_metrics import (
@@ -235,9 +235,9 @@ class VolSeg2dTrainer:
         elif self.settings.loss_criterion == "BoundaryLoss":
             logging.info("Using BoundaryLoss")
             loss_criterion = BoundaryLoss()
-        elif self.settings.loss_criterion == "FastSurfaceDiceLoss":
-            logging.info("Using FastSurfaceDiceLoss")
-            loss_criterion = FastSurfaceDiceLoss()
+        #elif self.settings.loss_criterion == "FastSurfaceDiceLoss":
+        #    logging.info("Using FastSurfaceDiceLoss")
+        #    loss_criterion = FastSurfaceDiceLoss()
         else:
             logging.error("No loss criterion specified, exiting")
             sys.exit(1)
