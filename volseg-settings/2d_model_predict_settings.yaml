@@ -2,6 +2,12 @@
 quality: medium # One of [low, medium, high]. low = Single axis, medium = 3 axis, high = 12 ways, z_only = Single (z) axis with 4 rotations
 output_probs: False # If set to True a separate volume of probabilty values for the predictions will be saved alongside the labels.
 output_entropy: True # If set to True a separate volume of entropy values for the predictions will be saved alongside the labels. Only works if quality is set to medium or above. 
+cuda_device: 0 # Change this if you would like to run the prediction on a different GPU
+downsample: False # If True, data will be downsampled by 2 and segmentation will be upsampled by 2
+one_hot: False # Output one-hot encoded data
+prediction_axis: Z # One of [Z, Y, X]. Specify axis along which to predict if doing single-axis prediction.
+output_size: 512 # Only for predict imagedir 
+data_hdf5_path: /data # Internal path in the HDF5 file where the image data for prediction is stored (only for HDF output, see config.py)
 
 #Normalisation settings
 clip_data: True # If set to True, the image data intensities will be clipped and rescaled before prediction. Set to False if data is already clipped.
@@ -9,14 +15,8 @@ st_dev_factor: 2.575 # Number of standard deviations from the mean to clip data 
 minmax_norm: False # Min-max normalisation/rescaling. Only needed if clip_data if False.
 use_imagenet_norm: True # If True, applies ImageNet mean/std normalisation to input images
 
+# Augmentation settings
 augmentation_library: albumentations # Choose augmentation library: "albumentations" or "monai"
-
-cuda_device: 0 # Change this if you would like to run the prediction on a different GPU
-downsample: False # If True, data will be downsampled by 2 and segmentation will be upsampled by 2
-one_hot: False # Output one-hot encoded data
-prediction_axis: Z # One of [Z, Y, X]. Specify axis along which to predict if doing single-axis prediction.
-output_size: 512 # Only for predict imagedir 
-data_hdf5_path: /data # Internal path in the HDF5 file where the image data for prediction is stored (only for HDF output, see config.py)
 
 # 2.5D prediction settings
 use_2_5d_prediction: True # If True, uses 2.5D prediction with configurable number of slices
