@@ -1,24 +1,34 @@
-# Settings for image and model output
+# Settings for Image and Model output
 data_im_dirname: data # Name of folder that sliced data 2D images will be output to
 seg_im_out_dirname: seg # Name of folder that sliced segmentation 2D images with be output to 
 model_output_fn: trained_2d_model # Suffix for the saved model filename
 data_hdf5_path: /data # The internal HDF5 path to the image data
 seg_hdf5_path: /data # The internal HDF5 path to the label data
 
-#Normalisation settings
+# Normalisation settings
 clip_data: True # Clip and rescale the image data intensities before saving to disk
 st_dev_factor: 2.575 # The number of standard deviations from the mean to clip data to
 minmax_norm: False # Min-max normalisation/rescaling. Only needed if clip_data if False.
 use_imagenet_norm: True # If True, applies ImageNet mean/std normalisation to input images (wanted if Imagenet pretrained weights used)
 normalization_debug_mode: False # If True, enables detailed normalisation debugging in training loop
 
-# Parameters to control model architecture
+# Settings for Model Training
+training_axes: All # Specify axes/single axis to train on. Choose from [All, Z, X, Y]. 
+image_size: 512 # size of images used for training (must be multiple of 32)
+downsample: False # If True, data will be downsampled by 2
+training_set_proportion: 0.85 # Proportion of images to use the training, rest are used for validation
+cuda_device: 0 # The graphics card to use (between 0 and 3 for a machine with 4 GPUs)
+num_cyc_frozen: 8 # Number of training epochs on frozen model
+num_cyc_unfrozen: 5 # Number of training epochs on unfrozen model
+patience: 4 # Number of epochs to wait before early stopping if validation loss does not improve
+
+# Parameters to control Model Architecture
 model:
   # Choose type of segmentation model from the list of those tested so far
   # ["U_Net", "U_Net_Plus_plus", "FPN", "DeepLabV3", "DeepLabV3_Plus"]
   # "MA_Net", "Linknet", "PAN", "Segformer", "Vanilla_Unet", "Multitask_Unet"]
   # Note: Use "Multitask_Unet" when use_multitask is true
-  type: "U_Net_Plus_plus"
+  type: "U_Net"
   # For more details on encoder types please see smp.readthedocs.io
   # choose encoder, those tested so far include the following:
   # ["resnet34", "resnet50", "tu-convnextv2_base", "tu-convnextv2_large", "tu_convnext_base", "tu_convnext_large"
@@ -26,17 +36,75 @@ model:
   # "timm-resnest50d"*, "timm-resnest101e"*, *Encoders with asterisk not compatible with PAN.
   # "dinov2_vits14", "dinov2_vitb14", "dinov2_vitl14", "dinov2_vitg14",
   # "dinov3_vitl16", "dinov3_vit7b16"] 
-  encoder_name: "resnet50"
+  encoder_name: "tu-convnextv2_base"
   # use `imagenet` pre-trained weights for encoder initialization
   encoder_weights: "imagenet"
   encoder_depth: 5  # Default: 5 (For DINO encoders, 4 is recommended)
   # in_channels: 1  # Optional: will be auto-detected from data (1 for grayscale, 3 for RGB, N for 2.5D)
+ 
+# Learning rate settings
+# Parameters for finding learning rate
+lr_find_epochs: 1 # Number of training epochs for learning rate search
+# Divisor for start and end LR when finding LR on reloaded model (unfrozen training)
+# For large pretrained encoders (e.g., DINO), consider reducing this (e.g., 50-100) 
+# To allow higher learning rates when using differential LRs
+lr_reduce_factor: 500 # Divisor for start and end LR when finding LR on reloaded model
+ 
+# Differential learning rates for unfrozen training (encoder vs decoder/head)
+# When unfrozen, encoder uses learning_rate * encoder_lr_multiplier, decoder/head use learning_rate
+# Set to None or 1.0 to use same LR for all components. Recommended: 0.1 for large pretrained encoders (e.g., DINO), 0.5-1.0 for smaller encoders
+# Note: When using differential LRs, you may want to reduce lr_reduce_factor (e.g., 50-100)
+encoder_lr_multiplier: 0.1  # Encoder LR multiplier for unfrozen training (None = disabled)
+ 
+# Learning rate scheduler
+pct_lr_inc: 0.3 # the percentage of overall iterations where the LR is increasing
+# Parameters for finding learning rate
+starting_lr: 5e-5 # Lower bound of learning rate search
+end_lr: 1e-3 # Upper Bound of learning rate search
+ 
+# Loss Function Selection
+# Choose from one of the following loss functions:
+# Basic losses: "CombinedCEDiceLoss", "BCELoss", "DiceLoss", "GeneralizedDiceLoss", 
+#               "CrossEntropyLoss", "TverskyLoss", "BoundaryDoULoss", "BoundaryLoss", "ClassWeightedDiceLoss"
+# Note: "BCEDiceLoss" is deprecated in favor of "CombinedCEDiceLoss" (which handles binary automatically)
+# Note: "ClassWeightedDiceLoss" uses class frequency-based weighting (Dice only, no CE component)
+loss_criterion: "CombinedCEDiceLoss"
+ 
+# Parameters for legacy BCEDiceLoss (deprecated - use CombinedCEDiceLoss instead)
+# These are only used if loss_criterion is explicitly set to "BCEDiceLoss"
+alpha: 0.5 # When BCEDiceLoss selected, weighting for BCELoss
+beta: 0.5 # When BCEDiceLoss selected, weighting for DiceLoss
+ 
+# Parameters for advanced losses (CombinedCEDiceLoss and ClassWeightedDiceLoss)
+# Dice weighting mode for class-weighted losses
+dice_weight_mode: "inverse_sqrt_freq"  # Options: "inverse_sqrt_freq", "inverse_freq", "uniform"
+exclude_background_from_dice: False   # Usually true for foreground structures
+# For CombinedCEDiceLoss only
+ce_weight: 0.2   # Weight for Cross-Entropy component (alpha in CombinedCEDiceLoss)
+dice_weight: 0.8 # Weight for Dice component (beta in CombinedCEDiceLoss)
+ 
+# Evaluation metric
+eval_metric: "MeanIoU" # Choose from one of [MeanIoU, DiceCoefficient]
+dice_averaging: "macro"  # For DiceCoefficient: "macro" or "weighted"
+ 
+# Misc training settings
+plot_lr_graph: False # Set to True if gnuplot is installed and a terminal plot of learning rate is required 
+use_sam: False
+adaptive_sam: True
+encoder_weights_path: False    #eg encoder_weights_path: "/somewhere/improved-resnet4.pt"
+full_weights_path: False
 
 
 # Augmentation settings
 augmentation_library: albumentations # Choose augmentation library: "albumentations" or "monai"
 use_monai_datasets: true # Use MONAI datasets when using MONAI augmentations (default: true when augmentation_library is monai)
-
+ 
+# 2.5D slicing settings
+use_2_5d_slicing: False # If True, enables 2.5D slicing with configurable number of slices
+num_slices: 3 # Number of slices to use (must be odd: 3, 5, 7, 9, etc.)
+slice_file_format: "png" # File format for multi-channel slices: "tiff" (default) or "png" (only for 3 channels or less)
+skip_border_slices: False # If True, skips first and last slices when using 2.5D slicing
+ 
 # Multi-task learning settings (requires MONAI datasets)
 use_multitask: false # Enable multi-task learning (requires MONAI datasets)
 num_tasks: 2 # Number of tasks: 2 (seg + boundary) or 3 (seg + boundary + task3)
@@ -46,55 +114,8 @@ seg_loss_weight: 1.0 # Weight for segmentation loss
 boundary_loss_weight: 1.0 # Weight for boundary loss
 task3_loss_weight: 1.0 # Weight for task3 loss (if num_tasks = 3)
 boundary_loss_type: "bce" # Boundary loss type: "bce", "dice", or "bce_dice"
-
-# Settings for model training
-training_axes: All # Specify axes/single axis to train on. Choose from [All, Z, X, Y]. 
-image_size: 256 # size of images used for training (must be multiple of 32)
-downsample: False # If True, data will be downsampled by 2
-training_set_proportion: 0.85 # Proportion of images to use the training, rest are used for validation
-cuda_device: 0 # The graphics card to use (between 0 and 3 for a machine with 4 GPUs)
-num_cyc_frozen: 8 # Number of training epochs on frozen model
-num_cyc_unfrozen: 5 # Number of training epochs on unfrozen model
-patience: 4 # Number of epochs to wait before early stopping if validation loss does not improve
-
-# Loss function selection
-# Choose from one of the following loss functions:
-# Basic losses: "CombinedCEDiceLoss", "BCELoss", "DiceLoss", "GeneralizedDiceLoss", 
-#               "CrossEntropyLoss", "TverskyLoss", "BoundaryDoULoss", "BoundaryLoss", "ClassWeightedDiceLoss"
-# Note: "BCEDiceLoss" is deprecated in favor of "CombinedCEDiceLoss" (which handles binary automatically)
-# Note: "ClassWeightedDiceLoss" uses class frequency-based weighting (Dice only, no CE component)
-loss_criterion: "CombinedCEDiceLoss" 
-
-# Parameters for legacy BCEDiceLoss (deprecated - use CombinedCEDiceLoss instead)
-# These are only used if loss_criterion is explicitly set to "BCEDiceLoss"
-alpha: 0.5 # When BCEDiceLoss selected, weighting for BCELoss
-beta: 0.5 # When BCEDiceLoss selected, weighting for DiceLoss
-
-# Parameters for advanced losses (CombinedCEDiceLoss and ClassWeightedDiceLoss)
-# Dice weighting mode for class-weighted losses
-dice_weight_mode: "inverse_sqrt_freq"  # Options: "inverse_sqrt_freq", "inverse_freq", "uniform"
-exclude_background_from_dice: False     # Usually true for foreground structures
-# For CombinedCEDiceLoss only
-ce_weight: 0.2   # Weight for Cross-Entropy component (alpha in CombinedCEDiceLoss)
-dice_weight: 0.8 # Weight for Dice component (beta in CombinedCEDiceLoss)
-
-# Evaluation metric
-eval_metric: "DiceCoefficient" # Choose from one of [MeanIoU, DiceCoefficient]
-dice_averaging: "macro"  # For DiceCoefficient: "macro" or "weighted"
-
-# Learning rate scheduler
-pct_lr_inc: 0.3 # the percentage of overall iterations where the LR is increasing
-# Parameters for finding learning rate
-starting_lr: 5e-5 # Lower bound of learning rate search
-end_lr: 1e-3 # Upper Bound of learning rate search
-
-# 2.5D slicing settings
-use_2_5d_slicing: False # If True, enables 2.5D slicing with configurable number of slices
-num_slices: 3 # Number of slices to use (must be odd: 3, 5, 7, 9, etc.)
-slice_file_format: "png" # File format for multi-channel slices: "tiff" (default) or "png" (only for 3 channels or less)
-skip_border_slices: False # If True, skips first and last slices when using 2.5D slicing
-
-# Semi-supervised learning settings
+ 
+# Semi-supervised Learning settings
 # Note: Both Mean Teacher and pseudo-labeling require --unlabeled_data_dir to be provided via command line
 use_semi_supervised: False  # Enable semi-supervised training (Mean Teacher)
 unlabeled_batch_size: 8  # Batch size for unlabeled data (can differ from labeled)
@@ -103,7 +124,7 @@ rampup_start: 0  # Start ramp-up at this iteration
 rampup_end: 10000  # End ramp-up at this iteration
 ema_decay: 0.99  # EMA decay rate (0.99 is standard)
 mean_teacher_vis_epoch_interval: 5  # Generate Mean Teacher visualization every N epochs (0 or None = never)
-
+ 
 # Pseudo-labeling semi-supervised learning settings
 # Note: Pseudo-labeling requires --unlabeled_data_dir to be provided via command line (can work standalone or with Mean Teacher)
 use_pseudo_labeling: False  # Enable pseudo-labeling (requires --unlabeled_data_dir via command line; can be combined with Mean Teacher)
@@ -118,24 +139,3 @@ pseudo_label_threshold_schedule: "fixed"  # Threshold schedule: "fixed", "linear
 pseudo_label_start_threshold: 0.9  # Starting threshold (for scheduling)
 pseudo_label_target_acceptance_rate: 0.3  # Target acceptance rate (for adaptive scheduling)
 pseudo_labeling_vis_epoch_interval: 5  # Generate pseudo-labeling visualization every N epochs (0 or None = never)
-
-# Learning rate settings
-# Parameters for finding learning rate
-lr_find_epochs: 1 # Number of training epochs for learning rate search
-# Divisor for start and end LR when finding LR on reloaded model (unfrozen training)
-# For large pretrained encoders (e.g., DINO), consider reducing this (e.g., 50-100) 
-# to allow higher learning rates when using differential LRs
-lr_reduce_factor: 500 # Divisor for start and end LR when finding LR on reloaded model
-
-# Differential learning rates for unfrozen training (encoder vs decoder/head)
-# When unfrozen, encoder uses learning_rate * encoder_lr_multiplier, decoder/head use learning_rate
-# Set to None or 1.0 to use same LR for all components. Recommended: 0.1 for large pretrained encoders (e.g., DINO), 0.5-1.0 for smaller encoders
-# Note: When using differential LRs, you may want to reduce lr_reduce_factor (e.g., 50-100)
-encoder_lr_multiplier: 0.1  # Encoder LR multiplier for unfrozen training (None = disabled)
-
-# Misc training settings
-plot_lr_graph: False # Set to True if gnuplot is installed and a terminal plot of learning rate is required 
-use_sam: False
-adaptive_sam: True
-encoder_weights_path: False    #eg encoder_weights_path: "/somewhere/improved-resnet4.pt"
-full_weights_path: False
