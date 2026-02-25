@@ -21,6 +21,7 @@ h5py = "^3.0.0"
 numpy = "^1.18.0"
 matplotlib = "^3.3.0"
 torch = ">=1.7.1"
+monai = ">=1.3.0"
 #segmentation-models-pytorch = "^0.2.1"
 segmentation-models-pytorch = "*"
 termplotlib = "^0.3.6"
@@ -41,7 +42,7 @@ pylint = ">=2.4.0"
 pytest = ">=6"
 pytest-cov = "*"
 zarr = "*"
-monai = ">=1.3.0"
+
 
 [tool.pytest.ini_options]
 addopts = "-v --cov=volume_segmantics --cov-report term-missing"
