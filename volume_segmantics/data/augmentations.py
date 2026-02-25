@@ -65,7 +65,7 @@ def get_pred_preprocess_augs(
     )
 
 
-def get_train_augs(img_size: int) -> A.core.composition.Compose:
+def get_train_augs(img_size: int, num_channels: int = 1) -> A.core.composition.Compose:
     """Returns the augmentations used for training a network.
 
     Args:
@@ -74,31 +74,32 @@ def get_train_augs(img_size: int) -> A.core.composition.Compose:
     Returns:
         A.core.composition.Compose: Augmentations for training.
     """
-    return A.Compose(
-        [
-            A.RandomSizedCrop(
-                min_max_height=(img_size // 2, img_size),
-                height=img_size,
-                width=img_size,
-                p=0.5,
-            ),
-            A.VerticalFlip(p=0.5),
-            A.RandomRotate90(p=0.5),
-            A.Transpose(p=0.5),
-            A.OneOf(
-                [
-                    A.ElasticTransform(
-                        alpha=120, sigma=120 * 0.07, alpha_affine=120 * 0.04, p=0.5
-                    ),
-                    A.GridDistortion(p=0.5),
-                    A.OpticalDistortion(distort_limit=1, shift_limit=0.5, p=0.5),
-                ],
-                p=0.5,
-            ),
-            A.CLAHE(p=0.5),
-            A.OneOf([A.RandomBrightnessContrast(p=0.5), A.RandomGamma(p=0.5)], p=0.5),
-        ]
-    )
+    transforms = [
+        A.RandomSizedCrop(
+            min_max_height=(img_size // 2, img_size),
+            height=img_size,
+            width=img_size,
+            p=0.5,
+        ),
+        A.VerticalFlip(p=0.5),
+        A.RandomRotate90(p=0.5),
+        A.Transpose(p=0.5),
+        A.OneOf(
+            [
+                A.ElasticTransform(
+                    alpha=120, sigma=120 * 0.07, alpha_affine=120 * 0.04, p=0.5
+                ),
+                A.GridDistortion(p=0.5),
+                A.OpticalDistortion(distort_limit=1, shift_limit=0.5, p=0.5),
+            ],
+            p=0.5,
+        ),
+    ]
+    # CLAHE only supports 1- or 3-channel images; skip for other counts (e.g., 5, 7)
+    if num_channels in (1, 3):
+        transforms.append(A.CLAHE(p=0.5))
+    transforms.append(A.OneOf([A.RandomBrightnessContrast(p=0.5), A.RandomGamma(p=0.5)], p=0.5))
+    return A.Compose(transforms)
 
 
 def get_postprocess_augs() -> A.core.composition.Compose:

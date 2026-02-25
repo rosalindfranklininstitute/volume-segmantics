@@ -29,13 +29,13 @@ class EarlyStopping:
         self.path = path
         self.model_struc_dict = model_dict # Dictionary with parameters controlling architecture
 
-    def __call__(self, val_loss, model, optimizer, label_codes):
+    def __call__(self, val_loss, model, optimizer, label_codes, glob_it=None):
 
         score = -val_loss
 
         if self.best_score is None:
             self.best_score = score
-            self.save_checkpoint(val_loss, model, optimizer, label_codes)
+            self.save_checkpoint(val_loss, model, optimizer, label_codes, glob_it=glob_it)
         elif score < self.best_score + self.delta:
             self.counter += 1
             logging.info(
@@ -44,20 +44,33 @@ class EarlyStopping:
                 self.early_stop = True
         else:
             self.best_score = score
-            self.save_checkpoint(val_loss, model, optimizer, label_codes)
+            self.save_checkpoint(val_loss, model, optimizer, label_codes, glob_it=glob_it)
             self.counter = 0
 
-    def save_checkpoint(self, val_loss, model, optimizer, label_codes):
+    def save_checkpoint(self, val_loss, model, optimizer, label_codes, glob_it=None):
         '''Saves model when validation loss decrease.'''
         if self.verbose:
             logging.info(
                 f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
+        
+        # Handle DataParallel wrapping
+        from torch.nn import DataParallel
+        if isinstance(model, DataParallel):
+            model_state_dict = model.module.state_dict()
+        else:
+            model_state_dict = model.state_dict()
+        
         model_dict = {
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": model_state_dict,
             "model_struc_dict": self.model_struc_dict,
             "optimizer_state_dict": optimizer.state_dict(),
             "loss_val": val_loss,
             "label_codes": label_codes,
-        }        
+        }
+        
+        # Add glob_it if provided (for semi-supervised learning)
+        if glob_it is not None:
+            model_dict["glob_it"] = glob_it
+        
         torch.save(model_dict, self.path)
         self.val_loss_min = val_loss

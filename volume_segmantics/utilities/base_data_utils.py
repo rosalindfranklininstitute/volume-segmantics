@@ -7,7 +7,9 @@ from types import SimpleNamespace
 from typing import List, Union, Tuple
 
 import h5py as h5
+import tifffile
 import imageio
+import zarr
 import numpy as np
 import torch
 import torchvision.transforms.functional as F
@@ -30,6 +32,7 @@ class Quality(Enum):
     LOW = 1
     MEDIUM = 3
     HIGH = 12
+    Z_ONLY = 4
 
 
 class Axis(Enum):
@@ -48,6 +51,10 @@ class ModelType(Enum):
     MA_NET = 6
     LINKNET = 7
     PAN = 8
+    SEGFORMER = 9
+    VANILLA_UNET = 10 # No pretrained encoder
+    MULTITASK_UNET = 11
+
 
 
 def create_enum_from_setting(setting_str, enum):
@@ -115,14 +122,23 @@ def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
     else:
         batch_size = cfg.BIG_CUDA_PRED_BATCH
 
+
+    if torch.cuda.device_count() > 1 and cfg.USE_ALL_GPUS:
+        batch_size *= torch.cuda.device_count()
+
     logging.info(
-        f"Free GPU memory is {free_gpu_mem:0.2f} GB. Batch size will be "
-        f"{batch_size}."
+        f"Free GPU memory is {free_gpu_mem:0.2f} GB. "
+        f"Number of GPUs: {torch.cuda.device_count()}. "
+        f"Use all GPUs via DataParallel {cfg.USE_ALL_GPUS}. "
+        f"Batch size will be {batch_size}."
     )
+
     return batch_size
 
 
-def crop_tensor_to_array(tensor: torch.Tensor, yx_dims: List[int]) -> np.array:
+def crop_tensor_to_array(tensor: Union[torch.Tensor, np.ndarray], yx_dims: List[int]) -> np.array:
+    if isinstance(tensor, np.ndarray):
+        tensor = torch.from_numpy(tensor)
     if tensor.is_cuda:
         tensor = tensor.cpu()
     tensor = F.center_crop(tensor, yx_dims)
@@ -148,14 +164,88 @@ def one_hot_encode_array(input_array: np.array, num_labels: int) -> np.array:
 
 
 def prepare_training_batch(
-    batch: "list[torch.Tensor]", device: int, num_labels: int
-) -> "tuple[torch.Tensor, torch.Tensor]":
-    inputs = batch[0].to(device)
-    targets = batch[1].to(torch.int64)
-    # One hot encode the channels
-    targets = torch.nn.functional.one_hot(targets, num_classes=num_labels)
-    targets = targets.permute((0, 3, 1, 2)).to(device, dtype=torch.uint8)
-    return inputs, targets
+    batch: "Union[list[torch.Tensor], dict]", device: int, num_labels: int
+) -> "Union[tuple[torch.Tensor, torch.Tensor], tuple[torch.Tensor, dict]]":
+    """Prepare batch for training, handling both tuple (PyTorch) and dict (MONAI) formats.
+
+    Args:
+        batch: Either a list/tuple of tensors [inputs, targets] or a dict with keys
+               like {"img": tensor, "seg": tensor, "boundary": tensor, ...}
+        device: Device to move tensors to
+        num_labels: Number of segmentation classes
+
+    Returns:
+        For tuple format: (inputs, targets) where targets are one-hot encoded
+        For dict format: (inputs, targets_dict) where targets_dict contains all task targets
+    """
+    if isinstance(batch, dict):
+        # dictionary with keys like "img", "seg", "boundary" (MONAI)
+        inputs = batch["img"].to(torch.float32)
+        inputs = inputs.to(device)
+
+        targets = {}
+
+        # Primary segmentation
+        if "seg" in batch:
+            seg_target = batch["seg"].to(torch.int64)
+
+            # MONAI returns seg as (B, C, H, W) where C is usually 1
+            # Squeeze channel dimension if it's 1 to get (B, H, W)
+            if seg_target.dim() == 4 and seg_target.shape[1] == 1:
+                seg_target = seg_target.squeeze(1)  # (B, H, W)
+
+            # One-hot encode: (B, H, W) -> (B, H, W, num_labels)
+            seg_target = torch.nn.functional.one_hot(seg_target, num_classes=num_labels)
+
+            # Permute to (B, num_labels, H, W) - handle both 4D and 5D cases
+            if seg_target.dim() == 4:
+                # Already (B, H, W, num_labels), permute to (B, num_labels, H, W)
+                seg_target = seg_target.permute((0, 3, 1, 2))
+            elif seg_target.dim() == 5:
+                # (B, C, H, W, num_labels) -> (B, num_labels, H, W)
+                seg_target = seg_target.squeeze(1).permute((0, 3, 1, 2))
+
+            seg_target = seg_target.to(device, dtype=torch.uint8)
+            targets["seg"] = seg_target
+
+        # Boundary target (task 2)
+        if "boundary" in batch:
+            boundary_target = batch["boundary"].to(device)
+            # MONAI returns as (B, C, H, W), squeeze if C=1
+            if boundary_target.dim() == 4 and boundary_target.shape[1] == 1:
+                boundary_target = boundary_target.squeeze(1)  # (B, H, W)
+            # Boundary is typically binary, keep as float for BCE loss
+            if boundary_target.dtype != torch.float32:
+                boundary_target = boundary_target.float()
+            if boundary_target.dim() == 3:
+                boundary_target = boundary_target.unsqueeze(1)  # (B, 1, H, W)
+            targets["boundary"] = boundary_target
+
+        # Task 3 target
+        if "task3" in batch:
+            task3_target = batch["task3"].to(device)
+            # MONAI returns as (B, C, H, W), squeeze if C=1
+            if task3_target.dim() == 4 and task3_target.shape[1] == 1:
+                task3_target = task3_target.squeeze(1)  # (B, H, W)
+            # Handle based on task type (could be binary or multi-class)
+            if task3_target.dtype != torch.float32:
+                task3_target = task3_target.float()
+            # Ensure correct shape: (B, H, W) or (B, C, H, W)
+            if task3_target.dim() == 3:
+                task3_target = task3_target.unsqueeze(1)  # (B, 1, H, W)
+            targets["task3"] = task3_target
+
+        return inputs, targets
+    else:
+        # tuple format: [inputs, targets]
+        inputs = batch[0].to(torch.float32)
+        inputs = inputs.to(device)
+
+        targets = batch[1].to(torch.int64)
+        # One hot encode the channels
+        targets = torch.nn.functional.one_hot(targets, num_classes=num_labels)
+        targets = targets.permute((0, 3, 1, 2)).to(device, dtype=torch.uint8)
+        return inputs, targets
 
 
 def downsample_data(data, factor=2):
@@ -175,6 +265,17 @@ def numpy_from_tiff(path):
 
     return imageio.volread(path)
 
+def numpy_from_zarr(path):
+    """Returns a numpy array when given a path to a zarr file (folder).
+
+    Args:
+        path(pathlib.Path): The path to the Zarr file.
+
+    Returns:
+        numpy.array: A numpy array object for the data stored in the Zarr file.
+    """
+
+    return np.array(zarr.open(path)[0])
 
 def numpy_from_hdf5(path, hdf5_path="/data", nexus=False):
     """Returns a numpy array  and chunking info when given a path
@@ -231,6 +332,8 @@ def get_numpy_from_path(
     elif path.suffix in cfg.HDF5_SUFFIXES:
         nexus = path.suffix == ".nxs"
         return numpy_from_hdf5(path, hdf5_path=internal_path, nexus=nexus)
+    elif path.suffix in cfg.ZARR_SUFFIXES:
+        return numpy_from_zarr(path), True
 
 
 def sequential_labels(unique_labels: np.array) -> bool:
@@ -354,3 +457,9 @@ def save_data_to_hdf5(data, file_path, internal_path="/data", chunking=True):
         f.create_dataset(
             internal_path, data=data, chunks=chunking, compression=cfg.HDF5_COMPRESSION
         )
+
+
+def save_data_to_tif(data, file_path, compress=True):
+    logging.info(f"Saving data of shape {data.shape} to {file_path}.")
+    compression = 'zlib' if compress else None
+    tifffile.imwrite(file_path, data, compression=compression)
