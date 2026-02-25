@@ -8,7 +8,7 @@ Volume Segmantics provides a simple command-line interface and API that allows r
 
 Given a 3d image volume and corresponding dense labels (the segmentation), a 2d model is trained on image slices taken along the x, y, and z axes. The method is optimised for small training datasets, e.g a single dataset in between $128^3$ and $512^3$ pixels. To achieve this, all models use pre-trained encoders and image augmentations are used to expand the size of the training dataset.
 
-This work utilises the abilities afforded by the excellent [segmentation-models-pytorch](https://github.com/qubvel/segmentation_models.pytorch) library in combination with augmentations made available via [Albumentations](https://albumentations.ai/). Also the metrics and loss functions used make use of the hard work done by Adrian Wolny in his [pytorch-3dunet](https://github.com/wolny/pytorch-3dunet) repository. 
+This work utilises the abilities afforded by the excellent [segmentation-models-pytorch](https://github.com/qubvel/segmentation_models.pytorch) library in combination with augmentations made available via [Albumentations](https://albumentations.ai/) and from the [MONAI](https://github.com/project-monai/monai) library. Also the metrics and loss functions used make use of the hard work done by Adrian Wolny in his [pytorch-3dunet](https://github.com/wolny/pytorch-3dunet) repository. 
 
 ## Requirements
 
@@ -47,11 +47,6 @@ The input data will be segmented using the input model following the settings sp
 ### 2.5D Slicing Feature
 
 Volume-segmantics supports 2.5D slicing, which creates multi-channel images from adjacent slices in the volume. This feature can be enabled by setting `use_2_5d_slicing: True` in the training settings file. This approach provides the model with spatial context from adjacent slices. The encoder adjusts to use the number of input channels specified by the num_slices parameter in  `volseg-settings/2d_model_train_settings.yaml` (when 2.5D slicing is enabled). When using 2.5D slicing for training, you must also enable 2.5D prediction for inference by setting `use_2_5d_prediction: True` in your `2d_model_predict_settings.yaml` file and set the num_slices parameter there.
-
-
-### 2.5D Slicing Feature
-
-Volume-segmantics supports 2.5D slicing, which creates RGB images from adjacent slices in the volume. This feature can be enabled by setting `use_2_5d_slicing: True` in the training settings file. This approach provides the model with spatial context from adjacent slices. The encoder adjusts to use 3 input channels when 2.5D slicing is enabled. When using 2.5D slicing for training, you must also enable 2.5D prediction for inference by setting `use_2_5d_prediction: True` in your `2d_model_predict_settings.yaml` file.
 
 
 ### Tutorial using example data
@@ -114,12 +109,19 @@ If you use this package for you research, please cite:
 
 **Albumentations**
 
-Buslaev, A., Iglovikov, V.I., Khvedchenya, E., Parinov, A., Druzhinin, M., and Kalinin, A.A. (2020). Albumentations: Fast and Flexible Image Augmentations. Information 11. [https://doi.org/10.3390/info11020125](https://doi.org/10.3390/info11020125)
+Buslaev, A., Iglovikov, V.I., Khvedchenya, E., Parinov, A., Druzhinin, M., and Kalinin, A.A. (2020). Albumentations: Fast and Flexible Image Augmentations. Information 11. [https://doi.org/10.3390/info11020125](https://doi.org/10.3390/info11020125).
+
+**MONAI**
+
+Cardoso, M. Jorge, Wenqi Li, Richard Brown, Nic Ma, Eric Kerfoot, Yiheng Wang, Benjamin Murrey et al. (2022) "Monai: An open-source framework for deep learning in healthcare." [arXiv preprint arXiv:2211.02701](https://arxiv.org/abs/2211.02701).
 
 **Segmentation Models PyTorch**
 
-Yakubovskiy, P. (2020). Segmentation Models Pytorch. [GitHub](https://github.com/qubvel/segmentation_models.pytorch)
+Yakubovskiy, P. (2020). Segmentation Models Pytorch. [GitHub](https://github.com/qubvel/segmentation_models.pytorch).
+
 
 **PyTorch-3dUnet**
 
-Wolny, A., Cerrone, L., Vijayan, A., Tofanelli, R., Barro, A.V., Louveaux, M., Wenzl, C., Strauss, S., Wilson-Sánchez, D., Lymbouridou, R., et al. (2020). Accurate and versatile 3D segmentation of plant tissues at cellular resolution. ELife 9, e57613. [https://doi.org/10.7554/eLife.57613](https://doi.org/10.7554/eLife.57613)
+Wolny, A., Cerrone, L., Vijayan, A., Tofanelli, R., Barro, A.V., Louveaux, M., Wenzl, C., Strauss, S., Wilson-Sánchez, D., Lymbouridou, R., et al. (2020). Accurate and versatile 3D segmentation of plant tissues at cellular resolution. ELife 9, e57613. [https://doi.org/10.7554/eLife.57613](https://doi.org/10.7554/eLife.57613).
+
+
