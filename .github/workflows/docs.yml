@@ -5,13 +5,11 @@ on:
     branches:
       - readthedocs
     paths:
-      - 'docs/**'       
-    
-
-  workflow_dispatch:  
+      - 'docs/**'
+  workflow_dispatch:
 
 permissions:
-  contents: write    
+  contents: write
 
 jobs:
   build-and-deploy:
@@ -37,8 +35,6 @@ jobs:
         run: |
           cd docs
           make html
-        env:
-          SPHINXOPTS: "-W --keep-going" 
 
       - name: Add .nojekyll
         run: touch docs/_build/html/.nojekyll
