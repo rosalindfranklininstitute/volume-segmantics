@@ -47,5 +47,5 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: docs/_build/html
-          publish_branch: gh-pages
+          publish_branch: readthedocs
           commit_message: "docs: auto-deploy from ${{ github.sha }}"
