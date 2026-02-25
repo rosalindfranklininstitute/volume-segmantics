@@ -28,6 +28,9 @@ imagecodecs = "> 2022.2.22"
 torchseg = "*"
 imageio = "*"
 scikit-image = "*"
+torchmetrics = "*"
+termcolor = "*"
+sparse = "*"
 
 [tool.poetry.dev-dependencies]
 opencv-python-headless = "4.8.0.74"
