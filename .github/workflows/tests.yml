@@ -40,9 +40,9 @@ jobs:
           path: ~/.cache
           key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
       - name: Install dependencies
-        run: poetry install --no-interaction --no-deps
+        run: poetry install --no-interaction --no-root --without main
       - name: Install library
-        run: poetry install --no-interaction --no-deps
+        run: poetry install --no-interaction --no-root --without main
       - run: |
           source $VENV
           pytest --version
