@@ -1,7 +1,7 @@
 # Settings for prediction of a 3d volume using a 2d model
 quality: medium # One of [low, medium, high]. low = Single axis, medium = 3 axis, high = 12 ways, z_only = Single (z) axis with 4 rotations
 output_probs: False # If set to True a separate volume of probabilty values for the predictions will be saved alongside the labels.
-output_entropy: True # If set to True a separate volume of entropy values for the predictions will be saved alongside the labels. Only works if quality is set to medium or above. 
+output_entropy: False # If set to True a separate volume of entropy values for the predictions will be saved alongside the labels. Only works if quality is set to medium or above. 
 cuda_device: 0 # Change this if you would like to run the prediction on a different GPU
 downsample: False # If True, data will be downsampled by 2 and segmentation will be upsampled by 2
 one_hot: False # Output one-hot encoded data
@@ -19,7 +19,7 @@ use_imagenet_norm: True # If True, applies ImageNet mean/std normalisation to in
 augmentation_library: albumentations # Choose augmentation library: "albumentations" or "monai"
 
 # 2.5D prediction settings
-use_2_5d_prediction: True # If True, uses 2.5D prediction with configurable number of slices
+use_2_5d_prediction: False # If True, uses 2.5D prediction with configurable number of slices
 num_slices: 3 # Number of slices to use (must match training configuration)
 prediction_padding_factor: 1.0 # Multiplier for padding amount (1.0 = num_slices//2, 2.0 = num_slices, etc.)
 

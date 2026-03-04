@@ -612,19 +612,20 @@ class ModelManager:
         model_dict = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
         logging.info("Loading model weights.")
         
-        # Handle MeanTeacherModel state dict
+        # Handle MeanTeacherModel state dict and DataParallel checkpoint mismatch.
+        # Checkpoints are saved from model.module.state_dict() (no "module." prefix)
+        # when using DataParallel, so load into model.module when wrapped.
         if use_semi_supervised:
-            # Unwrap DataParallel if needed
             if isinstance(model, DataParallel):
                 model.module.load_state_dict(model_dict["model_state_dict"])
-                # Restore glob_it if present
                 if 'glob_it' in model_dict:
                     model.module.glob_it = model_dict['glob_it']
             else:
                 model.load_state_dict(model_dict["model_state_dict"])
-                # Restore glob_it if present
                 if 'glob_it' in model_dict:
                     model.glob_it = model_dict['glob_it']
+        elif isinstance(model, DataParallel):
+            model.module.load_state_dict(model_dict["model_state_dict"])
         else:
             model.load_state_dict(model_dict["model_state_dict"])
         

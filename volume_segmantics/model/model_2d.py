@@ -805,7 +805,16 @@ def create_model_from_file(
     # Create model with saved channels first so we can load the saved weights
     model = create_model_on_device(device_num, model_dict["model_struc_dict"])
     logging.info("Loading in the saved weights.")
-    model.load_state_dict(model_dict["model_state_dict"], strict=False)
+    state_dict = model_dict["model_state_dict"]
+    # handle DataParallel module. prefix
+    if isinstance(model, DataParallel):
+        if state_dict and next(iter(state_dict.keys())).startswith("module."):
+            state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
+        model.module.load_state_dict(state_dict, strict=False)
+    else:
+        if state_dict and next(iter(state_dict.keys())).startswith("module."):
+            state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
+        model.load_state_dict(state_dict, strict=False)
 
     # Adapt first conv layer if input channels changed
     if requested_in_channels != saved_in_channels:
