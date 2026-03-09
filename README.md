@@ -16,7 +16,7 @@ A machine capable of running CUDA enabled PyTorch version 2.0 or greater is requ
 
 ## Installation
 
-The easiest way to install the package is to first create a new conda environment or virtualenv with python (ideally >= version 3.9) and also pip, then activate the environment and `pip install volume-segmantics`. If a CUDA-enabled build of PyTorch is not being installed by pip, you can try `pip install volume-segmantics --extra-index-url https://download.pytorch.org/whl` this particularity seems to be an issue on Windows. 
+The easiest way to install the package is to first create a new conda environment or virtualenv with python (ideally >= version 3.10) and also pip, then activate the environment and `pip install volume-segmantics`. If a CUDA-enabled build of PyTorch is not being installed by pip, you can try `pip install volume-segmantics --extra-index-url https://download.pytorch.org/whl` this particularity seems to be an issue on Windows. 
 
 ## Configuration and command line use
 
