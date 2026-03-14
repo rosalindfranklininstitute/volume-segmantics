@@ -178,8 +178,6 @@ def test_create_model_from_file_returns_label_codes(model_path):
     assert codes == {}   # fixture saves empty label_codes
 
 
-
-
 @pytest.mark.gpu
 def test_create_model_from_file_full_weights(tmp_path, model_struc_vanilla_unet):
     """create_model_from_file_full_weights loads raw state_dict and places model on device."""
