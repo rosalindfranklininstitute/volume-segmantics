@@ -158,3 +158,44 @@ class TestTrainingDataSlicer:
         slicer.clean_up_slices()
         assert not im_dir_path.exists()
         assert not label_dir_path.exists()
+
+    def test_training_data_slicer_2_5d_invalid_num_slices_even(
+        self, rand_int_volume, rand_label_volume, training_settings
+    ):
+        training_settings.use_2_5d_slicing = True
+        training_settings.num_slices = 4  # must be odd
+        with pytest.raises(ValueError):
+            TrainingDataSlicer(rand_int_volume, rand_label_volume, training_settings)
+
+    def test_training_data_slicer_2_5d_invalid_num_slices_too_small(
+        self, rand_int_volume, rand_label_volume, training_settings
+    ):
+        training_settings.use_2_5d_slicing = True
+        training_settings.num_slices = 1  # must be >= 3
+        with pytest.raises(ValueError):
+            TrainingDataSlicer(rand_int_volume, rand_label_volume, training_settings)
+
+    def test_training_data_slicer_2_5d_png_too_many_channels_raises(
+        self, rand_int_volume, rand_label_volume, training_settings
+    ):
+        training_settings.use_2_5d_slicing = True
+        training_settings.num_slices = 5
+        training_settings.slice_file_format = "png"
+        with pytest.raises(ValueError):
+            TrainingDataSlicer(rand_int_volume, rand_label_volume, training_settings)
+
+    def test_training_data_slicer_2_5d_output_shape_and_channels(
+        self, rand_int_volume, rand_label_volume, training_settings, empty_dir
+    ):
+        training_settings.use_2_5d_slicing = True
+        training_settings.num_slices = 3
+        training_settings.slice_file_format = "tiff"
+        im_dir_path = empty_dir / "im_out_25d"
+        slicer = TrainingDataSlicer(
+            rand_int_volume, rand_label_volume, training_settings
+        )
+    
+        axis = "z"
+        index = rand_int_volume.shape[0] // 2
+        mc_slice = slicer._create_2_5d_slice(rand_int_volume, axis, index)
+        assert mc_slice.shape[2] == training_settings.num_slices
