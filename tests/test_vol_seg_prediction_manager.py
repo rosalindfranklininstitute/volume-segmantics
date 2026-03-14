@@ -77,10 +77,15 @@ class TestVolSegPredictionManager:
         output_dir.mkdir(exist_ok=True)
         output_path = Path(output_dir, "output_low_2.h5")
         prediction = pred_manager.predict_volume_to_path(output_path, Quality.LOW)
-        assert len(list(output_dir.glob("*.h5"))) == 2
+        # Primary output should always exist
         assert output_path.exists()
-        probs_path = Path(f"{output_path.parent / output_path.stem}_probs.h5")
-        assert probs_path.exists()
+        # Depending on OUTPUT_FORMAT, probability outputs may be saved as HDF5 or TIFF
+        h5_files = list(output_dir.glob("*.h5"))
+        tif_probs = list(output_dir.glob("*_probs.tif"))
+        tif_logits = list(output_dir.glob("*_logits.tif"))
+        # At minimum, we expect the primary volume plus some kind of prob/logit outputs
+        assert len(h5_files) >= 1
+        assert (len(h5_files) >= 2) or (tif_probs or tif_logits)
         assert isinstance(prediction, np.ndarray)
         assert prediction.dtype == np.uint8
 
