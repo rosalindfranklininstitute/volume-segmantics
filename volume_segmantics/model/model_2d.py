@@ -48,20 +48,20 @@ class HeadConfig:
 class MultitaskSegmentationModel(SegmentationModel):
     """
     Base class for multitask segmentation models with flexible decoder sharing.
-    
+
     Attributes:
         encoder: The backbone encoder
         decoders: nn.ModuleList of decoder modules
         heads: nn.ModuleList of segmentation head modules
         head_to_decoder: List mapping each head index to its decoder index
     """
-    
+
     encoder: nn.Module
     decoders: nn.ModuleList
     heads: nn.ModuleList
     head_to_decoder: list
     classification_head: Optional[nn.Module]
-    
+
     def initialize(self):
         for decoder in self.decoders:
             init.initialize_decoder(decoder)
@@ -78,10 +78,10 @@ class MultitaskSegmentationModel(SegmentationModel):
     def forward(self, x: torch.Tensor) -> tuple:
         """
         Forward pass through encoder, decoders, and heads.
-        
+
         Args:
             x: Input tensor of shape (B, C, H, W)
-            
+
         Returns:
             Tuple of mask tensors, one per head. If classification_head exists,
             the last element is the classification output.
@@ -89,20 +89,20 @@ class MultitaskSegmentationModel(SegmentationModel):
         if not (torch.jit.is_scripting() or torch.jit.is_tracing() or is_torch_compiling()):
             self.check_input_shape(x)
         features = self.encoder(x)
-        
+
         # Cache decoder outputs to avoid redundant computation for shared decoders
         decoder_outputs: dict = {}
-        
+
         masks = []
         # Store input size for adaptive upsampling (needed for DINO encoders)
         input_h, input_w = x.shape[2], x.shape[3]
-        
+
         for head_idx, head in enumerate(self.heads):
             dec_idx = self.head_to_decoder[head_idx]
             if dec_idx not in decoder_outputs:
                 decoder_outputs[dec_idx] = self.decoders[dec_idx](features)
             mask = head(decoder_outputs[dec_idx])
-            
+
             # Adaptive upsampling for DINO encoders: upsample to match input size
             # DINO outputs at reduced resolution (input_size // patch_size)
             # Check if mask size doesn't match input size
@@ -113,40 +113,40 @@ class MultitaskSegmentationModel(SegmentationModel):
                     mode='bilinear',
                     align_corners=False
                 )
-            
+
             masks.append(mask)
-        
+
         if self.classification_head is not None:
             labels = self.classification_head(features[-1])
             return (*masks, labels)
-        
+
         return tuple(masks)
 
     @torch.no_grad()
     def predict(self, x: torch.Tensor) -> tuple:
         """
         Inference method. Switches model to eval mode and runs forward pass.
-        
+
         Args:
             x: Input tensor of shape (B, C, H, W)
-            
+
         Returns:
             Tuple of mask tensors (excludes classification output if present)
         """
         if self.training:
             self.eval()
-        
+
         outputs = self.forward(x)
-        
+
         # Exclude classification head output if present
         if self.classification_head is not None:
             return outputs[:-1]
         return outputs
-    
+
     @property
     def num_heads(self) -> int:
         return len(self.heads)
-    
+
     @property
     def num_decoders(self) -> int:
         return len(self.decoders)
@@ -155,10 +155,10 @@ class MultitaskSegmentationModel(SegmentationModel):
 class MultitaskUnet(MultitaskSegmentationModel):
     """
     Flexible Multitask U-Net with configurable decoder sharing.
-    
+
     This architecture extends the standard U-Net to support multiple output heads,
     where heads can either share decoders or have their own dedicated decoders.
-    
+
     Args:
         encoder_name: Name of the encoder backbone (e.g., "resnet34", "efficientnet-b0")
         encoder_depth: Number of encoder stages [3-5]. Default is 5.
@@ -177,7 +177,7 @@ class MultitaskUnet(MultitaskSegmentationModel):
         **kwargs: Additional arguments passed to encoder
     """
     requires_divisible_input_shape = False
-    
+
     @supports_config_loading
     def __init__(
         self,
@@ -194,27 +194,27 @@ class MultitaskUnet(MultitaskSegmentationModel):
         **kwargs: dict,
     ):
         super().__init__()
-        
+
         # Default to single head if not specified
         if heads_config is None:
             heads_config = [HeadConfig()]
-        
+
         parsed_heads = []
         for cfg_item in heads_config:
             if isinstance(cfg_item, dict):
                 parsed_heads.append(HeadConfig.from_dict(cfg_item))
             else:
                 parsed_heads.append(cfg_item)
-        
+
         if len(parsed_heads) > 3:
             raise ValueError(f"Maximum 3 heads supported, got {len(parsed_heads)}")
         if len(parsed_heads) == 0:
             raise ValueError("At least one head configuration required")
-        
+
         # Determine decoder indices and validate
         decoder_indices = sorted(set(h.decoder_idx for h in parsed_heads))
         num_decoders = len(decoder_indices)
-        
+
         if num_decoders > len(parsed_heads):
             raise ValueError(
                 f"Number of unique decoders ({num_decoders}) cannot exceed "
@@ -222,15 +222,15 @@ class MultitaskUnet(MultitaskSegmentationModel):
             )
         if num_decoders > 3:
             raise ValueError(f"Maximum 3 decoders supported, got {num_decoders}")
-        
-        # Remap decoder indices to be contiguous 
+
+        # Remap decoder indices to be contiguous
         idx_remap = {old: new for new, old in enumerate(decoder_indices)}
         self.head_to_decoder = [idx_remap[h.decoder_idx] for h in parsed_heads]
-        
+
         # Build encoder
         # Check if this is a DINO encoder
         is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        
+
         if is_dino:
             # Use DINOEncoder directly (bypasses SMP's get_encoder)
             if not DINO_AVAILABLE:
@@ -238,18 +238,18 @@ class MultitaskUnet(MultitaskSegmentationModel):
                     f"DINO encoder requested ({encoder_name}) but DINOEncoder is not available. "
                     f"Please ensure volume_segmantics.model.encoders can be imported."
                 )
-            
+
             # DINO encoders typically use depth=4
             dino_depth = encoder_depth if encoder_depth <= 4 else 4
             if encoder_depth != dino_depth:
                 logging.info(f"Adjusting DINO encoder depth from {encoder_depth} to {dino_depth}")
-            
+
             # Determine DINO version and weights source
             if encoder_name.startswith('dinov3_'):
                 weights_source = 'dinov3' if encoder_weights in ['dinov3', None, 'None'] else encoder_weights
             else:
                 weights_source = 'dinov2' if encoder_weights in ['dinov2', None, 'None'] else encoder_weights
-            
+
             self.encoder = DINOEncoder(
                 model_name=encoder_name,
                 in_channels=in_channels,
@@ -279,7 +279,7 @@ class MultitaskUnet(MultitaskSegmentationModel):
                 weights=encoder_weights,
                 **kwargs,
             )
-        
+
         # Build decoders
         add_center_block = encoder_name.startswith("vgg")
 
@@ -292,7 +292,7 @@ class MultitaskUnet(MultitaskSegmentationModel):
             use_norm = decoder_use_batchnorm
         else:
             use_norm = 'batchnorm'  # default
-        
+
         decoder_kwargs = dict(
             encoder_channels=self.encoder.out_channels,
             decoder_channels=decoder_channels,
@@ -305,7 +305,7 @@ class MultitaskUnet(MultitaskSegmentationModel):
         self.decoders = nn.ModuleList([
             UnetDecoder(**decoder_kwargs) for _ in range(num_decoders)
         ])
-        
+
         # Build segmentation heads
         # UnetDecoder with n_blocks outputs decoder_channels[n_blocks-2] channels
         # For n_blocks=4 and decoder_channels=[256, 128, 64, 32], output is 64 (index 2)
@@ -316,7 +316,7 @@ class MultitaskUnet(MultitaskSegmentationModel):
         else:
             # Fallback: use last element (shouldn't happen with our setup)
             head_in_channels = decoder_channels[-1]
-        
+
         # Calculate upsampling factor for DINO encoders
         # DINO outputs features at reduced resolution (input_size // patch_size)
         # We need to upsample to match input resolution
@@ -333,7 +333,7 @@ class MultitaskUnet(MultitaskSegmentationModel):
             # For 256 input and patch_size=14: log2(256/18) ? log2(14.2) ? 3.8, so use 4
             head_upsampling = 4
             logging.info(f"Setting head upsampling to {head_upsampling} for DINO encoder (patch_size={patch_size})")
-        
+
         self.heads = nn.ModuleList([
             SegmentationHead(
                 in_channels=head_in_channels,
@@ -344,7 +344,7 @@ class MultitaskUnet(MultitaskSegmentationModel):
             )
             for cfg in parsed_heads
         ])
-        
+
         # Optional classification head
         if aux_params is not None:
             self.classification_head = ClassificationHead(
@@ -352,21 +352,27 @@ class MultitaskUnet(MultitaskSegmentationModel):
             )
         else:
             self.classification_head = None
-        
+
         self.name = f"multitask-u-{encoder_name}"
         self.initialize()
 
+
+import torch
+import torch.nn as nn
+import volume_segmantics.utilities.base_data_utils as utils
+from torch.nn import DataParallel
+import volume_segmantics.utilities.config as cfg
 
 def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.Module:
     struct_dict_copy = model_struc_dict.copy()
     model_type = struct_dict_copy.pop("type")
     in_channels_requested = struct_dict_copy.get("in_channels", cfg.MODEL_INPUT_CHANNELS)
     encoder_weights = struct_dict_copy.get("encoder_weights", None)
-    
+
     if model_type == utils.ModelType.U_NET:
         encoder_name = struct_dict_copy.get('encoder_name', '')
         is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        
+
         if struct_dict_copy['encoder_name'] in {'convnext_base', 'convnext_large', 'swin_base_patch4_window12_384'}:
             model = smp.Unet(**struct_dict_copy, encoder_depth=4,
                 decoder_channels=(256, 128, 64, 32),
@@ -379,13 +385,13 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
             in_channels_param = struct_dict_copy.get('in_channels', 3)
             # Remove encoder_depth from struct_dict_copy to avoid duplicate keyword argument
             struct_dict_copy.pop('encoder_depth', None)
-            
+
             # Determine DINO version from encoder name
             if encoder_name.startswith('dinov3_'):
                 weights_source = 'dinov3' if encoder_weights_param in ['dinov3', None, 'None'] else encoder_weights_param
             else:
                 weights_source = 'dinov2' if encoder_weights_param in ['dinov2', None, 'None'] else encoder_weights_param
-            
+
             # Try to create model with encoder_name first (if registration worked)
             try:
                 model = smp.Unet(**struct_dict_copy, encoder_depth=dino_depth,
@@ -421,7 +427,7 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
     elif model_type == utils.ModelType.U_NET_PLUS_PLUS:
         encoder_name = struct_dict_copy.get('encoder_name', '')
         is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        
+
         if struct_dict_copy['encoder_name'] in {'convnext_base', 'convnext_large', 'swin_base_patch4_window12_384'}:
             model = smp.UnetPlusPlus(**struct_dict_copy, encoder_depth=4,
                 decoder_channels=(256, 128, 64, 32),
@@ -432,13 +438,13 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
             in_channels_param = struct_dict_copy.get('in_channels', 3)
             # Remove encoder_depth from struct_dict_copy to avoid duplicate keyword argument
             struct_dict_copy.pop('encoder_depth', None)
-            
+
             # Determine DINO version from encoder name
             if encoder_name.startswith('dinov3_'):
                 weights_source = 'dinov3' if encoder_weights_param in ['dinov3', None, 'None'] else encoder_weights_param
             else:
                 weights_source = 'dinov2' if encoder_weights_param in ['dinov2', None, 'None'] else encoder_weights_param
-            
+
             # Try to create model with encoder_name first (if registration worked)
             try:
                 model = smp.UnetPlusPlus(**struct_dict_copy, encoder_depth=dino_depth,
@@ -510,7 +516,6 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
             dino_depth = struct_dict_copy.get('encoder_depth', 4)
             struct_dict_copy['encoder_depth'] = dino_depth
         model = smp.Linknet(**struct_dict_copy)
-        logging.info(f"Sending the Linknet model to device {device_num}")
     elif model_type == utils.ModelType.PAN:
         encoder_name = struct_dict_copy.get('encoder_name', '')
         is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
@@ -532,16 +537,16 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
         model = VanillaUNet(in_channels=in_channels, out_classes=struct_dict_copy["classes"], up_sample_mode='conv_transpose')
         logging.info(f"Sending the Vanilla Unet model to device {device_num}")
     elif model_type == utils.ModelType.MULTITASK_UNET:
-        
+
         heads_config = struct_dict_copy.pop("heads_config", None)
         decoder_sharing = struct_dict_copy.pop("decoder_sharing", "shared")  # "shared" or "separate"
         task_out_channels = struct_dict_copy.pop("task_out_channels", None)  # Remove if present (not used by MultitaskUnet)
-        
+
         classes = struct_dict_copy.pop("classes", 1)
-        
+
         if heads_config is None:
             num_tasks = struct_dict_copy.pop("num_tasks", 1)
-            
+
             if decoder_sharing == "shared":
                 # All heads share decoder 0
                 heads_config = [
@@ -550,7 +555,7 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
                 if num_tasks >= 2:
                     # FIX: Use None instead of "sigmoid" - loss function applies sigmoid internally
                     heads_config.append({"classes": 1, "decoder_idx": 0, "activation": None})
-                if num_tasks >= 3:           
+                if num_tasks >= 3:
                     heads_config.append({"classes": 1, "decoder_idx": 0, "activation": None})
             else:
                 # Each head has its own decoder
@@ -561,7 +566,7 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
                     heads_config.append({"classes": 1, "decoder_idx": 1, "activation": None})
                 if num_tasks >= 3:
                     heads_config.append({"classes": 1, "decoder_idx": 2, "activation": None})
-        
+
         model = MultitaskUnet(heads_config=heads_config, **struct_dict_copy)
         logging.info(f"Sending the Multitask U-Net model to device {device_num}")
 
@@ -569,7 +574,7 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
     # Skip this for DINO encoders as they handle channel adaptation internally
     encoder_name = struct_dict_copy.get('encoder_name', '')
     is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-    
+
     try:
         if encoder_weights and encoder_weights != "None" and in_channels_requested > 3 and not is_dino:
             _adapt_first_conv_from_imagenet_avg(model, model_type, struct_dict_copy, in_channels_requested)
@@ -589,7 +594,7 @@ def _adapt_first_conv_for_channels(model: torch.nn.Module, old_channels: int, ne
     """
     Adapt first conv layer when input channels change.
     Replaces the first Conv2d layer with a new one that has the correct in_channels.
-    
+
     Args:
         model: The model to adapt
         old_channels: Original number of input channels
@@ -605,12 +610,12 @@ def _adapt_first_conv_for_channels(model: torch.nn.Module, old_channels: int, ne
     else:
         encoder = model.encoder
         is_wrapped = False
-    
+
     # Find the first Conv2d layer and its parent module
     first_conv = None
     parent_module = None
     conv_name = None
-    
+
     for name, module in encoder.named_modules():
         if isinstance(module, nn.Conv2d):
             first_conv = module
@@ -624,17 +629,17 @@ def _adapt_first_conv_for_channels(model: torch.nn.Module, old_channels: int, ne
                 conv_name = name
                 parent_module = encoder
             break
-    
+
     if first_conv is None:
         return
-    
+
     current_weight = first_conv.weight.data.clone()
     current_bias = first_conv.bias.data.clone() if first_conv.bias is not None else None
     current_shape = current_weight.shape  # [out_channels, in_channels, H, W]
-    
+
     if current_shape[1] == new_channels:
         return  # A OK
-    
+
     # Create new weights
     with torch.no_grad():
         if new_channels > old_channels:
@@ -649,7 +654,7 @@ def _adapt_first_conv_for_channels(model: torch.nn.Module, old_channels: int, ne
         else:
             # Decrease channels: take first N channels
             new_weight = current_weight[:, :new_channels, :, :]
-    
+
     # Create new Conv2d layer with correct in_channels
     new_conv = nn.Conv2d(
         in_channels=new_channels,
@@ -662,14 +667,14 @@ def _adapt_first_conv_for_channels(model: torch.nn.Module, old_channels: int, ne
         bias=first_conv.bias is not None,
         padding_mode=first_conv.padding_mode
     )
-    
+
     # Set weights and bias
     new_conv.weight.data = new_weight.to(current_weight.device).type(current_weight.dtype)
     if current_bias is not None:
         new_conv.bias.data = current_bias.to(current_bias.device).type(current_bias.dtype)
-    
+
     setattr(parent_module, conv_name, new_conv)
-    
+
     logging.info(
         f"Adapted first conv layer from {old_channels} to {new_channels} input channels. "
         f"Weight shape: {current_shape} -> {new_weight.shape}"
@@ -680,16 +685,16 @@ def _adapt_first_conv_from_imagenet_avg(model: torch.nn.Module, model_type, stru
     """When using pretrained encoders and in_channels > 3, adapt the first conv layer weights by
     averaging the 3-channel Imagenet weights and repeating to match the requested channel count.
     This keeps the rest of the encoder on pretrained weights while providing a better init.
-    
+
     Note: DINO encoders handle channel adaptation internally, so this function is skipped for them.
     """
-    
+
     # Skip DINO encoders as they handle channel adaptation internally
     encoder_name = struct_dict_copy.get('encoder_name', '')
     is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
     if is_dino:
         return
-    
+
     if not hasattr(model, 'encoder'):
         return
     encoder = model.encoder
@@ -700,7 +705,7 @@ def _adapt_first_conv_from_imagenet_avg(model: torch.nn.Module, model_type, stru
             break
     if first_conv is None:
         return
-    
+
     # Create a temporary 3-channel model with same architecture to pull pretrained RGB weights
     struct_rgb = struct_dict_copy.copy()
     struct_rgb['in_channels'] = 3
@@ -756,13 +761,13 @@ def _adapt_first_conv_from_imagenet_avg(model: torch.nn.Module, model_type, stru
     if tmp_first_conv is None:
         return
 
-    
-    rgb_w = tmp_first_conv.weight.data  
+
+    rgb_w = tmp_first_conv.weight.data
     if rgb_w.shape[1] != 3:
         return
     mean_w = rgb_w.mean(dim=1, keepdim=True)
     new_w = mean_w.repeat(1, in_channels_requested, 1, 1)
-    
+
     with torch.no_grad():
         if first_conv.weight.data.shape == new_w.shape:
             first_conv.weight.data.copy_(new_w.to(first_conv.weight.device).type(first_conv.weight.dtype))
@@ -776,7 +781,7 @@ def create_model_from_file(
 ) -> Tuple[torch.nn.Module, int, dict]:
     """Creates and returns a model and the number of segmentation labels
     that are predicted by the model.
-    
+
     Args:
         weights_fn: Path to model weights file
         gpu: Whether to use GPU
@@ -790,18 +795,27 @@ def create_model_from_file(
     weights_fn = weights_fn.resolve()
     logging.info("Loading model dictionary from file.")
     model_dict = torch.load(weights_fn, map_location=map_location, weights_only=False)
-    
+
     saved_in_channels = model_dict["model_struc_dict"].get("in_channels", 1)
-    
+
     requested_in_channels = saved_in_channels
     if settings is not None:
         requested_in_channels = cfg.get_model_input_channels(settings)
-    
+
     # Create model with saved channels first so we can load the saved weights
     model = create_model_on_device(device_num, model_dict["model_struc_dict"])
     logging.info("Loading in the saved weights.")
-    model.load_state_dict(model_dict["model_state_dict"], strict=False)
-    
+    state_dict = model_dict["model_state_dict"]
+    # handle DataParallel module. prefix
+    if isinstance(model, DataParallel):
+        if state_dict and next(iter(state_dict.keys())).startswith("module."):
+            state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
+        model.module.load_state_dict(state_dict, strict=False)
+    else:
+        if state_dict and next(iter(state_dict.keys())).startswith("module."):
+            state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
+        model.load_state_dict(state_dict, strict=False)
+
     # Adapt first conv layer if input channels changed
     if requested_in_channels != saved_in_channels:
         logging.info(
@@ -809,10 +823,10 @@ def create_model_from_file(
             f"based on prediction settings (2.5D mode: {getattr(settings, 'use_2_5d_prediction', False)})"
         )
         _adapt_first_conv_for_channels(model, saved_in_channels, requested_in_channels)
-        
+
         # Update in_channels in model structure dict for future reference
         model_dict["model_struc_dict"]["in_channels"] = requested_in_channels
-    
+
     return model, model_dict["model_struc_dict"]["classes"], model_dict["label_codes"]
 
 
@@ -827,8 +841,11 @@ def create_model_from_file_full_weights(
         map_location = "cpu"
     weights_fn = weights_fn.resolve()
     logging.info("Loading model dictionary from file.")
+
+
     model = create_model_on_device(device_num, model_struc_dict)
     model_dict = torch.load(weights_fn, map_location=map_location, weights_only=False)
+
     logging.info("Loading in the saved weights.")
     model.load_state_dict(model_dict, strict=False)
     model.to(device=map_location)

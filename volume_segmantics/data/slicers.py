@@ -13,7 +13,7 @@ from typing import Union
 
 class TrainingDataSlicer(BaseDataManager):
     """
-    Class that performs image preprocessing and provides methods to 
+    Class that performs image preprocessing and provides methods to
     convert 3d data volumes into 2d image slices on disk for model training.
     Slicing is carried in all of the xy (z), xz (y) and yz (x) planes.
     Supports both 2D (single channel) and 2.5D (RGB) slicing modes.
@@ -43,28 +43,28 @@ class TrainingDataSlicer(BaseDataManager):
         self.settings = settings
         self.label_type = label_type
         self.has_labels = label_vol is not None
-        
+
         self.use_2_5d_slicing = getattr(settings, 'use_2_5d_slicing', False)
         self.num_slices = getattr(settings, 'num_slices', 3)
         self.slice_file_format = getattr(settings, 'slice_file_format', 'tiff')
         self.skip_border_slices = getattr(settings, 'skip_border_slices', False)
-        
+
         # Validate 2.5D settings
         if self.use_2_5d_slicing:
             if self.num_slices % 2 == 0:
                 raise ValueError(f"num_slices must be odd, got {self.num_slices}")
             if self.num_slices < 3:
                 raise ValueError(f"num_slices must be >= 3, got {self.num_slices}")
-            
+
             # Validate file format
             if self.slice_file_format.lower() == 'png' and self.num_slices > 3:
                 raise ValueError(f"PNG format only supports up to 3 channels, but {self.num_slices} slices were requested. Use 'tiff' format for {self.num_slices} channels.")
-            
+
             logging.info(f"2.5D slicing mode enabled - creating {self.num_slices}-channel images from adjacent slices")
             logging.info(f"Using {self.slice_file_format.upper()} format for multi-channel storage")
             if self.skip_border_slices:
                 logging.info("Border slices will be skipped in 2.5D mode")
-        
+
         # Handle labels (optional for unlabeled data)
         if label_vol is not None:
             self.label_vol_path = utils.setup_path_if_exists(label_vol)
@@ -87,7 +87,7 @@ class TrainingDataSlicer(BaseDataManager):
         self.num_seg_classes = len(seg_classes)
         if self.num_seg_classes > 2:
             self.multilabel = True
-        
+
         # Use appropriate label type name in logging
         label_name = self.label_type.capitalize() if self.label_type != "segmentation" else "segmentation"
         logging.info(
@@ -185,7 +185,7 @@ class TrainingDataSlicer(BaseDataManager):
         axis_enum = utils.get_training_axis(self.settings)
         ax_idx_pairs = utils.get_axis_index_pairs(shape_tup, axis_enum)
         num_ims = utils.get_num_of_ims(shape_tup, axis_enum)
-        
+
         for axis, index in tqdm(ax_idx_pairs, total=num_ims):
             out_path = output_path / f"{name_prefix}_{axis}_stack_{index:06d}"
             multi_channel_slice = self._create_2_5d_slice(data_arr, axis, index)
@@ -204,7 +204,7 @@ class TrainingDataSlicer(BaseDataManager):
             array: Multi-channel image with shape (height, width, num_slices).
         """
         current_slice = utils.axis_index_to_slice(data_arr, axis, index)
-        
+
         # Get depth along the specified axis
         if axis == "z":
             depth = data_arr.shape[0]
@@ -214,24 +214,24 @@ class TrainingDataSlicer(BaseDataManager):
             depth = data_arr.shape[2]
         else:
             raise ValueError(f"Invalid axis: {axis}")
-        
+
         center_idx = self.num_slices // 2
         slices = []
-        
+
         for i in range(self.num_slices):
             slice_idx = index - center_idx + i
-            
+
             # Handle border cases by duplicating edge slices
             if slice_idx < 0:
                 slice_idx = 0
             elif slice_idx >= depth:
                 slice_idx = depth - 1
-                
+
             slice_data = utils.axis_index_to_slice(data_arr, axis, slice_idx)
             slices.append(slice_data)
-        
+
         multi_channel_image = np.stack(slices, axis=2)
-        
+
         return multi_channel_image
 
     def _output_im(self, data, path, label=False, is_multi_channel=False):
@@ -252,7 +252,7 @@ class TrainingDataSlicer(BaseDataManager):
             if file_extension == 'tiff':
                 io.imsave(f"{path}.tiff", data, check_contrast=False)
             elif file_extension == 'png':
-                # PNG only supports up to 3 channels 
+                # PNG only supports up to 3 channels
                 io.imsave(f"{path}.png", data, check_contrast=False)
             else:
                 raise ValueError(f"Unsupported file format: {file_extension}. Use 'tiff' or 'png'.")
@@ -270,7 +270,7 @@ class TrainingDataSlicer(BaseDataManager):
             png_ims = list(im_dir_path.glob("*.png"))
             tiff_ims = list(im_dir_path.glob("*.tiff")) + list(im_dir_path.glob("*.tif"))
             all_ims = png_ims + tiff_ims
-            
+
             logging.info(f"Deleting {len(png_ims)} PNG images and {len(tiff_ims)} TIFF images.")
             for im in all_ims:
                 im.unlink()

@@ -29,13 +29,13 @@ def main():
     root_path = Path(getattr(args, cfg.DATA_DIR_ARG)).resolve()
     settings_path = Path(root_path, cfg.SETTINGS_DIR, cfg.PREDICTION_SETTINGS_FN)
     model_file_path = getattr(args, cfg.MODEL_PTH_ARG)
-    
+
     image_dir_path = Path(getattr(args, cfg.PREDICT_DATADIR_ARG))
     output_dir_path = Path(getattr(args, cfg.OUTPUT_DATA_DIR_ARG))
-    
+
     # Get settings object
-    settings = get_settings_data(settings_path)    
-    
+    settings = get_settings_data(settings_path)
+
     # Create prediction manager and predict
     pred_manager = VolSeg2DImageDirPredictionManager(model_file_path, image_dir_path, settings)
     pred_manager.predict_image_dir_to_path(output_dir_path)

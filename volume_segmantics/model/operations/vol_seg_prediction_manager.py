@@ -64,7 +64,11 @@ class VolSeg2DPredictionManager(BaseDataManager):
         """
         probs = None
         logits = None
+        entropy = None
+
         one_hot = self.settings.one_hot
+        output_probs = self.settings.output_probs
+        output_entropy = self.settings.output_entropy
         preferred_axis = utils.get_prediction_axis(
             self.settings
         )  # Specify single axis for prediction
@@ -82,20 +86,66 @@ class VolSeg2DPredictionManager(BaseDataManager):
         if quality == utils.Quality.MEDIUM:
             if one_hot:
                 prediction = self.predictor._predict_3_ways_one_hot(self.data_vol)
-            else:
+            elif output_probs and not output_entropy:
                 prediction, probs = self.predictor._predict_3_ways_max_probs(
                     self.data_vol
                 )
+            elif output_entropy and not output_probs:
+                prediction, _, entropy = self.predictor._prediction_estimate_entropy(
+                    self.data_vol
+                )
+            elif output_entropy and output_probs:
+                prediction, probs, entropy = self.predictor._prediction_estimate_entropy(
+                    self.data_vol
+                )
+            else:
+                prediction, _ = self.predictor._predict_3_ways_max_probs(
+                    self.data_vol
+                )
+
         if quality == utils.Quality.HIGH:
             if one_hot:
                 prediction = self.predictor._predict_12_ways_one_hot(self.data_vol)
-            else:
+            elif output_probs and not output_entropy:
                 prediction, probs = self.predictor._predict_12_ways_max_probs(
                     self.data_vol
                 )
+            elif output_entropy and not output_probs:
+                prediction, _, entropy = self.predictor._prediction_estimate_entropy(
+                    self.data_vol
+                )
+            elif output_entropy and output_probs:
+                prediction, probs, entropy = self.predictor._prediction_estimate_entropy(
+                    self.data_vol
+                )
+            else:
+                prediction, _ = self.predictor._predict_12_ways_max_probs(
+                    self.data_vol
+                )
+
+        if quality == utils.Quality.Z_ONLY:
+            if one_hot:
+                raise NotImplementedError("One hot for Z-ONLY not implemented.")
+            elif output_probs and not output_entropy:
+                prediction, probs = self.predictor._predict_12_ways_max_probs(
+                    self.data_vol
+                )
+            elif output_entropy and not output_probs:
+                prediction, _, entropy, votes = self.predictor._prediction_estimate_entropy(
+                    self.data_vol
+                )
+            elif output_entropy and output_probs:
+                prediction, probs, entropy, votes = self.predictor._prediction_estimate_entropy(
+                    self.data_vol
+                )
+            else:
+                prediction, _ = self.predictor._predict_12_ways_max_probs(
+                    self.data_vol
+                )
+
         # Get additional task outputs if multi-task model
         additional_tasks = self.predictor.get_additional_task_outputs()
-        
+
         if output_path is not None and cfg.OUTPUT_FORMAT == "hdf":
             # Save primary segmentation output
             utils.save_data_to_hdf5(
@@ -107,13 +157,14 @@ class VolSeg2DPredictionManager(BaseDataManager):
                     f"{output_path.parent / output_path.stem}_probs.h5",
                     chunking=self.input_data_chunking,
                 )
+
             if logits is not None and self.settings.output_probs:
                 utils.save_data_to_hdf5(
                     logits,
                     f"{output_path.parent / output_path.stem}_logits.h5",
                     chunking=self.input_data_chunking,
                 )
-            
+
             # Save additional task outputs
             if additional_tasks:
                 for task_name, task_data in additional_tasks.items():
@@ -121,21 +172,21 @@ class VolSeg2DPredictionManager(BaseDataManager):
                     task_labels = task_data.get('labels')
                     task_probs = task_data.get('probs')
                     task_logits = task_data.get('logits')
-                    
+
                     if task_labels is not None:
                         task_output_path = f"{output_path.parent / output_path.stem}{task_suffix}.h5"
                         utils.save_data_to_hdf5(
                             task_labels, task_output_path, chunking=self.input_data_chunking
                         )
                         logging.info(f"Saved {task_name} labels to {task_output_path}")
-                    
+
                     if task_probs is not None and self.settings.output_probs:
                         task_probs_path = f"{output_path.parent / output_path.stem}{task_suffix}_probs.h5"
                         utils.save_data_to_hdf5(
                             task_probs, task_probs_path, chunking=self.input_data_chunking
                         )
                         logging.info(f"Saved {task_name} probabilities to {task_probs_path}")
-                    
+
                     if task_logits is not None and self.settings.output_probs:
                         task_logits_path = f"{output_path.parent / output_path.stem}{task_suffix}_logits.h5"
                         utils.save_data_to_hdf5(
@@ -159,45 +210,69 @@ class VolSeg2DPredictionManager(BaseDataManager):
                     f"{output_path.parent / output_path.stem}_logits.tif",
                     compress=False,
                 )
-            
+
             if additional_tasks:
                 for task_name, task_data in additional_tasks.items():
                     task_suffix = self._get_task_suffix(task_name)
                     task_labels = task_data.get('labels')
                     task_probs = task_data.get('probs')
                     task_logits = task_data.get('logits')
-                    
+
                     if task_labels is not None:
                         task_output_path = f"{output_path.parent / output_path.stem}{task_suffix}.tif"
                         utils.save_data_to_tif(
                             task_labels, task_output_path, compress=True
                         )
                         logging.info(f"Saved {task_name} labels to {task_output_path}")
-                    
+
                     if task_probs is not None and self.settings.output_probs:
                         task_probs_path = f"{output_path.parent / output_path.stem}{task_suffix}_probs.tif"
                         utils.save_data_to_tif(
                             task_probs, task_probs_path, compress=True
                         )
                         logging.info(f"Saved {task_name} probabilities to {task_probs_path}")
-                    
+
                     if task_logits is not None and self.settings.output_probs:
                         task_logits_path = f"{output_path.parent / output_path.stem}{task_suffix}_logits.tif"
                         utils.save_data_to_tif(
                             task_logits, task_logits_path, compress=False
                         )
                         logging.info(f"Saved {task_name} logits to {task_logits_path}")
-        
+
+
+            if entropy is not None and self.settings.output_entropy:
+                if cfg.OUTPUT_FORMAT == "hdf":
+                    utils.save_data_to_hdf5(
+                        entropy,
+                        f"{output_path.parent / output_path.stem}_entropy.h5",
+                        chunking=self.input_data_chunking,
+                    )
+                    utils.save_data_to_hdf5(
+                        votes,
+                        f"{output_path.parent / output_path.stem}_votes.h5",
+                        chunking=self.input_data_chunking,
+                    )
+                else:
+                    utils.save_data_to_tif(
+                        entropy,
+                        f"{output_path.parent / output_path.stem}_entropy.tif",
+                        compress=True
+                    )
+                    utils.save_data_to_tif(
+                        votes,
+                        f"{output_path.parent / output_path.stem}_votes.tif",
+                        compress=True
+                    )
 
         return prediction
 
     def _get_task_suffix(self, task_name):
         """
         Map task name to file suffix.
-        
+
         Args:
             task_name: Task name like 'task1', 'task2', etc.
-            
+
         Returns:
             str: Suffix like '_BND', '_DIST', etc.
         """
@@ -263,20 +338,20 @@ class VolSeg2DImageDirPredictionManager():
         """
         probs = None
         one_hot = self.settings.one_hot
-        
+
         if one_hot:
             prediction, images_fps = self.predictor._predict_image_dir_to_one_hot(
                 self.image_dir
             )
         else:
             prediction, probs, images_fps = self.predictor._predict_image_dir(
-                self.image_dir 
+                self.image_dir
             )
-        
+
         if output_path is not None:
             fnames = [os.path.basename(fp) for fp in images_fps]
             save_images(fnames, prediction, output_path)
-                
+
             if probs is not None and self.settings.output_probs:
                 pass
                 # utils.save_data_to_hdf5(

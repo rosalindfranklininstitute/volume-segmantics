@@ -12,10 +12,10 @@ from torch.utils.data import Dataset as BaseDataset
 
 def get_augmentation_module(settings: SimpleNamespace):
     """Returns the appropriate augmentation module based on settings.
-    
+
     Args:
         settings (SimpleNamespace): Settings object containing augmentation_library setting.
-        
+
     Returns:
         Module: Either augmentations (albumentations) or augmentations_monai module.
     """
@@ -44,9 +44,6 @@ class VolSeg2dDataset(BaseDataset):
 
     """
 
-    imagenet_mean = cfg.IMAGENET_MEAN
-    imagenet_std = cfg.IMAGENET_STD
-
     def __init__(
         self,
         images_dir,
@@ -60,7 +57,7 @@ class VolSeg2dDataset(BaseDataset):
 
         # Support both PNG and TIFF files
         self.images_fps = sorted(
-            list(images_dir.glob("*.png")) + list(images_dir.glob("*.tiff")) + list(images_dir.glob("*.tif")), 
+            list(images_dir.glob("*.png")) + list(images_dir.glob("*.tiff")) + list(images_dir.glob("*.tif")),
             key=self.natsort
         )
         self.masks_fps = sorted(list(masks_dir.glob("*.png")), key=self.natsort)
@@ -69,7 +66,7 @@ class VolSeg2dDataset(BaseDataset):
         self.imagenet_norm = imagenet_norm
         self.postprocessing = postprocessing
         self.use_2_5d_slicing = use_2_5d_slicing
-        
+
         if self.use_2_5d_slicing:
             # Use single channel normalization repeated for all channels
             self.imagenet_mean, self.imagenet_std = cfg.get_imagenet_normalization()
@@ -81,7 +78,7 @@ class VolSeg2dDataset(BaseDataset):
         # read data - handle grayscale, RGB, and multi-channel images
         image_path = self.images_fps[i]
         file_extension = image_path.suffix.lower()
-        
+
         if file_extension in ['.tiff', '.tif']:
             # Read TIFF files (can have multiple channels)
             image = imageio.imread(str(image_path))
@@ -96,7 +93,7 @@ class VolSeg2dDataset(BaseDataset):
             else:
                 # Read as grayscale for 2D slicing
                 image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-            
+
         mask = cv2.imread(str(self.masks_fps[i]), 0)
 
         # apply pre-processing
@@ -109,7 +106,7 @@ class VolSeg2dDataset(BaseDataset):
             sample = self.augmentation(image=image, mask=mask)
             image, mask = sample["image"], sample["mask"]
 
-        
+
         if self.imagenet_norm:
             if np.issubdtype(image.dtype, np.integer):
                 # Convert to float
@@ -156,6 +153,7 @@ class VolSeg2dPredictionDataset(BaseDataset):
 
     imagenet_mean = cfg.IMAGENET_MEAN
     imagenet_std = cfg.IMAGENET_STD
+
     def __init__(
         self,
         data_vol,
@@ -171,7 +169,7 @@ class VolSeg2dPredictionDataset(BaseDataset):
         self.postprocessing = postprocessing
         self.use_2_5d_prediction = use_2_5d_prediction
         self.num_slices = num_slices
-        
+
         if self.use_2_5d_prediction:
             # Use single channel normalization repeated for all channels
             self.imagenet_mean, self.imagenet_std = cfg.get_imagenet_normalization()
@@ -184,19 +182,19 @@ class VolSeg2dPredictionDataset(BaseDataset):
             depth = len(self.data_vol)
             center_idx = self.num_slices // 2
             slices = []
-            
+
             for j in range(self.num_slices):
                 slice_idx = i - center_idx + j
-                
+
                 # Handle border cases by duplicating edge slices
                 if slice_idx < 0:
                     slice_idx = 0
                 elif slice_idx >= depth:
                     slice_idx = depth - 1
-                    
+
                 slices.append(self.data_vol[slice_idx])
-            
-           
+
+
             image = np.stack(slices, axis=-1)
         else:
             # Standard 2D prediction
@@ -257,7 +255,7 @@ class VolSeg2dImageDirDataset(BaseDataset):
     ):
 
         self.images_fps = sorted(list(images_dir.glob("*.png")), key=self.natsort)
-        
+
         self.augmentation = augmentation
         self.preprocessing = preprocessing
         self.imagenet_norm = imagenet_norm
@@ -267,7 +265,7 @@ class VolSeg2dImageDirDataset(BaseDataset):
 
         # read data
         image = cv2.imread(str(self.images_fps[i]), cv2.IMREAD_GRAYSCALE)
-        
+
 
         # apply pre-processing
         if self.preprocessing:
@@ -374,10 +372,10 @@ class UnlabeledDataset(BaseDataset):
     Dataset for unlabeled images (no labels required).
     Used for consistency regularization in semi-supervised learning.
     """
-    
+
     imagenet_mean = cfg.IMAGENET_MEAN
     imagenet_std = cfg.IMAGENET_STD
-    
+
     def __init__(
         self,
         images_dir: Path,
@@ -389,7 +387,7 @@ class UnlabeledDataset(BaseDataset):
     ):
         """
         Initialize unlabeled dataset.
-        
+
         Args:
             images_dir: Directory containing unlabeled images
             preprocessing: Preprocessing transforms
@@ -400,8 +398,8 @@ class UnlabeledDataset(BaseDataset):
         """
         # Support both PNG and TIFF files
         self.images_fps = sorted(
-            list(images_dir.glob("*.png")) + 
-            list(images_dir.glob("*.tiff")) + 
+            list(images_dir.glob("*.png")) +
+            list(images_dir.glob("*.tiff")) +
             list(images_dir.glob("*.tif")),
             key=self.natsort
         )
@@ -410,19 +408,19 @@ class UnlabeledDataset(BaseDataset):
         self.imagenet_norm = imagenet_norm
         self.postprocessing = postprocessing
         self.use_2_5d_slicing = use_2_5d_slicing
-        
+
         if self.use_2_5d_slicing:
             # Use single channel normalization repeated for all channels
             self.imagenet_mean, self.imagenet_std = cfg.get_imagenet_normalization()
         else:
             self.imagenet_mean, self.imagenet_std = cfg.IMAGENET_MEAN, cfg.IMAGENET_STD
-    
+
     def __getitem__(self, i):
         """Return unlabeled image (no mask)."""
         # Read image - handle grayscale, RGB, and multi-channel images
         image_path = self.images_fps[i]
         file_extension = image_path.suffix.lower()
-        
+
         if file_extension in ['.tiff', '.tif']:
             # Read TIFF files (can have multiple channels)
             image = imageio.imread(str(image_path))
@@ -437,17 +435,17 @@ class UnlabeledDataset(BaseDataset):
             else:
                 # Read as grayscale for 2D slicing
                 image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-        
+
         # Apply preprocessing
         if self.preprocessing:
             sample = self.preprocessing(image=image)
             image = sample["image"]
-        
+
         # Apply augmentations
         if self.augmentation:
             sample = self.augmentation(image=image)
             image = sample["image"]
-        
+
         # Apply ImageNet normalization
         if self.imagenet_norm:
             if np.issubdtype(image.dtype, np.integer):
@@ -459,17 +457,17 @@ class UnlabeledDataset(BaseDataset):
         else:
             if np.issubdtype(image.dtype, np.integer):
                 image = image.astype(np.float32) / 255.0  # [0, 1]
-        
+
         # Apply postprocessing
         if self.postprocessing:
             sample = self.postprocessing(image=image)
             image = sample["image"]
-        
+
         return image
-    
+
     def __len__(self):
         return len(self.images_fps)
-    
+
     @staticmethod
     def natsort(item):
         return [
