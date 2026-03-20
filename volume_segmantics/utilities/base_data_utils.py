@@ -123,7 +123,9 @@ def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
         batch_size = cfg.BIG_CUDA_PRED_BATCH
 
 
-    if torch.cuda.device_count() > 1 and cfg.USE_ALL_GPUS:
+    # Scale batch size across GPUs only for training; prediction keeps base batch size
+    # so DataParallel splits the same-sized batches and output order stays correct.
+    if torch.cuda.device_count() > 1 and cfg.USE_ALL_GPUS and not prediction:
         batch_size *= torch.cuda.device_count()
 
     logging.info(
@@ -152,6 +154,26 @@ def rotate_array_to_axis(array: np.array, axis: Axis = Axis.Z) -> np.array:
         return array.swapaxes(0, 1)
     if axis == Axis.X:
         return array.swapaxes(0, 2)
+
+
+def rotate_4d_array_to_axis(array: np.array, axis: Axis = Axis.Z) -> np.array:
+    """Rotate 4D array (S, C, H, W) so spatial dims match 3D rotate_array_to_axis, channel last.
+
+    Returns array with shape (dim0, dim1, dim2, C) matching the original volume order,
+    so that labels (3D) and probs (4D) are aligned at the same voxel indices.
+    """
+    if array.ndim != 4:
+        raise ValueError("rotate_4d_array_to_axis expects 4D array (S, C, H, W)")
+    if axis == Axis.Z:
+        # (S, C, H, W) -> (S, H, W, C)
+        return np.moveaxis(array, 1, -1)
+    if axis == Axis.Y:
+        # (S, C, H, W) = (dim1, C, dim0, dim2) -> transpose to (dim0, dim1, dim2, C)
+        return array.transpose((2, 0, 3, 1))
+    if axis == Axis.X:
+        # (S, C, H, W) = (dim2, C, dim1, dim0) -> transpose to (dim0, dim1, dim2, C)
+        return array.transpose((3, 2, 0, 1))
+    return array
 
 
 def one_hot_encode_array(input_array: np.array, num_labels: int) -> np.array:

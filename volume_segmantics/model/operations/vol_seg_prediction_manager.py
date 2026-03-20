@@ -98,6 +98,10 @@ class VolSeg2DPredictionManager(BaseDataManager):
                 prediction, probs, entropy = self.predictor._prediction_estimate_entropy(
                     self.data_vol
                 )
+            else:
+                prediction, _ = self.predictor._predict_3_ways_max_probs(
+                    self.data_vol
+                )
 
         if quality == utils.Quality.HIGH:
             if one_hot:
@@ -114,6 +118,10 @@ class VolSeg2DPredictionManager(BaseDataManager):
                 prediction, probs, entropy = self.predictor._prediction_estimate_entropy(
                     self.data_vol
                 )
+            else:
+                prediction, _ = self.predictor._predict_12_ways_max_probs(
+                    self.data_vol
+                )
 
         if quality == utils.Quality.Z_ONLY:
             if one_hot:
@@ -128,6 +136,10 @@ class VolSeg2DPredictionManager(BaseDataManager):
                 )
             elif output_entropy and output_probs:
                 prediction, probs, entropy, votes = self.predictor._prediction_estimate_entropy(
+                    self.data_vol
+                )
+            else:
+                prediction, _ = self.predictor._predict_12_ways_max_probs(
                     self.data_vol
                 )
 

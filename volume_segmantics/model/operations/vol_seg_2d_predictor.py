@@ -33,11 +33,9 @@ class VolSeg2dPredictor:
         self.settings = settings
         self.model_device_num = int(settings.cuda_device)
         model_tuple = create_model_from_file(
-            self.model_file_path, device_num=self.model_device_num
+            self.model_file_path, device_num=self.model_device_num, settings=settings
         )
         self.model, self.num_labels, self.label_codes = model_tuple
-
-        self.use_2_5d_prediction = getattr(settings, 'use_2_5d_prediction', False)
 
         self.use_2_5d_prediction = getattr(settings, 'use_2_5d_prediction', False)
 
@@ -320,12 +318,11 @@ class VolSeg2dPredictor:
 
         if probs is not None:
             probs = self._crop_2_5d_output(probs, pad_width)
-            probs = utils.rotate_array_to_axis(probs, axis)
-            probs = np.moveaxis(probs, 1, -1)
+            probs = utils.rotate_4d_array_to_axis(probs, axis)
 
         if logits is not None:
             logits = self._crop_2_5d_output(logits, pad_width)
-            logits = utils.rotate_array_to_axis(logits, axis)
+            logits = utils.rotate_4d_array_to_axis(logits, axis)
 
         if is_multitask and additional_task_vols:
             processed_additional_tasks = {}
@@ -339,11 +336,11 @@ class VolSeg2dPredictor:
                 if output_probs and task_name in additional_task_probs:
                     task_probs = np.concatenate(additional_task_probs[task_name])
                     task_probs = self._crop_2_5d_output(task_probs, pad_width)
-                    task_probs = utils.rotate_array_to_axis(task_probs, axis)
+                    task_probs = utils.rotate_4d_array_to_axis(task_probs, axis)
 
                     task_logits = np.concatenate(additional_task_logits[task_name])
                     task_logits = self._crop_2_5d_output(task_logits, pad_width)
-                    task_logits = utils.rotate_array_to_axis(task_logits, axis)
+                    task_logits = utils.rotate_4d_array_to_axis(task_logits, axis)
 
                 processed_additional_tasks[task_name] = {
                     'labels': task_labels,
@@ -355,6 +352,12 @@ class VolSeg2dPredictor:
 
         return labels, probs, logits
 
+    def _max_probs_per_voxel(self, probs):
+        """Reduce per-class probs (D,H,W,num_classes) to max prob per voxel (D,H,W) for merging."""
+        if probs is not None and probs.ndim == 4:
+            return np.max(probs, axis=-1).astype(np.float16)
+        return probs
+
     def _predict_3_ways_max_probs(self, data_vol):
         shape_tup = data_vol.shape
         is_multitask = self._is_multitask_model()
@@ -362,24 +365,28 @@ class VolSeg2dPredictor:
         label_container = np.empty((2, *shape_tup), dtype=np.uint8)
         prob_container = np.empty((2, *shape_tup), dtype=np.float16)
         logging.info("Predicting YX slices:")
-        label_container[0], prob_container[0], _ = self._predict_single_axis(
-            data_vol, output_probs=True
-        )
+        labels, probs, _ = self._predict_single_axis(data_vol, output_probs=True)
+        label_container[0] = labels
+        prob_container[0] = self._max_probs_per_voxel(probs)
         task_outputs_axis0 = self.get_additional_task_outputs() if is_multitask else None
 
         logging.info("Predicting ZX slices:")
-        label_container[1], prob_container[1], _ = self._predict_single_axis(
+        labels, probs, _ = self._predict_single_axis(
             data_vol, output_probs=True, axis=Axis.Y
         )
+        label_container[1] = labels
+        prob_container[1] = self._max_probs_per_voxel(probs)
         task_outputs_axis1 = self.get_additional_task_outputs() if is_multitask else None
 
         logging.info("Merging XY and ZX volumes.")
         self._merge_vols_in_mem(prob_container, label_container)
 
         logging.info("Predicting ZY slices:")
-        label_container[1], prob_container[1], _ = self._predict_single_axis(
+        labels, probs, _ = self._predict_single_axis(
             data_vol, output_probs=True, axis=Axis.X
         )
+        label_container[1] = labels
+        prob_container[1] = self._max_probs_per_voxel(probs)
         task_outputs_axis2 = self.get_additional_task_outputs() if is_multitask else None
 
         logging.info("Merging max of XY and ZX volumes with ZY volume.")
@@ -419,14 +426,14 @@ class VolSeg2dPredictor:
         return label_container[0], prob_container[0]
 
     def _merge_vols_in_mem(self, prob_container, label_container):
+        # Which of the 2 views has higher prob at each voxel (0 or 1)
         max_prob_idx = np.argmax(prob_container, axis=0)
-        max_prob_idx = max_prob_idx[np.newaxis, :, :, :]
-        prob_container[0] = np.squeeze(
-            np.take_along_axis(prob_container, max_prob_idx, axis=0)
+        # take_along_axis expects indices same shape as arr; broadcast (D,H,W) -> (2,D,H,W)
+        indices = np.broadcast_to(
+            max_prob_idx[np.newaxis, ...], prob_container.shape
         )
-        label_container[0] = np.squeeze(
-            np.take_along_axis(label_container, max_prob_idx, axis=0)
-        )
+        prob_container[0] = np.take_along_axis(prob_container, indices, axis=0)[0, ...]
+        label_container[0] = np.take_along_axis(label_container, indices, axis=0)[0, ...]
 
     def _predict_12_ways_max_probs(self, data_vol):
         shape_tup = data_vol.shape
@@ -500,13 +507,15 @@ class VolSeg2dPredictor:
         logging.info("Creating empty data volumes in RAM to combine 12 way prediction.")
         label_container = np.empty((2, *shape_tup), dtype=np.uint8)
         prob_container = np.empty((2, *shape_tup), dtype=np.float16)
-        label_container[0], prob_container[0] = self._predict_single_axis(data_vol)
+        labels, probs, _ = self._predict_single_axis(data_vol, output_probs=True)
+        label_container[0] = labels
+        prob_container[0] = self._max_probs_per_voxel(probs)
         for k in range(1, 4):
             logging.info(f"Rotating volume {k * 90} degrees")
             data_vol = np.rot90(data_vol)
-            labels, probs = self._predict_single_axis(data_vol)
+            labels, probs, _ = self._predict_single_axis(data_vol, output_probs=True)
             label_container[1] = np.rot90(labels, -k)
-            prob_container[1] = np.rot90(probs, -k)
+            prob_container[1] = np.rot90(self._max_probs_per_voxel(probs), -k)
             logging.info(
                 f"Merging rot {k * 90} deg volume with rot {(k-1) * 90} deg volume."
             )
@@ -602,7 +611,7 @@ class VolSeg2dPredictor:
                 for idx, curr_label in enumerate(curr_counts):
                     probs_matrix[labels_list[idx]] += curr_label
 
-        elif self.settings.quality=="medium":
+        elif self.settings.quality=="high":
             g = self._predict_12_ways_generator(data_vol)
             for i in range(12):
                 logging.info(f"Voter {i+1} of 12 voting...")
@@ -627,15 +636,36 @@ class VolSeg2dPredictor:
         logging.info("Aggregating prediction votes:")
         counts_matrix_contig = np.ascontiguousarray(counts_matrix)
 
-        full_prediction_labels = np.argmax(probs_matrix, axis=0)
+        
+        if self.settings.quality == "z_only":
+            full_prediction_labels = np.argmax(probs_matrix, axis=0)
+        else:
+            full_prediction_labels = np.argmax(probs_matrix, axis=-1)
+        indices = np.broadcast_to(
+            full_prediction_labels[np.newaxis, ...], counts_matrix_contig.shape
+        )
         full_prediction_probs = np.squeeze(
-            np.take_along_axis(counts_matrix_contig, full_prediction_labels[np.newaxis, ...], axis=0)
+            np.take_along_axis(counts_matrix_contig, indices, axis=0)[0, ...]
         )
 
-        if self.settings.quality=="medium":
-            full_prediction_probs = full_prediction_probs.astype(float) / 3
-        elif self.settings.quality=="z_only":
-            full_prediction_probs = probs_matrix * .0625
+        if self.settings.quality == "medium":
+            full_prediction_probs = (
+                np.take_along_axis(
+                    probs_matrix, full_prediction_labels[..., np.newaxis], axis=-1
+                ).squeeze()
+                .astype(float)
+                / 3
+            )
+        elif self.settings.quality == "high":
+            full_prediction_probs = (
+                np.take_along_axis(
+                    probs_matrix, full_prediction_labels[..., np.newaxis], axis=-1
+                ).squeeze()
+                .astype(float)
+                / 12
+            )
+        elif self.settings.quality == "z_only":
+            full_prediction_probs = probs_matrix * 0.0625
         logging.info("Calculating prediction entropy (regularised) from voting distributions:")
         entropy_matrix = np.empty(data_vol.shape)
         for curr_slice in range(len(data_vol)):

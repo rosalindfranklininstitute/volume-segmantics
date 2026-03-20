@@ -51,13 +51,17 @@ IMAGENET_RGB_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_RGB_STD = [0.229, 0.224, 0.225]
 
 def get_model_input_channels(settings=None):
-    if settings and getattr(settings, 'use_2_5d_slicing', False):
-        return getattr(settings, 'num_slices', 3)  # Return number of slices for 2.5D
-    return MODEL_INPUT_CHANNELS  # Default to 1 channel for 2D slicing
+    """Return input channels: 2.5D (slicing or prediction) uses num_slices, else 1 for 2D."""
+    if settings and (
+        getattr(settings, 'use_2_5d_slicing', False)
+        or getattr(settings, 'use_2_5d_prediction', False)
+    ):
+        return getattr(settings, 'num_slices', 3)  # 2.5D: multiple channels
+    return 1  # 2D: single channel (do not use MODEL_INPUT_CHANNELS here)
 
 def get_imagenet_normalization(settings=None):
     if settings and getattr(settings, 'use_2_5d_slicing', False):
         num_channels = getattr(settings, 'num_slices', 3)
-        # For 2.5D, use single channel normalization repeated for all channels
+        # For 2.5D, single channel normalization repeated for all channels
         return [IMAGENET_MEAN] * num_channels, [IMAGENET_STD] * num_channels
     return IMAGENET_MEAN, IMAGENET_STD  # Single channel normalization for 2D
