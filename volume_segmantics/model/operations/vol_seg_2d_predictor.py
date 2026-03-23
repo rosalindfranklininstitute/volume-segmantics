@@ -612,7 +612,11 @@ class VolSeg2dPredictor:
         probs_matrix = np.zeros((*data_vol.shape, self.num_labels))
         if self.settings.quality=="medium":
             # Use three axis-wise predictions (Z, Y, X) as voters
-            g = self._predict_3_axis_generator(data_vol)
+    
+            gen_fn = getattr(self, "_predict_3_ways_generator", None) or getattr(
+                self, "_predict_3_axis_generator"
+            )
+            g = gen_fn(data_vol)
             for i in range(3):
                 logging.info(f"Voter {i+1} of 3 voting...")
                 labels = next(g)

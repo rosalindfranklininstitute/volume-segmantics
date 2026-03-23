@@ -17,7 +17,7 @@ from volume_segmantics.model.operations.trainer_losses import (
 )
 
 
-# Fixtures
+# --- Fixtures ---
 
 
 @pytest.fixture
@@ -38,7 +38,7 @@ def batch_4c():
     return pred, target
 
 
-# ConsistencyLoss 
+# --- 2. ConsistencyLoss ---
 
 
 def test_consistency_loss_is_module():
@@ -84,7 +84,7 @@ def test_consistency_loss_gradient_flow():
     assert teacher.grad is not None
 
 
-#  get_rampup_ratio 
+# --- 3. get_rampup_ratio ---
 
 
 def test_rampup_before_start():
@@ -131,7 +131,7 @@ def test_rampup_returns_float():
     assert isinstance(r, float)
 
 
-# ClassWeightedDiceLoss
+# --- 4. ClassWeightedDiceLoss ---
 
 
 def test_dice_loss_is_module():
@@ -266,7 +266,7 @@ def test_dice_zero_target_handling():
     assert torch.isfinite(out).item()
 
 
-# CombinedCEDiceLoss 
+# --- 5. CombinedCEDiceLoss ---
 
 
 def test_combined_is_module():
@@ -366,6 +366,8 @@ def test_combined_class_weights_ce():
     out = loss_fn(pred, target)
     assert out.dim() == 0
 
+
+# --- 6. Edge cases ---
 
 
 def test_dice_single_pixel():

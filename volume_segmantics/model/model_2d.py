@@ -332,8 +332,16 @@ class MultitaskUnet(MultitaskSegmentationModel):
             head_upsampling = 4
             logging.info(f"Setting head upsampling to {head_upsampling} for DINO encoder (patch_size={patch_size})")
 
-        # smp SegmentationHead does "if upsampling > 1" - never pass None (use 1 when not DINO)
-        upsampling_arg = int(head_upsampling) if head_upsampling is not None else 1
+        # smp SegmentationHead does "if upsampling > 1".
+        # Never pass None (or any non-int) here because it crashes with:
+        # TypeError: '>' not supported between instances of 'NoneType' and 'int'
+        upsampling_arg = 1
+        if head_upsampling is not None:
+            try:
+                upsampling_arg = int(head_upsampling)
+            except (TypeError, ValueError):
+                upsampling_arg = 1
+        upsampling_arg = max(1, upsampling_arg)
         self.heads = nn.ModuleList([
             SegmentationHead(
                 in_channels=head_in_channels,
@@ -802,7 +810,6 @@ def create_model_from_file(
     logging.info("Loading model dictionary from file.")
     raw_dict = torch.load(weights_fn, map_location=map_location, weights_only=False)
 
-    
     model_dict = raw_dict
 
     saved_in_channels = model_dict["model_struc_dict"].get("in_channels", 1)
@@ -812,6 +819,9 @@ def create_model_from_file(
         requested_in_channels = cfg.get_model_input_channels(settings)
 
     # Create model with saved channels first so we can load the saved weights
+    # Always create the model on the correct target device up-front.
+    # This avoids a failure mode where parameters are instantiated on CUDA even
+    # when gpu=False, then load_state_dict keeps them on CUDA.
     device_for_model = device_num if gpu else "cpu"
     model = create_model_on_device(device_for_model, model_dict["model_struc_dict"])
     logging.info("Loading in the saved weights.")
@@ -840,9 +850,10 @@ def create_model_from_file(
         model_dict["model_struc_dict"]["in_channels"] = requested_in_channels
 
     if not gpu:
-        # Unwrap DataParallel if present, then ensure model is on CPU
+        # Unwrap DataParallel if present, then ensure model is on CPU.
+        # Use .to(device) to be explicit even if the underlying module is on CUDA.
         model = getattr(model, "module", model)
-        model = model.cpu()
+        model = model.to(torch.device("cpu"))
     return model, model_dict["model_struc_dict"]["classes"], model_dict["label_codes"]
 
 
