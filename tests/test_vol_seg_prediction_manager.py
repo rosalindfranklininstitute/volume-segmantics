@@ -11,9 +11,14 @@ from volume_segmantics.model.operations.vol_seg_prediction_manager import (
 from volume_segmantics.utilities import Quality
 
 
+
+
 @pytest.fixture()
 def volseg_prediction_manager(model_path, rand_int_volume, prediction_settings):
     return VolSeg2DPredictionManager(model_path, rand_int_volume, prediction_settings)
+
+
+
 
 
 class TestVolSegPredictionManager:
@@ -116,3 +121,9 @@ class TestVolSegPredictionManager:
         assert output_path.exists()
         assert isinstance(prediction, np.ndarray)
         assert prediction.dtype == np.uint8
+
+
+
+
+
+
