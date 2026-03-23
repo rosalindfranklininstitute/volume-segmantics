@@ -95,3 +95,17 @@ class TestBaseDataManagerPreprocessData:
         training_settings.clip_data = True
         base_dm = BaseDataManager(rand_float_nan_volume, training_settings)
         assert not np.isnan(base_dm.data_vol).any()
+
+    def test_preprocess_minmax_norm_scales_to_zero_one(
+        self,
+        rand_float_volume,
+        training_settings,
+    ):
+        # minmax_norm should rescale data to [0, 1] (or very close), regardless of original scale
+        training_settings.clip_data = False
+        training_settings.minmax_norm = True
+        base_dm = BaseDataManager(rand_float_volume, training_settings)
+        vol = base_dm.data_vol
+        assert vol.dtype == np.float64 or np.issubdtype(vol.dtype, np.floating)
+        assert np.isclose(np.nanmin(vol), 0.0, atol=1e-6)
+        assert np.isclose(np.nanmax(vol), 1.0, atol=1e-6)

@@ -484,7 +484,6 @@ class VolSeg2dTrainer:
         """Ensure model output is a tuple for consistent handling."""
         return ensure_tuple_output(output)
 
-    # MULTI-CLASS DICE COMPUTATION
 
     def _compute_multiclass_dice(
         self,
@@ -498,7 +497,7 @@ class VolSeg2dTrainer:
         return self.metrics_calculator.compute_multiclass_dice(
             pred, target, num_classes, exclude_background, smooth
         )
-
+    
     def _compute_weighted_multiclass_dice(
         self,
         pred: torch.Tensor,
@@ -523,6 +522,15 @@ class VolSeg2dTrainer:
         # Sync boundary stats for logging
         self._boundary_stats = self.metrics_calculator.get_boundary_stats()
         return metrics
+
+    def _get_eval_metric(self):
+        """
+        Backwards-compatible helper retained for tests and external callers.
+        Delegates to trainer_metrics.get_eval_metric using the current
+        settings.eval_metric value.
+        """
+        return get_eval_metric(self.settings.eval_metric)
+    
 
     def train_model(
         self,
