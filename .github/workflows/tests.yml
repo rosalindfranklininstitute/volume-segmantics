@@ -47,10 +47,12 @@ jobs:
             venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
 
       - name: Install dependencies
-        run: poetry install --no-interaction  # removed redundant --no-root step
-
-      - name: Run tests
         run: |
+          poetry lock
+          poetry install --no-interaction --no-root 
+      - name: Install library
+        run: poetry install --no-interaction --no-root
+      - run: |
           source $VENV
           pytest --version
           pytest -m "not gpu"
