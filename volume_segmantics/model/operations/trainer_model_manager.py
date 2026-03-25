@@ -26,8 +26,8 @@ except ImportError:
     IMAGE_IO_AVAILABLE = False
 
 from volume_segmantics.model.model_2d import create_model_on_device
-from volume_segmantics.model.mean_teacher import MeanTeacherModel
-from volume_segmantics.model.sam import SAM
+from volume_segmantics.model.training.mean_teacher import MeanTeacherModel
+from volume_segmantics.model.training.sam import SAM
 from volume_segmantics.utilities.early_stopping import EarlyStopping
 import volume_segmantics.utilities.base_data_utils as utils
 import volume_segmantics.utilities.config as cfg

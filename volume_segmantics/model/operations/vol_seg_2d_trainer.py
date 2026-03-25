@@ -27,7 +27,7 @@ from volume_segmantics.data.pytorch3dunet_losses import (
     BoundaryDoUDiceLoss
 )
 from volume_segmantics.model.model_2d import create_model_from_file_full_weights
-from volume_segmantics.model.sam import SAM
+from volume_segmantics.model.training.sam import SAM
 from volume_segmantics.model.operations.trainer_losses import (
     ConsistencyLoss,
     ClassWeightedDiceLoss,
@@ -49,7 +49,7 @@ from volume_segmantics.model.operations.trainer_logging import TrainingLogger
 from volume_segmantics.model.operations.trainer_visualization import TrainingVisualizer
 
 
-from volume_segmantics.model.sam import SAM
+from volume_segmantics.model.training.sam import SAM
 
 
 
@@ -154,7 +154,7 @@ class VolSeg2dTrainer:
 
         # Pseudo-labeling settings
         if self.use_pseudo_labeling:
-            from volume_segmantics.model.pseudo_labeling import (
+            from volume_segmantics.model.training.pseudo_labeling import (
                 PseudoLabelGenerator,
                 ConfidenceThresholdScheduler,
             )
@@ -565,7 +565,7 @@ class VolSeg2dTrainer:
 
                 # Wrap with MeanTeacherModel if using semi-supervised
                 if self.use_semi_supervised:
-                    from volume_segmantics.model.mean_teacher import MeanTeacherModel
+                    from volume_segmantics.model.training.mean_teacher import MeanTeacherModel
                     # Unwrap DataParallel if present
                     if isinstance(loaded_model, DataParallel):
                         loaded_model = loaded_model.module
@@ -597,7 +597,7 @@ class VolSeg2dTrainer:
 
                 # Wrap with MeanTeacherModel if using semi-supervised
                 if self.use_semi_supervised:
-                    from volume_segmantics.model.mean_teacher import MeanTeacherModel
+                    from volume_segmantics.model.training.mean_teacher import MeanTeacherModel
                     # Unwrap DataParallel if present
                     if isinstance(loaded_model, DataParallel):
                         loaded_model = loaded_model.module
