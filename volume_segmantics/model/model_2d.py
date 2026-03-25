@@ -195,11 +195,6 @@ class MultitaskUnet(MultitaskSegmentationModel):
     ):
         super().__init__()
 
-        # Ensure int params are never None (e.g. from YAML null or **kwargs); avoid "NoneType > int" in comparisons
-        if encoder_depth is None:
-            encoder_depth = 5
-        encoder_depth = int(encoder_depth)
-
         # Default to single head if not specified
         if heads_config is None:
             heads_config = [HeadConfig()]
@@ -312,8 +307,15 @@ class MultitaskUnet(MultitaskSegmentationModel):
         ])
 
         # Build segmentation heads
-        # UnetDecoder output is the last block's output, i.e. decoder_channels[-1] channels
-        head_in_channels = decoder_channels[-1]
+        # UnetDecoder with n_blocks outputs decoder_channels[n_blocks-2] channels
+        # For n_blocks=4 and decoder_channels=[256, 128, 64, 32], output is 64 (index 2)
+        # So we use decoder_channels[encoder_depth-2] or decoder_channels[-2] if lengths match
+        if len(decoder_channels) == encoder_depth:
+            # When decoder_channels length matches encoder_depth, output is second-to-last
+            head_in_channels = decoder_channels[-2]
+        else:
+            # Fallback: use last element (shouldn't happen with our setup)
+            head_in_channels = decoder_channels[-1]
 
         # Calculate upsampling factor for DINO encoders
         # DINO outputs features at reduced resolution (input_size // patch_size)
@@ -332,23 +334,13 @@ class MultitaskUnet(MultitaskSegmentationModel):
             head_upsampling = 4
             logging.info(f"Setting head upsampling to {head_upsampling} for DINO encoder (patch_size={patch_size})")
 
-        # smp SegmentationHead does "if upsampling > 1".
-        # Never pass None (or any non-int) here because it crashes with:
-        # TypeError: '>' not supported between instances of 'NoneType' and 'int'
-        upsampling_arg = 1
-        if head_upsampling is not None:
-            try:
-                upsampling_arg = int(head_upsampling)
-            except (TypeError, ValueError):
-                upsampling_arg = 1
-        upsampling_arg = max(1, upsampling_arg)
         self.heads = nn.ModuleList([
             SegmentationHead(
                 in_channels=head_in_channels,
                 out_channels=cfg.classes,
                 activation=cfg.activation,
-                kernel_size=int(cfg.kernel_size) if getattr(cfg, "kernel_size", None) is not None else 3,
-                upsampling=upsampling_arg,
+                kernel_size=cfg.kernel_size,
+                upsampling=head_upsampling,
             )
             for cfg in parsed_heads
         ])
@@ -554,9 +546,6 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
 
         if heads_config is None:
             num_tasks = struct_dict_copy.pop("num_tasks", 1)
-            if num_tasks is None:
-                num_tasks = 1
-            num_tasks = int(num_tasks)
 
             if decoder_sharing == "shared":
                 # All heads share decoder 0
@@ -592,15 +581,12 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
     except Exception as e:
         logging.warning(f"Could not adapt first conv weights for in_channels={in_channels_requested}: {e}")
 
-    # Only use DataParallel when actually using GPU (not when device_num is "cpu")
-    if device_num != "cpu" and torch.cuda.device_count() > 1 and cfg.USE_ALL_GPUS:
+    if torch.cuda.device_count() > 1 and cfg.USE_ALL_GPUS:
         logging.info(f"Using {torch.cuda.device_count()} GPUs.")
         model = DataParallel(model)
         model.to("cuda")
     else:
-        # device_num can be int (cuda index) or "cpu" when called from create_model_from_file(gpu=False)
-        device = torch.device("cpu") if device_num == "cpu" else torch.device("cuda", device_num)
-        model.to(device)
+        model.to(device_num)
     return model
 
 
@@ -808,9 +794,7 @@ def create_model_from_file(
         map_location = "cpu"
     weights_fn = weights_fn.resolve()
     logging.info("Loading model dictionary from file.")
-    raw_dict = torch.load(weights_fn, map_location=map_location, weights_only=False)
-
-    model_dict = raw_dict
+    model_dict = torch.load(weights_fn, map_location=map_location, weights_only=False)
 
     saved_in_channels = model_dict["model_struc_dict"].get("in_channels", 1)
 
@@ -819,16 +803,10 @@ def create_model_from_file(
         requested_in_channels = cfg.get_model_input_channels(settings)
 
     # Create model with saved channels first so we can load the saved weights
-    # Always create the model on the correct target device up-front.
-    # This avoids a failure mode where parameters are instantiated on CUDA even
-    # when gpu=False, then load_state_dict keeps them on CUDA.
-    device_for_model = device_num if gpu else "cpu"
-    model = create_model_on_device(device_for_model, model_dict["model_struc_dict"])
+    model = create_model_on_device(device_num, model_dict["model_struc_dict"])
     logging.info("Loading in the saved weights.")
     state_dict = model_dict["model_state_dict"]
-    # Checkpoint from single-GPU (or model.module.state_dict()) has no "module." prefix.
-    # DataParallel-wrapped model expects keys with "module."; load into model.module so
-    # keys match the checkpoint (avoids loading nothing and leaving model random).
+    # handle DataParallel module. prefix
     if isinstance(model, DataParallel):
         if state_dict and next(iter(state_dict.keys())).startswith("module."):
             state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
@@ -849,11 +827,6 @@ def create_model_from_file(
         # Update in_channels in model structure dict for future reference
         model_dict["model_struc_dict"]["in_channels"] = requested_in_channels
 
-    if not gpu:
-        # Unwrap DataParallel if present, then ensure model is on CPU.
-        # Use .to(device) to be explicit even if the underlying module is on CUDA.
-        model = getattr(model, "module", model)
-        model = model.to(torch.device("cpu"))
     return model, model_dict["model_struc_dict"]["classes"], model_dict["label_codes"]
 
 

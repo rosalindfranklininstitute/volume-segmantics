@@ -11,14 +11,9 @@ from volume_segmantics.model.operations.vol_seg_prediction_manager import (
 from volume_segmantics.utilities import Quality
 
 
-
-
 @pytest.fixture()
 def volseg_prediction_manager(model_path, rand_int_volume, prediction_settings):
     return VolSeg2DPredictionManager(model_path, rand_int_volume, prediction_settings)
-
-
-
 
 
 class TestVolSegPredictionManager:
@@ -82,15 +77,10 @@ class TestVolSegPredictionManager:
         output_dir.mkdir(exist_ok=True)
         output_path = Path(output_dir, "output_low_2.h5")
         prediction = pred_manager.predict_volume_to_path(output_path, Quality.LOW)
-        # Primary output should always exist
+        assert len(list(output_dir.glob("*.h5"))) == 2
         assert output_path.exists()
-        # Depending on OUTPUT_FORMAT, probability outputs may be saved as HDF5 or TIFF
-        h5_files = list(output_dir.glob("*.h5"))
-        tif_probs = list(output_dir.glob("*_probs.tif"))
-        tif_logits = list(output_dir.glob("*_logits.tif"))
-        # At minimum, we expect the primary volume plus some kind of prob/logit outputs
-        assert len(h5_files) >= 1
-        assert (len(h5_files) >= 2) or (tif_probs or tif_logits)
+        probs_path = Path(f"{output_path.parent / output_path.stem}_probs.h5")
+        assert probs_path.exists()
         assert isinstance(prediction, np.ndarray)
         assert prediction.dtype == np.uint8
 
@@ -121,9 +111,3 @@ class TestVolSegPredictionManager:
         assert output_path.exists()
         assert isinstance(prediction, np.ndarray)
         assert prediction.dtype == np.uint8
-
-
-
-
-
-

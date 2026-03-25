@@ -543,19 +543,9 @@ class VolSeg2dPredictor:
         return one_hot_out
 
     def _predict_3_axis_generator(self, data_vol):
-        """
-        Generator that yields label predictions for each of the three axes (Z, Y, X)
-        without rotations. Used for medium-quality entropy estimation where we want
-        three independent axis-wise votes.
-        """
         for curr_axis in [Axis.Z, Axis.Y, Axis.X]:
-            labels, _, _ = self._predict_single_axis(
-                data_vol, output_probs=False, axis=curr_axis
-            )
+            labels, _, _ = self._predict_single_axis(data_vol, output_probs=False, axis=curr_axis)
             yield labels
-
-    # Alias for backward compatibility (entropy code may reference the old name)
-    _predict_3_ways_generator = _predict_3_axis_generator
 
     def _predict_12_ways_generator(self, data_vol):
         for curr_axis in [Axis.Z, Axis.Y, Axis.X]:
@@ -611,21 +601,15 @@ class VolSeg2dPredictor:
         counts_matrix = np.zeros((self.num_labels, *data_vol.shape), dtype=np.uint8)
         probs_matrix = np.zeros((*data_vol.shape, self.num_labels))
         if self.settings.quality=="medium":
-            # Use three axis-wise predictions (Z, Y, X) as voters
-    
-            gen_fn = getattr(self, "_predict_3_ways_generator", None) or getattr(
-                self, "_predict_3_axis_generator"
-            )
-            g = gen_fn(data_vol)
+            g = self._predict_3_ways_generator(data_vol)
+            curr_counts, labels_list = self._convert_labels_map_to_count(data_vol)
             for i in range(3):
                 logging.info(f"Voter {i+1} of 3 voting...")
                 labels = next(g)
-                logging.info("Converting votes...")
+                logging.info(f"Converting votes...")
                 curr_counts, labels_list = self._convert_labels_map_to_count(labels)
                 for idx, curr_label in enumerate(curr_counts):
-                    # Update both count- and prob-based accumulators
-                    counts_matrix[labels_list[idx]] += curr_label
-                    probs_matrix[..., labels_list[idx]] += curr_label
+                    probs_matrix[labels_list[idx]] += curr_label
 
         elif self.settings.quality=="high":
             g = self._predict_12_ways_generator(data_vol)
@@ -635,8 +619,7 @@ class VolSeg2dPredictor:
                 logging.info(f"Converting votes...")
                 curr_counts, labels_list = self._convert_labels_map_to_count(labels)
                 for idx, curr_label in enumerate(curr_counts):
-                    counts_matrix[labels_list[idx]] += curr_label
-                    probs_matrix[..., labels_list[idx]] += curr_label
+                    probs_matrix[labels_list[idx]] += curr_label
 
         elif self.settings.quality=="z_only":
             g = self._predict_Zonly_generator(data_vol)
@@ -689,9 +672,6 @@ class VolSeg2dPredictor:
             entropy_matrix[curr_slice] = entropy(counts_matrix_contig[:, curr_slice, ...], axis=0)
         entropy_matrix /= entropy(np.full((len(np.unique(full_prediction_labels)),),
                                           1/len(np.unique(full_prediction_labels))))
-
-        # Cast labels to uint8 for consistency with other prediction paths
-        full_prediction_labels = full_prediction_labels.astype(np.uint8)
 
         return full_prediction_labels, full_prediction_probs, entropy_matrix, counts_matrix_contig
 

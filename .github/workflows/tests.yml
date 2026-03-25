@@ -1,4 +1,5 @@
 name: tests
+
 on:
   push:
     branches:
@@ -11,8 +12,8 @@ on:
 jobs:
   tests-multiple-os:
     strategy:
-      matrix:
-        os: ["ubuntu-latest", "macos-latest", "windows-latest"]
+      matrix: 
+        os: [ "ubuntu-latest", "macos-latest", "windows-latest" ]
       fail-fast: false
     defaults:
       run:
@@ -20,37 +21,29 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@v3
       - name: Set up python
         id: setup-python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"  # quoted to prevent YAML float parsing (3.10 → 3.1)
-
+          python-version: 3.9
       - name: Install Poetry
         uses: snok/install-poetry@v1
         with:
-          version: "1.8.4"
+          version: 1.3.2
           virtualenvs-create: true
           virtualenvs-in-project: true
-
       - name: Load cached venv
         id: cached-pip-wheels
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
-          path: |
-            ~/.cache/pypoetry
-            ~/.cache/pip
+          path: ~/.cache
           key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
-          restore-keys: |
-            venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
-
       - name: Install dependencies
-        run: poetry install --no-interaction  # removed redundant --no-root step
-
-      - name: Run tests
-        run: |
+        run: poetry install --no-interaction --no-root
+      - name: Install library
+        run: poetry install --no-interaction
+      - run: |
           source $VENV
           pytest --version
           pytest -m "not gpu"
