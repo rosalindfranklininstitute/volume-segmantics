@@ -21,20 +21,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
       - name: Set up python
         id: setup-python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"  # quoted to prevent YAML float parsing (3.10 → 3.1)
-
+          python-version: "3.11"
       - name: Install Poetry
         uses: snok/install-poetry@v1
         with:
           version: "1.8.4"
           virtualenvs-create: true
           virtualenvs-in-project: true
-
       - name: Load cached venv
         id: cached-pip-wheels
         uses: actions/cache@v4
@@ -45,14 +42,10 @@ jobs:
           key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
           restore-keys: |
             venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-
-
       - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Run tests
         run: |
-          poetry lock
-          poetry install --no-interaction --no-root 
-      - name: Install library
-        run: poetry install --no-interaction --no-root
-      - run: |
           source $VENV
           pytest --version
           pytest -m "not gpu"
