@@ -27,22 +27,22 @@ These commands require access to some settings stored in YAML files. These need 
 The file `2d_model_train_settings.yaml` can be edited in order to change training parameters such as number of epochs, loss functions, evaluation metrics and also model and encoder architectures. The file `2d_model_predict_settings.yaml` can be edited to change parameters such as the prediction "quality" e.g "low" quality refers to prediction of the volume segmentation by taking images along a single axis (images in the (x,y) plane). For "medium" and "high" quality, predictions are done along 3 axes and in 12 directions (3 axes, 4 rotations) respectively, before being combined by maximum probability. Check normalisation settings carefully for your intended use, different datasets may require different choices from the default. Double-check that the prediction normalisation settings match those used for training.
 
 ### For training a 2d model on a 3d image volume and corresponding labels
-Run the following command. Input files can be in HDF5 or multi-page TIFF format.
+Run the following command. Input files can be in HDF5 or multi-page TIFF format or MRC format.
 
 ```shell
-model-train-2d --data path/to/image/data.h5 --labels path/to/corresponding/segmentation/labels.h5
+model-train-2d --data path/to/image/data.tiff --labels path/to/corresponding/segmentation/labels.tiff
 ```
 
 Paths to multiple data and label volumes can be added after the `--data` and `--labels` flags respectively. A model will be trained according to the settings defined in `/volseg-settings/2d_model_train_settings.yaml` and saved to your working directory. In addition, a figure showing "ground truth" segmentation vs model segmentation for some images in the validation set will be saved. 
 
 ### For 3d volume segmentation prediction using a 2d model
-Run the following command. Input image files can be in HDF5 or multi-page TIFF format.
+Run the following command. Input image files can be in HDF5 or multi-page TIFF format or MRC format.
 
 ```shell
-model-predict-2d path/to/model_file.pytorch path/to/data_for_prediction.h5
+model-predict-2d path/to/model_file.pytorch path/to/data_for_prediction.tiff
 ```
 
-The input data will be segmented using the input model following the settings specified in `volseg-settings/2d_model_predict_settings.yaml`. Depending on whether OUTPUT_FORMAT in config.py is set to "tif" or "hdf", a TIFF or HDF5 file containing the segmented volume will be saved to your working directory.
+The input data will be segmented using the input model following the settings specified in `volseg-settings/2d_model_predict_settings.yaml`. Depending on whether OUTPUT_FORMAT in config.py is set to "tif" or "hdf" or "mrc", a TIFF or HDF5 or MRC file containing the segmented volume will be saved to your working directory.
 
 ### 2.5D Slicing Feature
 
