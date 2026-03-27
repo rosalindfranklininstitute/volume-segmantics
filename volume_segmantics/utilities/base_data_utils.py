@@ -299,6 +299,22 @@ def numpy_from_zarr(path):
 
     return np.array(zarr.open(path)[0])
 
+
+def numpy_from_mrc(path):
+    """Returns a numpy array when given a path to an MRC file.
+
+    Args:
+        path(pathlib.Path): The path to the MRC file.
+
+    Returns:
+        numpy.array: A numpy array object for the data stored in the MRC file.
+    """
+    from volume_segmantics.data.mrc_utils import load_mrc
+
+    data, _meta = load_mrc(path)
+    return data
+
+
 def numpy_from_hdf5(path, hdf5_path="/data", nexus=False):
     """Returns a numpy array  and chunking info when given a path
     to an HDF5 file.
@@ -356,6 +372,8 @@ def get_numpy_from_path(
         return numpy_from_hdf5(path, hdf5_path=internal_path, nexus=nexus)
     elif path.suffix in cfg.ZARR_SUFFIXES:
         return numpy_from_zarr(path), True
+    elif path.suffix in cfg.MRC_SUFFIXES:
+        return numpy_from_mrc(path), True
 
 
 def sequential_labels(unique_labels: np.array) -> bool:
@@ -485,3 +503,9 @@ def save_data_to_tif(data, file_path, compress=True):
     logging.info(f"Saving data of shape {data.shape} to {file_path}.")
     compression = 'zlib' if compress else None
     tifffile.imwrite(file_path, data, compression=compression)
+
+def save_data_to_mrc(data, file_path, voxel_size_angstrom=1.0):
+    logging.info(f"Saving data of shape {data.shape} to {file_path}.")
+    from volume_segmantics.data.mrc_utils import save_mrc
+
+    save_mrc(data, file_path, voxel_size_angstrom=voxel_size_angstrom)

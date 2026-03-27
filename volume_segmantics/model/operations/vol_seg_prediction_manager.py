@@ -263,7 +263,51 @@ class VolSeg2DPredictionManager(BaseDataManager):
                         f"{output_path.parent / output_path.stem}_votes.tif",
                         compress=True
                     )
+            
+        if output_path is not None and cfg.OUTPUT_FORMAT == "mrc":
+            utils.save_data_to_mrc(prediction, output_path)
+            if probs is not None and self.settings.output_probs:
+                utils.save_data_to_mrc(
+                    probs,
+                    f"{output_path.parent / output_path.stem}_probs.mrc",
+                )
+            if logits is not None and self.settings.output_probs:
+                utils.save_data_to_mrc(
+                    logits,
+                    f"{output_path.parent / output_path.stem}_logits.mrc",
+                )
 
+            if additional_tasks:
+                for task_name, task_data in additional_tasks.items():
+                    task_suffix = self._get_task_suffix(task_name)
+                    task_labels = task_data.get('labels')
+                    task_probs = task_data.get('probs')
+                    task_logits = task_data.get('logits')
+
+                    if task_labels is not None:
+                        task_output_path = f"{output_path.parent / output_path.stem}{task_suffix}.mrc"
+                        utils.save_data_to_mrc(task_labels, task_output_path)
+                        logging.info(f"Saved {task_name} labels to {task_output_path}")
+
+                    if task_probs is not None and self.settings.output_probs:
+                        task_probs_path = f"{output_path.parent / output_path.stem}{task_suffix}_probs.mrc"
+                        utils.save_data_to_mrc(task_probs, task_probs_path)
+                        logging.info(f"Saved {task_name} probabilities to {task_probs_path}")
+
+                    if task_logits is not None and self.settings.output_probs:
+                        task_logits_path = f"{output_path.parent / output_path.stem}{task_suffix}_logits.mrc"
+                        utils.save_data_to_mrc(task_logits, task_logits_path)
+                        logging.info(f"Saved {task_name} logits to {task_logits_path}")
+
+            if entropy is not None and self.settings.output_entropy:
+                utils.save_data_to_mrc(
+                    entropy,
+                    f"{output_path.parent / output_path.stem}_entropy.mrc",
+                )
+                utils.save_data_to_mrc(
+                    votes,
+                    f"{output_path.parent / output_path.stem}_votes.mrc",
+                )
         return prediction
 
     def _get_task_suffix(self, task_name):
