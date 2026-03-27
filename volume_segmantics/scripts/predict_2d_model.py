@@ -14,11 +14,11 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 def create_output_path(root_path, data_vol_path):
-    if cfg.OUTPUT_FORMAT == "hdf":
-        pred_out_fn = f"{date.today()}_{data_vol_path.stem}_2d_model_vol_pred.h5"
-    else:
-        pred_out_fn = f"{date.today()}_{data_vol_path.stem}_2d_model_vol_pred.tif"
+    ext_map = {"hdf": ".h5", "mrc": ".mrc", "tif": ".tif"}
+    ext = ext_map.get(cfg.OUTPUT_FORMAT, ".tif")
+    pred_out_fn = f"{date.today()}_{data_vol_path.stem}_2d_model_vol_pred{ext}"
     return Path(root_path, pred_out_fn)
+
 
 
 def main():

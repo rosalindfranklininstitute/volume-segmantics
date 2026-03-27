@@ -12,11 +12,12 @@ OUTPUT_DATA_DIR_ARG = "output"
 TIFF_SUFFIXES = {".tiff", ".tif"}
 HDF5_SUFFIXES = {".h5", ".hdf5", ".nxs"}
 ZARR_SUFFIXES = {".zarr"}
+MRC_SUFFIXES = {".mrc", ".mrcs", ".rec", ".map", ".st"}
 PNG_SUFFIXES = {".png"}
-TRAIN_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES}
+TRAIN_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES, *MRC_SUFFIXES}
 LABEL_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES}
 MODEL_DATA_EXT = {".pytorch", ".pth"}
-PREDICT_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES, *PNG_SUFFIXES, *ZARR_SUFFIXES}
+PREDICT_DATA_EXT = {*HDF5_SUFFIXES, *TIFF_SUFFIXES, *PNG_SUFFIXES, *ZARR_SUFFIXES, *MRC_SUFFIXES}
 # TODO Required settings - check required keys are in settings files
 # Logging format
 LOGGING_FMT = "%(asctime)s - %(levelname)s - %(message)s"
@@ -28,7 +29,7 @@ PREDICTION_SETTINGS_FN = "2d_model_predict_settings.yaml"
 
 TQDM_BAR_FORMAT = "{l_bar}{bar: 30}{r_bar}{bar: -30b}"  # tqdm progress bar format
 
-OUTPUT_FORMAT = "tif" # tif or hdf
+OUTPUT_FORMAT = "tif" # tif or hdf or mrc
 HDF5_COMPRESSION = "gzip"
 
 BIG_CUDA_THRESHOLD = 16 # GPU Memory (GB), above this value batch size is increased
