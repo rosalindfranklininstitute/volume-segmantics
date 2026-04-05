@@ -315,22 +315,10 @@ class MultitaskUnet(MultitaskSegmentationModel):
         # UnetDecoder output is the last block's output, i.e. decoder_channels[-1] channels
         head_in_channels = decoder_channels[-1]
 
-        # Calculate upsampling factor for DINO encoders
-        # DINO outputs features at reduced resolution (input_size // patch_size)
-        # We need to upsample to match input resolution
         head_upsampling = None
         if is_dino:
-            # For DINO, feature maps are at (H // patch_size, W // patch_size)
-            # For typical 256×256 input with patch_size=14: 256//14 = 18
-            # To get back to ~256, we need ~14x upsampling
-            # SegmentationHead upsampling is typically 2^upsampling_factor
-            # 2^4 = 16x gets us close (18×16 = 288, close to 256)
-            # The head will do adaptive upsampling to match exact input size
-            patch_size = getattr(self.encoder, 'patch_size', 14)
-            # Calculate approximate upsampling factor: log2(input_size / feature_size)
-            # For 256 input and patch_size=14: log2(256/18) ? log2(14.2) ? 3.8, so use 4
-            head_upsampling = 4
-            logging.info(f"Setting head upsampling to {head_upsampling} for DINO encoder (patch_size={patch_size})")
+            head_upsampling = 2
+            logging.info(f"Setting head upsampling to {head_upsampling} for DINO encoder")
 
         # smp SegmentationHead does "if upsampling > 1".
         # Never pass None (or any non-int) here because it crashes with:
@@ -549,6 +537,7 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
         heads_config = struct_dict_copy.pop("heads_config", None)
         decoder_sharing = struct_dict_copy.pop("decoder_sharing", "shared")  # "shared" or "separate"
         task_out_channels = struct_dict_copy.pop("task_out_channels", None)  # Remove if present (not used by MultitaskUnet)
+        task3_activation = struct_dict_copy.pop("task3_activation", None)  # e.g. "tanh" for SDF/EDT regression
 
         classes = struct_dict_copy.pop("classes", 1)
 
@@ -558,16 +547,20 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
                 num_tasks = 1
             num_tasks = int(num_tasks)
 
+            # Resolve task3 activation: "tanh" bounds output to [-1, 1] for SDF targets
+            t3_act = None
+            if task3_activation and str(task3_activation).lower() not in ("none", "null"):
+                t3_act = str(task3_activation).lower()
+
             if decoder_sharing == "shared":
                 # All heads share decoder 0
                 heads_config = [
                     {"classes": classes, "decoder_idx": 0, "activation": None}
                 ]
                 if num_tasks >= 2:
-                    # FIX: Use None instead of "sigmoid" - loss function applies sigmoid internally
                     heads_config.append({"classes": 1, "decoder_idx": 0, "activation": None})
                 if num_tasks >= 3:
-                    heads_config.append({"classes": 1, "decoder_idx": 0, "activation": None})
+                    heads_config.append({"classes": 1, "decoder_idx": 0, "activation": t3_act})
             else:
                 # Each head has its own decoder
                 heads_config = [
@@ -576,7 +569,7 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
                 if num_tasks >= 2:
                     heads_config.append({"classes": 1, "decoder_idx": 1, "activation": None})
                 if num_tasks >= 3:
-                    heads_config.append({"classes": 1, "decoder_idx": 2, "activation": None})
+                    heads_config.append({"classes": 1, "decoder_idx": 2, "activation": t3_act})
 
         model = MultitaskUnet(heads_config=heads_config, **struct_dict_copy)
         logging.info(f"Sending the Multitask U-Net model to device {device_num}")
@@ -826,6 +819,13 @@ def create_model_from_file(
     model = create_model_on_device(device_for_model, model_dict["model_struc_dict"])
     logging.info("Loading in the saved weights.")
     state_dict = model_dict["model_state_dict"]
+
+    # Detect MeanTeacherModel checkpoint format: {'student': {...}, 'teacher': {...}, ...}
+    # Extract the student weights for inference.
+    if "student" in state_dict and isinstance(state_dict["student"], dict):
+        logging.info("Detected MeanTeacher checkpoint ? extracting student weights for inference.")
+        state_dict = state_dict["student"]
+
     # Checkpoint from single-GPU (or model.module.state_dict()) has no "module." prefix.
     # DataParallel-wrapped model expects keys with "module."; load into model.module so
     # keys match the checkpoint (avoids loading nothing and leaving model random).

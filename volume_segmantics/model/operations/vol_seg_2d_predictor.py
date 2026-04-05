@@ -336,11 +336,17 @@ class VolSeg2dPredictor:
                 if output_probs and task_name in additional_task_probs:
                     task_probs = np.concatenate(additional_task_probs[task_name])
                     task_probs = self._crop_2_5d_output(task_probs, pad_width)
-                    task_probs = utils.rotate_4d_array_to_axis(task_probs, axis)
+                    if task_probs.ndim == 4:
+                        task_probs = utils.rotate_4d_array_to_axis(task_probs, axis)
+                    else:
+                        task_probs = utils.rotate_array_to_axis(task_probs, axis)
 
                     task_logits = np.concatenate(additional_task_logits[task_name])
                     task_logits = self._crop_2_5d_output(task_logits, pad_width)
-                    task_logits = utils.rotate_4d_array_to_axis(task_logits, axis)
+                    if task_logits.ndim == 4:
+                        task_logits = utils.rotate_4d_array_to_axis(task_logits, axis)
+                    else:
+                        task_logits = utils.rotate_array_to_axis(task_logits, axis)
 
                 processed_additional_tasks[task_name] = {
                     'labels': task_labels,
@@ -358,36 +364,63 @@ class VolSeg2dPredictor:
             return np.max(probs, axis=-1).astype(np.float16)
         return probs
 
-    def _predict_3_ways_max_probs(self, data_vol):
+    def _predict_3_ways_max_probs(self, data_vol, z_smooth_sigma=None):
         shape_tup = data_vol.shape
         is_multitask = self._is_multitask_model()
         logging.info("Creating empty data volumes in RAM to combine 3 axis prediction.")
         label_container = np.empty((2, *shape_tup), dtype=np.uint8)
         prob_container = np.empty((2, *shape_tup), dtype=np.float16)
-        logging.info("Predicting YX slices:")
-        labels, probs, _ = self._predict_single_axis(data_vol, output_probs=True)
-        label_container[0] = labels
-        prob_container[0] = self._max_probs_per_voxel(probs)
-        task_outputs_axis0 = self.get_additional_task_outputs() if is_multitask else None
 
-        logging.info("Predicting ZX slices:")
-        labels, probs, _ = self._predict_single_axis(
-            data_vol, output_probs=True, axis=Axis.Y
-        )
-        label_container[1] = labels
-        prob_container[1] = self._max_probs_per_voxel(probs)
-        task_outputs_axis1 = self.get_additional_task_outputs() if is_multitask else None
+        # Axis predictions with optional per-axis Gaussian smoothing
+        axis_configs = [
+            (Axis.Z, 0, "Z (YX slices)"),
+            (Axis.Y, 1, "Y (ZX slices)"),
+            (Axis.X, 2, "X (ZY slices)"),
+        ]
 
-        logging.info("Merging XY and ZX volumes.")
-        self._merge_vols_in_mem(prob_container, label_container)
+        axis_probs = []  # store full 4D probs for each axis
+        axis_task_outputs = []
 
-        logging.info("Predicting ZY slices:")
-        labels, probs, _ = self._predict_single_axis(
-            data_vol, output_probs=True, axis=Axis.X
-        )
-        label_container[1] = labels
-        prob_container[1] = self._max_probs_per_voxel(probs)
-        task_outputs_axis2 = self.get_additional_task_outputs() if is_multitask else None
+        for axis_enum, spatial_ax, desc in axis_configs:
+            logging.info(f"Predicting {desc}:")
+            labels, probs, _ = self._predict_single_axis(
+                data_vol, output_probs=True, axis=axis_enum
+            )
+
+            # Apply per-axis Gaussian smoothing before reducing to max-prob
+            if z_smooth_sigma is not None and z_smooth_sigma > 0 and probs is not None:
+                from scipy.ndimage import gaussian_filter1d
+                num_classes = probs.shape[-1]
+                logging.info(
+                    f"[Z-smooth] Smoothing {num_classes} classes along {desc} "
+                    f"(spatial_axis={spatial_ax}, sigma={z_smooth_sigma})"
+                )
+                smoothed = np.empty_like(probs)
+                for c in range(num_classes):
+                    smoothed[..., c] = gaussian_filter1d(
+                        probs[..., c].astype(np.float32),
+                        sigma=z_smooth_sigma, axis=spatial_ax,
+                    )
+                labels = np.argmax(smoothed, axis=-1).astype(np.uint8)
+                probs = smoothed
+
+            task_outputs = self.get_additional_task_outputs() if is_multitask else None
+            axis_task_outputs.append(task_outputs)
+            axis_probs.append(probs)
+
+            # Merge progressively: first axis goes into slot 0, subsequent into slot 1
+            if axis_enum == Axis.Z:
+                label_container[0] = labels
+                prob_container[0] = self._max_probs_per_voxel(probs)
+            else:
+                label_container[1] = labels
+                prob_container[1] = self._max_probs_per_voxel(probs)
+                logging.info(f"Merging {desc} with accumulated volume.")
+                self._merge_vols_in_mem(prob_container, label_container)
+
+        task_outputs_axis0 = axis_task_outputs[0]
+        task_outputs_axis1 = axis_task_outputs[1]
+        task_outputs_axis2 = axis_task_outputs[2]
 
         logging.info("Merging max of XY and ZX volumes with ZY volume.")
         self._merge_vols_in_mem(prob_container, label_container)
@@ -548,16 +581,23 @@ class VolSeg2dPredictor:
         without rotations. Used for medium-quality entropy estimation where we want
         three independent axis-wise votes.
         """
+        clean_task_outputs = None
         for curr_axis in [Axis.Z, Axis.Y, Axis.X]:
             labels, _, _ = self._predict_single_axis(
                 data_vol, output_probs=False, axis=curr_axis
             )
+            if clean_task_outputs is None:
+                clean_task_outputs = getattr(self, '_last_additional_tasks', None)
             yield labels
+        # Restore the clean Z-axis task outputs
+        if clean_task_outputs is not None:
+            self._last_additional_tasks = clean_task_outputs
 
     # Alias for backward compatibility (entropy code may reference the old name)
     _predict_3_ways_generator = _predict_3_axis_generator
 
     def _predict_12_ways_generator(self, data_vol):
+        clean_task_outputs = None
         for curr_axis in [Axis.Z, Axis.Y, Axis.X]:
             rotation_axes = {
                 Axis.Z: (1, 2),
@@ -566,19 +606,32 @@ class VolSeg2dPredictor:
             }
             for k in range(4):
                 labels, probs, _ = self._predict_single_axis(np.ascontiguousarray(np.rot90(data_vol, k, axes=rotation_axes[curr_axis])), output_probs=False, axis=curr_axis)
+                if clean_task_outputs is None:
+                    clean_task_outputs = getattr(self, '_last_additional_tasks', None)
                 yield np.rot90(labels, -k, axes=rotation_axes[curr_axis])
+        # Restore the clean (first pass, Z-axis, no rotation) task outputs
+        if clean_task_outputs is not None:
+            self._last_additional_tasks = clean_task_outputs
 
     def _predict_Zonly_generator(self, data_vol):
+            # Capture multitask outputs from the first clean pass (k=0, no flip)
+            # so they aren't overwritten by subsequent rotated/flipped passes.
+            clean_task_outputs = None
             for k in range(4):
                 no_flip = np.ascontiguousarray(np.rot90(data_vol, k, axes=(1, 2)))
                 for flip_axis in range(-1, 3):
                     # No flips
                     if flip_axis == -1:
                         labels, probs, _ = self._predict_single_axis(data_vol=no_flip, output_probs=True, axis=Axis.Z)
+                        if clean_task_outputs is None:
+                            clean_task_outputs = getattr(self, '_last_additional_tasks', None)
                         yield np.rot90(labels, -k, axes=(1, 2)), np.rot90(probs, -k, axes=(1, 2))
                     else:
                         labels, probs, _ = self._predict_single_axis(data_vol=np.flip(no_flip, flip_axis), output_probs=True, axis=Axis.Z)
                         yield np.rot90(np.flip(labels, flip_axis), -k, axes=(1, 2)), np.rot90(np.flip(probs, flip_axis), -k, axes=(1, 2))
+            # Restore the clean (unrotated/unflipped) task outputs
+            if clean_task_outputs is not None:
+                self._last_additional_tasks = clean_task_outputs
 
 
     def _convert_labels_map_to_count(self, labels_vol):

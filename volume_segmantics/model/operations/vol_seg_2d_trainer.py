@@ -351,6 +351,7 @@ class VolSeg2dTrainer:
             task3_weight=getattr(settings, "task3_loss_weight", 1.0),
             use_cross_entropy=(settings.loss_criterion == "CrossEntropyLoss"),
             boundary_loss_type=getattr(settings, "boundary_loss_type", "bce"),
+            task3_loss_type=getattr(settings, "task3_loss_type", "bce"),
             num_classes=self.label_no,
         )
         logging.info(
@@ -453,7 +454,7 @@ class VolSeg2dTrainer:
             "BCELoss": lambda: nn.BCEWithLogitsLoss(),
             "CrossEntropyLoss": lambda: nn.CrossEntropyLoss(),
             "GeneralizedDiceLoss": lambda: GeneralizedDiceLoss(),
-            "TverskyLoss": lambda: TverskyLoss(self.label_no + 1),
+            "TverskyLoss": lambda: TverskyLoss(self.label_no),
             "BoundaryDoULoss": lambda: BoundaryDoULoss(),
             "BoundaryDoUDiceLoss": lambda: BoundaryDoUDiceLoss(alpha=0.5, beta=0.5),
             "BoundaryDoULossV2": lambda: BoundaryDoULossV2(),
@@ -826,7 +827,7 @@ class VolSeg2dTrainer:
             self.optimizer.zero_grad()
             output = self._ensure_tuple_output(self.model(inputs))[0]
 
-            if self.settings.loss_criterion == "CrossEntropyLoss":
+            if self.settings.loss_criterion in ("CrossEntropyLoss", "TverskyLoss"):
                 loss = self.loss_criterion(output, torch.argmax(targets, dim=1))
             else:
                 loss = self.loss_criterion(output, targets.float())
@@ -835,7 +836,7 @@ class VolSeg2dTrainer:
             self.optimizer.first_step(zero_grad=True)
 
             output = self._ensure_tuple_output(self.model(inputs))[0]
-            if self.settings.loss_criterion == "CrossEntropyLoss":
+            if self.settings.loss_criterion in ("CrossEntropyLoss", "TverskyLoss"):
                 loss = self.loss_criterion(output, torch.argmax(targets, dim=1))
             else:
                 loss = self.loss_criterion(output, targets.float())
@@ -846,7 +847,7 @@ class VolSeg2dTrainer:
             self.optimizer.zero_grad()
             output = self._ensure_tuple_output(self.model(inputs))[0]
 
-            if self.settings.loss_criterion == "CrossEntropyLoss":
+            if self.settings.loss_criterion in ("CrossEntropyLoss", "TverskyLoss"):
                 loss = self.loss_criterion(output, torch.argmax(targets, dim=1))
             else:
                 loss = self.loss_criterion(output, targets.float())
@@ -1146,6 +1147,15 @@ class VolSeg2dTrainer:
             loss_per_pixel = ce_loss_fn(seg_output, pseudo_labels_indices)  # (B, H, W)
             masked_loss_per_pixel = loss_per_pixel * mask.float()  # (B, H, W)
             loss = masked_loss_per_pixel.sum() / (mask.sum() + 1e-8)
+        elif self.settings.loss_criterion == "TverskyLoss":
+            # TverskyLoss expects class indices but doesn't support reduction='none',
+            # so mask the logits and targets then compute on masked data
+            pseudo_labels_indices = torch.argmax(masked_pseudo_labels_onehot, dim=1)
+            loss = self.loss_criterion(masked_seg_output, pseudo_labels_indices)
+
+            acceptance_rate = mask.sum().float() / mask.numel()
+            if acceptance_rate > 0:
+                loss = loss / acceptance_rate
         else:
             # For DiceLoss and other losses, compute loss on masked predictions/targets
             # Note: This is an approximation - ideally we'd compute Dice only on masked pixels
@@ -1198,7 +1208,7 @@ class VolSeg2dTrainer:
             else:
                 seg_target = targets
 
-            if self.settings.loss_criterion == "CrossEntropyLoss":
+            if self.settings.loss_criterion in ("CrossEntropyLoss", "TverskyLoss"):
                 loss = self.loss_criterion(seg_output, torch.argmax(seg_target, dim=1))
             else:
                 loss = self.loss_criterion(seg_output, seg_target.float())
