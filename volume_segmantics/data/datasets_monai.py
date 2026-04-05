@@ -44,6 +44,91 @@ import numpy as np
 import torch
 import logging
 
+# Register a TIFF-capable reader with MONAI so LoadImaged handles float32 TIFF.
+# MONAI's default PILReader doesn't support float TIFF; this uses imageio.
+if MONAI_AVAILABLE:
+    try:
+        from monai.data.image_reader import ImageReader
+        import imageio.v2 as imageio
+
+        class _ImageIOReader(ImageReader):
+            """MONAI-compatible reader that uses imageio for TIFF (incl. float32)."""
+
+            def verify_suffix(self, filename):
+                suffixes = (".tiff", ".tif", ".png", ".jpg", ".jpeg", ".bmp")
+                return str(filename).lower().endswith(suffixes)
+
+            def read(self, data, **kwargs):
+                if isinstance(data, (list, tuple)):
+                    return [imageio.imread(str(f)) for f in data]
+                return imageio.imread(str(data))
+
+            def _get_meta(self, arr):
+                """Build MONAI-compatible metadata for an image array."""
+                if arr.ndim == 2:
+                    return {"spatial_shape": arr.shape, "original_channel_dim": "no_channel"}
+                elif arr.ndim == 3 and arr.shape[2] in (1, 3, 4):
+                    return {"spatial_shape": arr.shape[:2], "original_channel_dim": 2}
+                elif arr.ndim == 3:
+                    return {"spatial_shape": arr.shape, "original_channel_dim": "no_channel"}
+                else:
+                    return {"spatial_shape": arr.shape, "original_channel_dim": "no_channel"}
+
+            def get_data(self, img):
+                if isinstance(img, list):
+                    arrs = [np.asarray(i, dtype=np.float32) for i in img]
+                    stacked = np.stack(arrs)
+                    return stacked, self._get_meta(arrs[0])
+                arr = np.asarray(img, dtype=np.float32)
+                return arr, self._get_meta(arr)
+
+        _IMAGEIO_READER = _ImageIOReader()
+    except Exception:
+        _IMAGEIO_READER = None
+else:
+    _IMAGEIO_READER = None
+
+
+class _PrepareTask3d:
+    """Custom transform to prepare task3 (continuous float) data for training.
+
+    Handles the channel dimension and resize for task3 data loaded via
+    the imageio reader, which produces plain numpy arrays rather than
+    MONAI MetaTensors.
+    """
+
+    def __init__(self, keys, spatial_size):
+        self.keys = keys
+        self.spatial_size = spatial_size
+
+    def __call__(self, data):
+        import torch.nn.functional as F
+
+        d = dict(data)
+        for key in self.keys:
+            if key not in d:
+                continue
+            arr = d[key]
+            if isinstance(arr, np.ndarray):
+                t = torch.from_numpy(arr.astype(np.float32))
+            else:
+                t = torch.as_tensor(arr, dtype=torch.float32)
+            # Ensure (C, H, W)
+            if t.ndim == 2:
+                t = t.unsqueeze(0)
+            elif t.ndim == 3 and t.shape[0] not in (1, 3, 4):
+                t = t.permute(2, 0, 1)
+            # Resize to target spatial size
+            if t.shape[1:] != tuple(self.spatial_size):
+                t = F.interpolate(
+                    t.unsqueeze(0),
+                    size=self.spatial_size,
+                    mode="bilinear",
+                    align_corners=False,
+                ).squeeze(0)
+            d[key] = t
+        return d
+
 
 class ImageNetNormalizationd(Transform):
     """Apply ImageNet mean/std normalization to images."""
@@ -170,23 +255,32 @@ def build_file_list(
         # Add task3 if provided
         if task3_dir is not None:
             # Task3 files use prefix "task3_{count}" while seg files use "seg{count}"
-            # Filename format: {prefix}_{axis}_stack_{index}.png
-            # Convert: seg0_x_stack_0.png -> task3_0_x_stack_0.png
+            # Convert: seg0_x_stack_000000.png -> task3_0_x_stack_000000.{png,tiff}
+            # Continuous labels (SDF, EDT) are saved as .tiff, so try both extensions
             seg_name = seg_path.name
-            task3_name = re.sub(r'^seg(\d+)', r'task3_\1', seg_name)
-            task3_path = task3_dir / task3_name
-            if task3_path.exists():
-                file_dict["task3"] = str(task3_path)
+            seg_stem = seg_path.stem
+            task3_stem = re.sub(r'^seg(\d+)', r'task3_\1', seg_stem)
+            task3_found = None
+            for ext in (".png", ".tiff", ".tif"):
+                candidate = task3_dir / f"{task3_stem}{ext}"
+                if candidate.exists():
+                    task3_found = candidate
+                    break
+            if task3_found is None:
+                # Try with original seg name (different extensions)
+                for ext in (".png", ".tiff", ".tif"):
+                    candidate = task3_dir / f"{seg_stem}{ext}"
+                    if candidate.exists():
+                        task3_found = candidate
+                        break
+            if task3_found is not None:
+                file_dict["task3"] = str(task3_found)
             else:
-                alt_task3_path = task3_dir / seg_name
-                if alt_task3_path.exists():
-                    file_dict["task3"] = str(alt_task3_path)
-                else:
-                    raise FileNotFoundError(
-                        f"Task3 file not found: {task3_path} or {alt_task3_path} "
-                        f"for segmentation file {seg_path.name}. "
-                        f"Expected task3 file with name: {task3_name} (or {seg_name})"
-                    )
+                raise FileNotFoundError(
+                    f"Task3 file not found for segmentation file {seg_path.name}. "
+                    f"Searched for {task3_stem}.{{png,tiff,tif}} and "
+                    f"{seg_stem}.{{png,tiff,tif}} in {task3_dir}"
+                )
         
         all_files.append(file_dict)
     
@@ -240,27 +334,35 @@ def get_monai_train_transforms(
         keys.append("boundary")
     if num_tasks >= 3:
         keys.append("task3")
-    
+
+    has_task3 = "task3" in keys
+    base_keys = [k for k in keys if k != "task3"]
     transforms = [
-        LoadImaged(keys=keys),
-        EnsureChannelFirstd(keys=keys),
+        LoadImaged(keys=base_keys),
     ]
-    
-    resize_modes = ["bilinear"] + ["nearest"] * (len(keys) - 1)
+    if has_task3 and _IMAGEIO_READER is not None:
+        transforms.append(LoadImaged(keys=["task3"], reader=_IMAGEIO_READER))
+    elif has_task3:
+        transforms.append(LoadImaged(keys=["task3"]))
+
+    transforms.append(EnsureChannelFirstd(keys=base_keys))
+    resize_modes = ["bilinear"] + ["nearest"] * (len(base_keys) - 1)
     transforms.append(
         Resized(
-            keys=keys,
+            keys=base_keys,
             spatial_size=(img_size, img_size),
             mode=tuple(resize_modes),
         )
     )
-    
+    if has_task3:
+        transforms.append(_PrepareTask3d(keys=["task3"], spatial_size=(img_size, img_size)))
+
     if use_imagenet_norm:
         transforms.append(ScaleIntensityd(keys=["img"]))
         transforms.append(ImageNetNormalizationd(keys=["img"]))
     else:
         transforms.append(ScaleIntensityd(keys=["img"]))
-    
+
     # Augmentations
     transforms.extend([
         RandFlipd(keys=keys, prob=0.5, spatial_axis=0),  # Vertical flip
@@ -269,6 +371,11 @@ def get_monai_train_transforms(
     ])
     
     if Rand2DElasticD is not None:
+        # Interpolation modes: bilinear for img, nearest for discrete labels,
+        # bilinear for continuous task3 (SDF/EDT) to avoid discontinuities
+        elastic_modes = ["bilinear"]  # img
+        for k in keys[1:]:
+            elastic_modes.append("bilinear" if k == "task3" else "nearest")
         transforms.append(
             Rand2DElasticD(
                 keys=keys,
@@ -276,13 +383,13 @@ def get_monai_train_transforms(
                 magnitude_range=(1, 2),
                 prob=0.5,
                 spatial_size=(img_size, img_size),
-                mode=tuple(["bilinear"] + ["nearest"] * (len(keys) - 1)),
+                mode=tuple(elastic_modes),
                 padding_mode="zeros",
             )
         )
-    
+
     transforms.append(ToTensord(keys=keys))
-    
+
     return Compose(transforms)
 
 
@@ -310,29 +417,37 @@ def get_monai_val_transforms(
         keys.append("boundary")
     if num_tasks >= 3:
         keys.append("task3")
-    
+
+    has_task3 = "task3" in keys
+    base_keys = [k for k in keys if k != "task3"]
     transforms = [
-        LoadImaged(keys=keys),
-        EnsureChannelFirstd(keys=keys),
+        LoadImaged(keys=base_keys),
     ]
-    
-    resize_modes = ["bilinear"] + ["nearest"] * (len(keys) - 1)
+    if has_task3 and _IMAGEIO_READER is not None:
+        transforms.append(LoadImaged(keys=["task3"], reader=_IMAGEIO_READER))
+    elif has_task3:
+        transforms.append(LoadImaged(keys=["task3"]))
+
+    transforms.append(EnsureChannelFirstd(keys=base_keys))
+    resize_modes = ["bilinear"] + ["nearest"] * (len(base_keys) - 1)
     transforms.append(
         Resized(
-            keys=keys,
+            keys=base_keys,
             spatial_size=(img_size, img_size),
             mode=tuple(resize_modes),
         )
     )
-    
+    if has_task3:
+        transforms.append(_PrepareTask3d(keys=["task3"], spatial_size=(img_size, img_size)))
+
     if use_imagenet_norm:
         transforms.append(ScaleIntensityd(keys=["img"]))
         transforms.append(ImageNetNormalizationd(keys=["img"]))
     else:
         transforms.append(ScaleIntensityd(keys=["img"]))
-    
+
     transforms.append(ToTensord(keys=keys))
-    
+
     return Compose(transforms)
 
 

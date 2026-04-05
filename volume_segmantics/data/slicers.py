@@ -82,7 +82,25 @@ class TrainingDataSlicer(BaseDataManager):
             self.codes = []
             logging.info("No labels provided - slicing unlabeled data only")
 
+    def _is_continuous_label(self) -> bool:
+        """Check if this label type contains continuous (regression) data like SDF/EDT."""
+        return self.label_type == "task3" and self.seg_vol.dtype in (
+            np.float32, np.float64, np.float16,
+        )
+
     def _preprocess_labels(self):
+        # Continuous regression labels (SDF, EDT) should be float
+        if self._is_continuous_label():
+            logging.info(
+                f"Task3 labels are continuous float (dtype={self.seg_vol.dtype}, "
+                f"range=[{self.seg_vol.min():.4f}, {self.seg_vol.max():.4f}]). "
+                f"Skipping class-based preprocessing."
+            )
+            self.num_seg_classes = 0
+            self.multilabel = False
+            self.codes = []
+            return
+
         seg_classes = np.unique(self.seg_vol)
         self.num_seg_classes = len(seg_classes)
         if self.num_seg_classes > 2:
@@ -243,6 +261,15 @@ class TrainingDataSlicer(BaseDataManager):
             label (bool): Whether to convert values >1 to 1 for binary segmentation.
             is_multi_channel (bool): Whether the data has multiple channels (2.5D).
         """
+        # Continuous float labels (SDF, EDT) must be saved as float TIFF
+        if label and self._is_continuous_label():
+            data = data.astype(np.float32)
+            io.imsave(f"{path}.tiff", data, check_contrast=False)
+            return
+
+        if label and not self.multilabel:
+            data[data > 1] = 1
+
         if is_multi_channel:
             # Multi-channel data is already normalized to 0-1, convert to uint8
             if data.dtype != np.uint8:
@@ -261,9 +288,6 @@ class TrainingDataSlicer(BaseDataManager):
             if data.dtype != np.uint8:
                 data = img_as_ubyte(data)
             io.imsave(f"{path}.png", data, check_contrast=False)
-
-        if label and not self.multilabel:
-            data[data > 1] = 1
 
     def _delete_image_dir(self, im_dir_path):
         if im_dir_path.exists():
