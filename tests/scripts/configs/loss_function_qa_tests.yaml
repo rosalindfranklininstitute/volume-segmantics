@@ -1,0 +1,281 @@
+# Loss Function Quality Assurance Tests
+#
+# Longer training runs (8 frozen + 5 unfrozen epochs) at full resolution
+# (512x512) with ImageNet pretrained weights to evaluate whether each
+# loss function produces meaningful segmentation quality.
+# IEach loss trains then predicts so output
+# can be visually inspected.
+#
+# Run:
+#   python tests/scripts/run_smoke.py qa_losses
+#
+# Dry-run:
+#   python tests/scripts/run_smoke.py qa_losses --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/loss_function_qa
+
+global_overrides:
+  train:
+    image_size: 512
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 5
+    patience: 4
+    starting_lr: 0.00005
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet
+      dropout_rate: 0.0
+  predict:
+    quality: medium
+    output_probs: true
+    output_entropy: false
+    prediction_axis: Z
+
+tests:
+  # ==================================================================
+  # PRIMARY LOSSES (most commonly used)
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 1. CombinedCEDiceLoss (default, recommended)
+  # ------------------------------------------------------------------
+  - name: qa_loss_combined_ce_dice
+    type: train
+    model_key: qa_combined_ce_dice
+    overrides:
+      train:
+        model_output_fn: qa_loss_combined_ce_dice
+        loss_criterion: CombinedCEDiceLoss
+        ce_weight: 0.2
+        dice_weight: 0.8
+        dice_weight_mode: inverse_sqrt_freq
+
+  - name: qa_predict_combined_ce_dice
+    type: predict
+    model_key: qa_combined_ce_dice
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 2. DiceLoss
+  # ------------------------------------------------------------------
+  - name: qa_loss_dice
+    type: train
+    model_key: qa_dice
+    overrides:
+      train:
+        model_output_fn: qa_loss_dice
+        loss_criterion: DiceLoss
+
+  - name: qa_predict_dice
+    type: predict
+    model_key: qa_dice
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 3. CrossEntropyLoss
+  # ------------------------------------------------------------------
+  - name: qa_loss_cross_entropy
+    type: train
+    model_key: qa_ce
+    overrides:
+      train:
+        model_output_fn: qa_loss_cross_entropy
+        loss_criterion: CrossEntropyLoss
+
+  - name: qa_predict_cross_entropy
+    type: predict
+    model_key: qa_ce
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 4. ClassWeightedDiceLoss
+  # ------------------------------------------------------------------
+  - name: qa_loss_class_weighted_dice
+    type: train
+    model_key: qa_cw_dice
+    overrides:
+      train:
+        model_output_fn: qa_loss_class_weighted_dice
+        loss_criterion: ClassWeightedDiceLoss
+        dice_weight_mode: inverse_sqrt_freq
+        exclude_background_from_dice: false
+
+  - name: qa_predict_class_weighted_dice
+    type: predict
+    model_key: qa_cw_dice
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 5. TverskyLoss (alpha=0.3, beta=0.7 — penalises FN more)
+  # ------------------------------------------------------------------
+  - name: qa_loss_tversky
+    type: train
+    model_key: qa_tversky
+    overrides:
+      train:
+        model_output_fn: qa_loss_tversky
+        loss_criterion: TverskyLoss
+
+  - name: qa_predict_tversky
+    type: predict
+    model_key: qa_tversky
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ==================================================================
+  # BOUNDARY-AWARE LOSSES
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 6. BoundaryDoULoss
+  # ------------------------------------------------------------------
+  - name: qa_loss_boundary_dou
+    type: train
+    model_key: qa_bdou
+    overrides:
+      train:
+        model_output_fn: qa_loss_boundary_dou
+        loss_criterion: BoundaryDoULoss
+
+  - name: qa_predict_boundary_dou
+    type: predict
+    model_key: qa_bdou
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 7. BoundaryDoUDiceLoss (BoundaryDoU + Dice combination)
+  # ------------------------------------------------------------------
+  - name: qa_loss_boundary_dou_dice
+    type: train
+    model_key: qa_bdou_dice
+    overrides:
+      train:
+        model_output_fn: qa_loss_boundary_dou_dice
+        loss_criterion: BoundaryDoUDiceLoss
+
+  - name: qa_predict_boundary_dou_dice
+    type: predict
+    model_key: qa_bdou_dice
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ==================================================================
+  # OTHER LOSSES
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 8. BCELoss
+  # ------------------------------------------------------------------
+  - name: qa_loss_bce
+    type: train
+    model_key: qa_bce
+    overrides:
+      train:
+        model_output_fn: qa_loss_bce
+        loss_criterion: BCELoss
+
+  - name: qa_predict_bce
+    type: predict
+    model_key: qa_bce
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 9. GeneralizedDiceLoss
+  # ------------------------------------------------------------------
+  - name: qa_loss_generalized_dice
+    type: train
+    model_key: qa_gen_dice
+    overrides:
+      train:
+        model_output_fn: qa_loss_generalized_dice
+        loss_criterion: GeneralizedDiceLoss
+
+  - name: qa_predict_generalized_dice
+    type: predict
+    model_key: qa_gen_dice
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 10. BCEDiceLoss (legacy)
+  # ------------------------------------------------------------------
+  - name: qa_loss_bce_dice_legacy
+    type: train
+    model_key: qa_bce_dice
+    overrides:
+      train:
+        model_output_fn: qa_loss_bce_dice_legacy
+        loss_criterion: BCEDiceLoss
+        alpha: 0.5
+        beta: 0.5
+
+  - name: qa_predict_bce_dice_legacy
+    type: predict
+    model_key: qa_bce_dice
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ==================================================================
+  # MULTI-AXIS AND UNCERTAINTY TESTS
+  # (using CombinedCEDiceLoss model as representative)
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 11. High quality (12-way) prediction
+  # ------------------------------------------------------------------
+  - name: qa_predict_ce_dice_high
+    type: predict
+    model_key: qa_combined_ce_dice
+    overrides:
+      predict:
+        quality: high
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 12. z_only with entropy + probs
+  # ------------------------------------------------------------------
+  - name: qa_predict_ce_dice_entropy
+    type: predict
+    model_key: qa_combined_ce_dice
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+        - "*_entropy.*"

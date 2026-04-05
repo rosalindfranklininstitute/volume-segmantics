@@ -1,0 +1,197 @@
+# Multi-task Smoke Tests
+#
+# Tests multi-task learning (segmentation + boundary) with different
+# decoder sharing strategies and boundary loss types.
+#
+# Boundary labels are derived automatically from the segmentation labels
+# via the derive_boundary step.
+#
+# Run:
+#   python tests/scripts/run_smoke.py multitask
+#   python tests/scripts/run_smoke.py multitask --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/multitask_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    use_multitask: true
+    num_tasks: 2
+    seg_loss_weight: 1.0
+    boundary_loss_weight: 1.0
+    model:
+      type: Multitask_Unet
+      encoder_name: resnet34
+      encoder_weights: null
+
+tests:
+  # 0. Derive boundary labels from segmentation
+  - name: derive_boundary
+    type: derive_boundary
+    input: "${path:label}"
+    output_key: boundary_labels
+    output_filename: boundary_labels.h5
+    width: 2
+    mode: 3d
+
+  # 1. Shared decoder + BCE boundary loss
+  - name: multitask_shared_bce
+    type: train
+    model_key: mt_shared_bce
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: mt_shared_bce
+        decoder_sharing: shared
+        boundary_loss_type: bce
+
+  # 2. Separate decoder + Dice boundary loss
+  - name: multitask_separate_dice
+    type: train
+    model_key: mt_separate_dice
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: mt_separate_dice
+        decoder_sharing: separate
+        boundary_loss_type: dice
+
+  # 3. Shared decoder + BCE+Dice boundary loss
+  - name: multitask_shared_bce_dice
+    type: train
+    model_key: mt_shared_bce_dice
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: mt_shared_bce_dice
+        decoder_sharing: shared
+        boundary_loss_type: bce_dice
+
+  # 4. Predict 2-task low quality
+  - name: predict_multitask_2task_low
+    type: predict
+    model_key: mt_shared_bce
+    overrides:
+      predict:
+        quality: low
+
+  # 4b. Predict 2-task medium quality with probs
+  - name: predict_multitask_2task_medium
+    type: predict
+    model_key: mt_shared_bce
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+
+  # 4c. Predict 2-task z_only with entropy
+  - name: predict_multitask_2task_entropy
+    type: predict
+    model_key: mt_shared_bce
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+
+  # ==================================================================
+  # 3-TASK MODELS (seg + boundary + distance/SDF)
+  # ==================================================================
+
+  # 5. Derive SDF distance labels
+  - name: derive_sdf
+    type: derive_distance
+    input: "${path:label}"
+    output_key: sdf_labels
+    output_filename: sdf_labels.h5
+    dist_type: sdf
+    mode: 3d
+    normalize: true
+    clip_max: 10.0
+
+  # 6. Shared decoder, 3 tasks with SDF regression
+  - name: multitask_shared_3task_sdf
+    type: train
+    model_key: mt_shared_3task_sdf
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+      - "--task3"
+      - "${artifact:sdf_labels}"
+    overrides:
+      train:
+        model_output_fn: mt_shared_3task_sdf
+        num_tasks: 3
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        task3_loss_weight: 10.0
+        task3_loss_type: regression
+        task3_activation: null
+
+  # 7. Derive EDT distance labels
+  - name: derive_edt
+    type: derive_distance
+    input: "${path:label}"
+    output_key: edt_labels
+    output_filename: edt_labels.h5
+    dist_type: edt
+    mode: 3d
+    normalize: true
+
+  # 8. Separate decoders, 3 tasks with EDT
+  - name: multitask_separate_3task_edt
+    type: train
+    model_key: mt_separate_3task_edt
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+      - "--task3"
+      - "${artifact:edt_labels}"
+    overrides:
+      train:
+        model_output_fn: mt_separate_3task_edt
+        num_tasks: 3
+        decoder_sharing: separate
+        boundary_loss_type: bce
+        task3_loss_weight: 10.0
+        task3_loss_type: regression
+        task3_activation: null
+
+  # 9. Predict 3-task low quality
+  - name: predict_multitask_3task_low
+    type: predict
+    model_key: mt_shared_3task_sdf
+    overrides:
+      predict:
+        quality: low
+
+  # 9b. Predict 3-task medium quality with probs
+  - name: predict_multitask_3task_medium
+    type: predict
+    model_key: mt_shared_3task_sdf
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true

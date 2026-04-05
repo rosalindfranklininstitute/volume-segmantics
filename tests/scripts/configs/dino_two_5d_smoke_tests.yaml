@@ -1,0 +1,98 @@
+# DINO Encoder 2.5D Slicing Smoke Tests
+#
+# Tests 2.5D multi-slice training and prediction with DINOv2 encoders.
+#
+# Run:
+#   python tests/scripts/run_smoke.py dino_2.5d
+#   python tests/scripts/run_smoke.py dino_2.5d --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/dino_two_5d_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    use_2_5d_slicing: true
+    encoder_lr_multiplier: 0.1
+    model:
+      type: U_Net
+      encoder_name: dinov2_vits14
+      encoder_weights: dinov2
+      encoder_depth: 4
+  predict:
+    quality: low
+    prediction_axis: Z
+    use_sliding_window: true
+    sw_roi_size: [512, 512]
+    sw_overlap: 0.25
+    sw_mode: gaussian
+
+tests:
+  # 1. 3-slice 2.5D with DINO-S
+  - name: dino_s_2_5d_3slice
+    type: train
+    model_key: dino_s_3slice
+    overrides:
+      train:
+        model_output_fn: dino_s_2_5d_3slice
+        num_slices: 3
+        slice_file_format: png
+        skip_border_slices: false
+
+  # 2. Predict 3-slice
+  - name: predict_dino_s_3slice
+    type: predict
+    model_key: dino_s_3slice
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 3
+        quality: low
+
+  # 3. Predict 3-slice medium
+  - name: predict_dino_s_3slice_medium
+    type: predict
+    model_key: dino_s_3slice
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 3
+        quality: medium
+        output_probs: true
+
+  # 4. 5-slice 2.5D with DINO-S
+  - name: dino_s_2_5d_5slice
+    type: train
+    model_key: dino_s_5slice
+    overrides:
+      train:
+        model_output_fn: dino_s_2_5d_5slice
+        num_slices: 5
+        slice_file_format: tiff
+        skip_border_slices: false
+
+  # 5. Predict 5-slice
+  - name: predict_dino_s_5slice
+    type: predict
+    model_key: dino_s_5slice
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 5
+        quality: low

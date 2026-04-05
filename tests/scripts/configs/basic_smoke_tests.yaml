@@ -1,0 +1,86 @@
+# Basic Smoke Tests
+#
+# Trains a minimal U_Net model with default settings, then predicts.
+# Validates the core train -> predict pipeline end-to-end.
+#
+# Run:
+#   python tests/scripts/run_smoke.py basic
+#   python tests/scripts/run_smoke.py basic --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/basic_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: low
+    output_probs: false
+    output_entropy: false
+    prediction_axis: Z
+
+tests:
+  # 1. Basic train
+  - name: train_basic
+    type: train
+    model_key: basic_model
+    overrides:
+      train:
+        model_output_fn: basic_smoke
+
+  # 2. Predict low quality (single axis)
+  - name: predict_basic_low
+    type: predict
+    model_key: basic_model
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # 3. Predict medium quality (3-axis) with probs
+  - name: predict_basic_medium
+    type: predict
+    model_key: basic_model
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # 4. Predict z_only with entropy
+  - name: predict_basic_entropy
+    type: predict
+    model_key: basic_model
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+        - "*_entropy.*"

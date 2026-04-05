@@ -1,0 +1,117 @@
+# 2.5D Slicing Smoke Tests
+#
+# Tests 2.5D multi-slice training and prediction with different
+# configurations: slice counts, file formats, and border skipping.
+#
+# Run:
+#   python tests/scripts/run_smoke.py 2.5d
+#   python tests/scripts/run_smoke.py 2.5d --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/two_5d_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    use_2_5d_slicing: true
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: low
+    prediction_axis: Z
+
+tests:
+  # 1. 3-slice 2.5D with PNG format
+  - name: train_2_5d_3slice_png
+    type: train
+    model_key: model_3slice_png
+    overrides:
+      train:
+        model_output_fn: 2_5d_3slice_png
+        num_slices: 3
+        slice_file_format: png
+        skip_border_slices: false
+
+  # 2. Predict 3-slice low quality
+  - name: predict_2_5d_3slice_low
+    type: predict
+    model_key: model_3slice_png
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 3
+        quality: low
+
+  # 2b. Predict 3-slice medium quality with probs
+  - name: predict_2_5d_3slice_medium
+    type: predict
+    model_key: model_3slice_png
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 3
+        quality: medium
+        output_probs: true
+
+  # 2c. Predict 3-slice z_only with entropy
+  - name: predict_2_5d_3slice_entropy
+    type: predict
+    model_key: model_3slice_png
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 3
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+
+  # 3. 5-slice 2.5D with TIFF format
+  - name: train_2_5d_5slice_tiff
+    type: train
+    model_key: model_5slice_tiff
+    overrides:
+      train:
+        model_output_fn: 2_5d_5slice_tiff
+        num_slices: 5
+        slice_file_format: tiff
+        skip_border_slices: false
+
+  # 4. 3-slice with skip_border_slices
+  - name: train_2_5d_3slice_skip_border
+    type: train
+    model_key: model_3slice_skip
+    overrides:
+      train:
+        model_output_fn: 2_5d_3slice_skip_border
+        num_slices: 3
+        slice_file_format: png
+        skip_border_slices: true
+
+  # 5. 7-slice 2.5D
+  - name: train_2_5d_7slice
+    type: train
+    model_key: model_7slice
+    overrides:
+      train:
+        model_output_fn: 2_5d_7slice
+        num_slices: 7
+        slice_file_format: tiff
+        skip_border_slices: false

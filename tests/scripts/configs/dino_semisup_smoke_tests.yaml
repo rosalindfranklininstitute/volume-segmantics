@@ -1,0 +1,106 @@
+# DINO Encoder Semi-supervised Smoke Tests
+#
+# Tests Mean Teacher and pseudo-labeling with DINOv2 encoders.
+#
+# Run:
+#   python tests/scripts/run_smoke.py dino_semisup
+#   python tests/scripts/run_smoke.py dino_semisup --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+  unlabeled:
+    - training_data/vessels_256cube_DATA.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/dino_semisup_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    encoder_lr_multiplier: 0.1
+    model:
+      type: U_Net
+      encoder_name: dinov2_vits14
+      encoder_weights: dinov2
+      encoder_depth: 4
+  predict:
+    quality: low
+    prediction_axis: Z
+    use_sliding_window: true
+    sw_roi_size: [512, 512]
+    sw_overlap: 0.25
+    sw_mode: gaussian
+
+tests:
+  # 1. Slice unlabeled data
+  - name: slice_unlabeled_pool
+    type: unlabeled_slicer
+    output_key: unlabeled_slices
+    output_dir: unlabeled_pool
+
+  # 2. DINO-S Mean Teacher
+  - name: dino_s_mean_teacher
+    type: train
+    model_key: dino_s_mt
+    args:
+      - "--unlabeled_data_dir"
+      - "${artifact:unlabeled_slices}"
+    overrides:
+      train:
+        model_output_fn: dino_s_mean_teacher
+        use_semi_supervised: true
+        use_pseudo_labeling: false
+        ema_decay: 0.99
+        consistency_weight: 0.1
+        rampup_start: 0
+        rampup_end: 100
+
+  # 3. DINO-S Mean Teacher + Pseudo-labeling
+  - name: dino_s_mt_pl
+    type: train
+    model_key: dino_s_mt_pl
+    args:
+      - "--unlabeled_data_dir"
+      - "${artifact:unlabeled_slices}"
+    overrides:
+      train:
+        model_output_fn: dino_s_mt_pl
+        use_semi_supervised: true
+        use_pseudo_labeling: true
+        ema_decay: 0.99
+        consistency_weight: 0.1
+        pseudo_label_confidence_threshold: 0.95
+        pseudo_label_use_teacher: true
+        pseudo_label_weight: 0.3
+        pseudo_label_threshold_schedule: linear
+
+  # 4. Predict
+  - name: predict_dino_s_mt_pl
+    type: predict
+    model_key: dino_s_mt_pl
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # 5. Predict medium
+  - name: predict_dino_s_mt_pl_medium
+    type: predict
+    model_key: dino_s_mt_pl
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
