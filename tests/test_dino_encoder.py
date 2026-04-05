@@ -146,15 +146,21 @@ def test_dino_encoder_v2_forward_output_shapes_and_selected_layers(monkeypatch):
     x = torch.randn(2, 3, 15, 15)  # triggers padding/cropping path
     feats = enc(x)
     assert isinstance(feats, list)
-    assert len(feats) == 4
+    assert len(feats) == 5  # stem + depth stages
 
-    # For patch_size=14: floor(15/14) == 1
-    expected_spatial = 1
-    for idx, f in enumerate(feats):
-        assert f.shape[0] == 2
-        assert f.shape[2] == expected_spatial
-        assert f.shape[3] == expected_spatial
-        assert f.shape[1] == enc.out_channels[idx]
+    # First feature is the stem (original input passed through)
+    assert feats[0].shape == x.shape
+
+    # For patch_size=14: floor(15/14) == 1 (native patch-grid size)
+    native_spatial = 1
+    for idx in range(1, len(feats)):
+        stage_idx = idx - 1
+        factor = 2 ** (enc.depth - 1 - stage_idx)
+        expected_spatial = native_spatial * factor
+        assert feats[idx].shape[0] == 2
+        assert feats[idx].shape[2] == expected_spatial
+        assert feats[idx].shape[3] == expected_spatial
+        assert feats[idx].shape[1] == enc.out_channels[idx]
 
 
 def test_dino_encoder_input_channel_adaptation_grayscale(monkeypatch):
@@ -169,10 +175,11 @@ def test_dino_encoder_input_channel_adaptation_grayscale(monkeypatch):
     )
     assert enc.dino_model.patch_embed.proj.in_channels == 1
 
-    x = torch.randn(1, 1, 14, 14)
+    x = torch.randn(1, 1, 28, 28)  # must be > patch_size for reflect padding
     feats = enc(x)
-    assert len(feats) == 2
-    assert feats[0].shape[1] == enc.out_channels[0]
+    assert len(feats) == 3  # stem + depth stages
+    for i, f in enumerate(feats):
+        assert f.shape[1] == enc.out_channels[i]
 
 
 def test_dino_encoder_input_channel_adaptation_multi_channel(monkeypatch):
@@ -187,10 +194,11 @@ def test_dino_encoder_input_channel_adaptation_multi_channel(monkeypatch):
     )
     assert enc.dino_model.patch_embed.proj.in_channels == 5
 
-    x = torch.randn(1, 5, 14, 14)
+    x = torch.randn(1, 5, 28, 28)  # must be > patch_size for reflect padding
     feats = enc(x)
-    assert len(feats) == 2
-    assert feats[0].shape[1] == enc.out_channels[0]
+    assert len(feats) == 3  # stem + depth stages
+    for i, f in enumerate(feats):
+        assert f.shape[1] == enc.out_channels[i]
 
 
 def test_dino_encoder_v3_forward_and_token_padding(monkeypatch):
@@ -216,8 +224,10 @@ def test_dino_encoder_v3_forward_and_token_padding(monkeypatch):
     )
     x = torch.randn(2, 3, 32, 32)  # expected 2x2 patches => 4 tokens (but dummy returns 3)
     feats = enc(x)
-    assert len(feats) == 3
-    assert feats[0].shape[2:] == (2, 2) or feats[0].shape[2:] == (2, 2)
-    for i, f in enumerate(feats):
-        assert f.shape[1] == enc.out_channels[i]
+    assert len(feats) == 4  # stem + depth stages
+    assert feats[0].shape == x.shape  # stem
+    # Last stage has native patch-grid resolution (2x2 for 32/16)
+    assert feats[-1].shape[2:] == (2, 2)
+    for i in range(1, len(feats)):
+        assert feats[i].shape[1] == enc.out_channels[i]
 
