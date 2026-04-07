@@ -29,7 +29,7 @@ PREDICTION_SETTINGS_FN = "2d_model_predict_settings.yaml"
 
 TQDM_BAR_FORMAT = "{l_bar}{bar: 30}{r_bar}{bar: -30b}"  # tqdm progress bar format
 
-OUTPUT_FORMAT = "tif" # tif or hdf or mrc
+OUTPUT_FORMAT = "tif" # tif or hdf
 HDF5_COMPRESSION = "gzip"
 
 BIG_CUDA_THRESHOLD = 16 # GPU Memory (GB), above this value batch size is increased

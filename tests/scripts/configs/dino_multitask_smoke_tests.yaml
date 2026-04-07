@@ -1,0 +1,203 @@
+# DINO Encoder Multi-task Smoke Tests
+#
+# Tests multi-task learning with DINOv2 encoders. Uses encoder_depth=4
+# as recommended for DINO models. Tests both the small (vits14) and
+# base (vitb14) variants.
+#
+# NOTE: These tests download DINOv2 weights from torch.hub on first run.
+#
+# Run:
+#   python tests/scripts/run_smoke.py dino_multitask
+#   python tests/scripts/run_smoke.py dino_multitask --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/dino_multitask_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    encoder_lr_multiplier: 0.1
+    model:
+      encoder_weights: dinov2
+      encoder_depth: 4
+  predict:
+    quality: low
+    prediction_axis: Z
+    use_sliding_window: true
+    sw_roi_size: [512, 512]
+    sw_overlap: 0.25
+    sw_mode: gaussian
+
+tests:
+  # ==================================================================
+  # Derive boundary and SDF labels
+  # ==================================================================
+  - name: derive_boundary
+    type: derive_boundary
+    input: "${path:label}"
+    output_key: boundary_labels
+    output_filename: boundary_labels.h5
+    width: 1
+    mode: 3d
+
+  - name: derive_sdf
+    type: derive_distance
+    input: "${path:label}"
+    output_key: sdf_labels
+    output_filename: sdf_labels.h5
+    dist_type: sdf
+    mode: 3d
+    normalize: true
+    clip_max: 10.0
+
+  # ==================================================================
+  # DINOv2 ViT-S/14 (Small, 21M params)
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 1. Single-task segmentation with DINO-S
+  # ------------------------------------------------------------------
+  - name: dino_s_single_task
+    type: train
+    model_key: dino_s_single
+    overrides:
+      train:
+        model_output_fn: dino_s_single_task
+        use_multitask: false
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          type: U_Net
+          encoder_name: dinov2_vits14
+
+  # ------------------------------------------------------------------
+  # 2. 2-task with DINO-S (seg + boundary)
+  # ------------------------------------------------------------------
+  - name: dino_s_2task_shared
+    type: train
+    model_key: dino_s_2task
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: dino_s_2task_shared
+        use_multitask: true
+        num_tasks: 2
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          type: Multitask_Unet
+          encoder_name: dinov2_vits14
+
+  # ------------------------------------------------------------------
+  # 3. 3-task with DINO-S (seg + boundary + SDF)
+  # ------------------------------------------------------------------
+  - name: dino_s_3task_sdf
+    type: train
+    model_key: dino_s_3task
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+      - "--task3"
+      - "${artifact:sdf_labels}"
+    overrides:
+      train:
+        model_output_fn: dino_s_3task_sdf
+        use_multitask: true
+        num_tasks: 3
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        task3_loss_weight: 10.0
+        task3_loss_type: regression
+        task3_activation: null
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          type: Multitask_Unet
+          encoder_name: dinov2_vits14
+
+  # ------------------------------------------------------------------
+  # 4. Predict with DINO-S 2-task model
+  # ------------------------------------------------------------------
+  - name: dino_s_predict_2task
+    type: predict
+    model_key: dino_s_2task
+    overrides:
+      predict:
+        quality: low
+
+  # ==================================================================
+  # DINOv2 ViT-B/14 (Base, 86M params)
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 5. Single-task segmentation with DINO-B
+  # ------------------------------------------------------------------
+  - name: dino_b_single_task
+    type: train
+    model_key: dino_b_single
+    overrides:
+      train:
+        model_output_fn: dino_b_single_task
+        use_multitask: false
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          type: U_Net
+          encoder_name: dinov2_vitb14
+
+  # ------------------------------------------------------------------
+  # 6. 2-task with DINO-B (seg + boundary), separate decoders
+  # ------------------------------------------------------------------
+  - name: dino_b_2task_separate
+    type: train
+    model_key: dino_b_2task
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: dino_b_2task_separate
+        use_multitask: true
+        num_tasks: 2
+        decoder_sharing: separate
+        boundary_loss_type: bce
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          type: Multitask_Unet
+          encoder_name: dinov2_vitb14
+
+  # ------------------------------------------------------------------
+  # 7. Predict with DINO-B 2-task model
+  # ------------------------------------------------------------------
+  - name: dino_b_predict_2task
+    type: predict
+    model_key: dino_b_2task
+    overrides:
+      predict:
+        quality: low
+
+  # ------------------------------------------------------------------
+  # 8. Predict with DINO-B medium quality
+  # ------------------------------------------------------------------
+  - name: dino_b_predict_medium
+    type: predict
+    model_key: dino_b_2task
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true

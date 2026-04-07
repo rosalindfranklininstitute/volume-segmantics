@@ -1,0 +1,227 @@
+# Semi-supervised Quality Assurance Tests
+#
+# Longer training runs (8 frozen + 5 unfrozen epochs) at full resolution
+# (512x512) to verify that semi-supervised methods (Mean Teacher,
+# pseudo-labeling) produce improved segmentation quality.
+# 
+#
+# Run:
+#   python tests/scripts/run_smoke.py qa_semisup
+#
+# Dry-run:
+#   python tests/scripts/run_smoke.py qa_semisup --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+  unlabeled:
+    - training_data/vessels_256cube_DATA.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/semisup_qa
+
+global_overrides:
+  train:
+    image_size: 512
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 5
+    patience: 4
+    starting_lr: 0.00005
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    loss_criterion: CombinedCEDiceLoss
+    ce_weight: 0.2
+    dice_weight: 0.8
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet
+  predict:
+    quality: medium
+    output_probs: true
+    output_entropy: false
+    prediction_axis: Z
+
+tests:
+  # ------------------------------------------------------------------
+  # 0. Baseline: supervised-only (for comparison)
+  # ------------------------------------------------------------------
+  - name: qa_baseline_supervised
+    type: train
+    model_key: qa_baseline
+    overrides:
+      train:
+        model_output_fn: qa_baseline_supervised
+        use_semi_supervised: false
+        use_pseudo_labeling: false
+
+  # ------------------------------------------------------------------
+  # 1a. Predict baseline medium
+  # ------------------------------------------------------------------
+  - name: qa_predict_baseline_medium
+    type: predict
+    model_key: qa_baseline
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 1b. Predict baseline z_only with entropy
+  # ------------------------------------------------------------------
+  - name: qa_predict_baseline_entropy
+    type: predict
+    model_key: qa_baseline
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"
+
+  # ------------------------------------------------------------------
+  # 2. Slice unlabeled data
+  # ------------------------------------------------------------------
+  - name: qa_slice_unlabeled
+    type: unlabeled_slicer
+    output_key: unlabeled_slices
+    output_dir: unlabeled_pool
+
+  # ------------------------------------------------------------------
+  # 3. Mean Teacher only
+  # ------------------------------------------------------------------
+  - name: qa_mean_teacher
+    type: train
+    model_key: qa_mt
+    args:
+      - "--unlabeled_data_dir"
+      - "${artifact:unlabeled_slices}"
+    overrides:
+      train:
+        model_output_fn: qa_mean_teacher
+        use_semi_supervised: true
+        use_pseudo_labeling: false
+        ema_decay: 0.99
+        consistency_weight: 0.1
+        rampup_start: 0
+        rampup_end: 5000
+
+  # ------------------------------------------------------------------
+  # 4a. Predict Mean Teacher medium
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_medium
+    type: predict
+    model_key: qa_mt
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 4b. Predict Mean Teacher z_only with entropy
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_entropy
+    type: predict
+    model_key: qa_mt
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"
+
+  # ------------------------------------------------------------------
+  # 5. Pseudo-labeling only
+  # ------------------------------------------------------------------
+  - name: qa_pseudo_label
+    type: train
+    model_key: qa_pl
+    args:
+      - "--unlabeled_data_dir"
+      - "${artifact:unlabeled_slices}"
+    overrides:
+      train:
+        model_output_fn: qa_pseudo_label
+        use_semi_supervised: false
+        use_pseudo_labeling: true
+        pseudo_label_confidence_threshold: 0.95
+        pseudo_label_use_teacher: false
+        pseudo_label_weight: 1.0
+        pseudo_label_threshold_schedule: fixed
+
+  # ------------------------------------------------------------------
+  # 6. Mean Teacher + Pseudo-labeling combined
+  # ------------------------------------------------------------------
+  - name: qa_mt_plus_pl
+    type: train
+    model_key: qa_mt_pl
+    args:
+      - "--unlabeled_data_dir"
+      - "${artifact:unlabeled_slices}"
+    overrides:
+      train:
+        model_output_fn: qa_mt_plus_pl
+        use_semi_supervised: true
+        use_pseudo_labeling: true
+        ema_decay: 0.99
+        consistency_weight: 0.1
+        rampup_start: 0
+        rampup_end: 5000
+        pseudo_label_confidence_threshold: 0.95
+        pseudo_label_use_teacher: true
+        pseudo_label_weight: 0.3
+        pseudo_label_threshold_schedule: linear
+
+  # ------------------------------------------------------------------
+  # 7a. Predict MT+PL medium
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_pl_medium
+    type: predict
+    model_key: qa_mt_pl
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 7b. Predict MT+PL high quality (12-way)
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_pl_high
+    type: predict
+    model_key: qa_mt_pl
+    overrides:
+      predict:
+        quality: high
+        output_probs: true
+
+  # ------------------------------------------------------------------
+  # 7c. Predict MT+PL z_only with entropy
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_pl_entropy
+    type: predict
+    model_key: qa_mt_pl
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"

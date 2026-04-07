@@ -372,9 +372,9 @@ class CombinedCEDiceLoss(nn.Module):
             if target.dim() == 4:
                 # One-hot: extract foreground channel
                 if target.shape[1] == 2:
-                    target_bce = target[:, 1:2, :, :]  # (B, 1, H, W) - foreground channel
+                    target_bce = target[:, 1:2, :, :].float()  # (B, 1, H, W) - foreground channel
                 else:
-                    target_bce = target[:, 0:1, :, :]  # (B, 1, H, W)
+                    target_bce = target[:, 0:1, :, :].float()  # (B, 1, H, W)
             else:
                 # Class indices: convert to binary mask (1 for foreground)
                 target_bce = (target > 0).float().unsqueeze(1)  # (B, 1, H, W)

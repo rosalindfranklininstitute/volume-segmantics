@@ -14,11 +14,8 @@ from volume_segmantics.utilities.pytorch3dunet_utils import expand_as_one_hot
 
 from scipy.ndimage import distance_transform_edt as distance
 from skimage import segmentation as skimage_seg
-import cv2
 
-from matplotlib import pyplot as plt
-
-from typing import Optional
+from typing import Optional, Tuple
 
 
 
@@ -37,46 +34,153 @@ class BoundaryDoUDiceLoss(nn.Module):
 
 
 
-class FastSurfaceDiceLoss(nn.Module):
-    #from volume_segmantics.utilities.surface_distance import create_table_neighbour_code_to_surface_area
+def _make_2d_contour_table(spacing: Tuple[float, float] = (1.0, 1.0)) -> np.ndarray:
+    """
+    Marching-squares contour length contribution for each of the 16
+    configurations of a 2x2 pixel square.
 
-    def __init__(self):
+    Bit layout (matches power kernel reshape(1,1,2,2) with arange(0,4)):
+        bit0 = top-left,  bit1 = top-right
+        bit2 = bottom-left, bit3 = bottom-right
+
+    Boundary segments connect midpoints of edges where pixel values differ.
+    Saddle cases (k=6, k=9) are resolved as two separate diagonal segments.
+    """
+    sy, sx = spacing
+    half_diag = 0.5 * np.sqrt(sx ** 2 + sy ** 2)
+
+    def seg_length(tl, tr, bl, br):
+        crossings = []
+        if tl != tr:
+            crossings.append('top')
+        if bl != br:
+            crossings.append('bot')
+        if tl != bl:
+            crossings.append('left')
+        if tr != br:
+            crossings.append('right')
+
+        n = len(crossings)
+        if n == 0:
+            return 0.0
+        if n == 2:
+            pair = frozenset(crossings)
+            if pair == {'top', 'bot'}:
+                return sy
+            if pair == {'left', 'right'}:
+                return sx
+            return half_diag      # corner case: diagonal segment
+        if n == 4:
+            return 2.0 * half_diag  # saddle: two diagonal segments
+
+        raise ValueError(
+            f"Unexpected crossing count {n} for ({tl},{tr},{bl},{br})"
+        )
+
+    table = np.zeros(16, dtype=np.float32)
+    for k in range(16):
+        tl = (k >> 0) & 1
+        tr = (k >> 1) & 1
+        bl = (k >> 2) & 1
+        br = (k >> 3) & 1
+        table[k] = seg_length(tl, tr, bl, br)
+    return table
+
+
+class FastSurfaceDiceLoss2D(nn.Module):
+    """
+    Differentiable surface (boundary) Dice loss for 2D binary or multi-class
+    segmentation.
+
+    Approximates the NSD metric at zero tolerance using a marching-squares
+    contour length table and overlapping 2x2 sliding windows (stride 1).
+
+    Expected shapes
+    ---------------
+    preds   : (B, C, H, W)  -- raw logits
+    targets : (B, C, H, W)  -- float binary masks, one channel per class
+
+    For binary segmentation pass C=1. For multi-class, each channel is treated
+    as an independent binary problem and the per-channel losses are averaged.
+
+    Parameters
+    ----------
+    spacing : (sy, sx) pixel spacing used for contour length computation.
+              Set to your actual voxel size if anisotropic.
+    eps     : numerical stability term.
+    """
+
+    def __init__(
+        self,
+        spacing: Tuple[float, float] = (1.0, 1.0),
+        eps: float = 1e-5,
+    ):
         super().__init__()
-        power = 2**np.arange(0, 8).reshape(1, 1, 2, 2, 2).astype(np.float32)
-        area = create_table_neighbour_code_to_surface_area((1, 1, 1)).astype(np.float32)
-        self.power = nn.Parameter(torch.from_numpy(power), requires_grad=False)
-        self.kernel = nn.Parameter(torch.ones(1, 1, 2, 2, 2), requires_grad=False)
-        self.area = nn.Parameter(torch.from_numpy(area), requires_grad=False)
-        
-    def forward(self, preds, targets, eps=1e-5):
-        """
-        preds: tensor of shape [bs, 1, d, h, w]
-        targets: tensor of shape [bs, 1, d, h, w]
-        """
-        
-        print(preds.shape)
-        
-        bsz = preds.shape[0]
 
-        # voxel logits to cube logits
-        foreground_probs = F.conv3d(F.logsigmoid(preds), self.kernel).exp().flatten(1)
-        background_probs = F.conv3d(F.logsigmoid(-preds), self.kernel).exp().flatten(1)
-        surface_probs = 1 - foreground_probs - background_probs
+        # Power kernel: encodes each 2x2 pixel square into a 4-bit integer
+        power = (2 ** np.arange(0, 4)).reshape(1, 1, 2, 2).astype(np.float32)
+        contour_table = _make_2d_contour_table(spacing)
 
-        # ground truth to neighbour code
+        self.register_buffer('power', torch.from_numpy(power))
+        self.register_buffer('kernel', torch.ones(1, 1, 2, 2))
+        self.register_buffer('contour', torch.from_numpy(contour_table))
+        self.eps = eps
+
+    def _surface_dice_binary(
+        self,
+        logits: torch.Tensor,   # (B, 1, H, W)
+        target: torch.Tensor,   # (B, 1, H, W)  float {0, 1}
+    ) -> torch.Tensor:
+        B = logits.shape[0]
+
+        # logsigmoid + all-ones conv2d accumulates log-probs over the 2x2 window;
+        # exp gives P(all 4 pixels in the square are foreground/background).
+        fg_prob = F.conv2d(F.logsigmoid(logits),  self.kernel).exp().flatten(1)
+        bg_prob = F.conv2d(F.logsigmoid(-logits), self.kernel).exp().flatten(1)
+        surf_prob = (1.0 - fg_prob - bg_prob).clamp(min=0.0)
+
         with torch.no_grad():
-            cubes_byte = F.conv3d(targets, self.power).to(torch.int32)
-            gt_area = self.area[cubes_byte.reshape(-1)].reshape(bsz, -1)
-            gt_foreground = (cubes_byte == 255).to(torch.float32).reshape(bsz, -1)
-            gt_background = (cubes_byte == 0).to(torch.float32).reshape(bsz, -1)
-            gt_surface = (gt_area > 0).to(torch.float32).reshape(bsz, -1)
-        
-        # dice
-        foreground_dice = (2*(foreground_probs*gt_foreground).sum(-1)+eps) / (foreground_probs.sum(-1)+gt_foreground.sum(-1)+eps)
-        background_dice = (2*(background_probs*gt_background).sum(-1)+eps) / (background_probs.sum(-1)+gt_background.sum(-1)+eps)
-        surface_dice = (2*(surface_probs*gt_area).sum(-1)+eps) / (((surface_probs+gt_surface)*gt_area).sum(-1)+eps)
-        dice = (foreground_dice + background_dice + surface_dice) / 3
-        return 1 - dice.mean()
+            # Encode each 2x2 window as a 4-bit integer (0-15)
+            sq_code = F.conv2d(target, self.power).to(torch.int32)
+            gt_contour = self.contour[sq_code.reshape(-1)].reshape(B, -1)
+            gt_fg   = (sq_code == 15).float().reshape(B, -1)  # all foreground
+            gt_bg   = (sq_code ==  0).float().reshape(B, -1)  # all background
+            gt_surf = (gt_contour > 0).float()
+
+        fg_dice = (
+            (2.0 * (fg_prob * gt_fg).sum(-1) + self.eps)
+            / (fg_prob.sum(-1) + gt_fg.sum(-1) + self.eps)
+        )
+        bg_dice = (
+            (2.0 * (bg_prob * gt_bg).sum(-1) + self.eps)
+            / (bg_prob.sum(-1) + gt_bg.sum(-1) + self.eps)
+        )
+        # Surface dice weighted by ground-truth contour length
+        surf_dice = (
+            (2.0 * (surf_prob * gt_contour).sum(-1) + self.eps)
+            / ((surf_prob + gt_surf) * gt_contour).sum(-1).add(self.eps)
+        )
+
+        dice = (fg_dice + bg_dice + surf_dice) / 3.0
+        return 1.0 - dice.mean()
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """
+        preds   : (B, C, H, W) logits
+        targets : (B, C, H, W) binary float masks
+        """
+        assert preds.shape == targets.shape, (
+            f"Shape mismatch: preds {preds.shape} vs targets {targets.shape}"
+        )
+        C = preds.shape[1]
+        loss = sum(
+            self._surface_dice_binary(
+                preds[:, c:c + 1],
+                targets[:, c:c + 1].float(),
+            )
+            for c in range(C)
+        )
+        return loss / C
 
 class BoundaryLoss(nn.Module):
     # def __init__(self, **kwargs):
@@ -96,15 +200,12 @@ class BoundaryLoss(nn.Module):
                 +inf|x-y|; x out of segmentation
         normalize sdf to [-1, 1]
         """
-        img_gt = img_gt.cpu().numpy()
-        img_gt = img_gt.astype(np.uint8)
+        img_gt = img_gt.cpu().numpy().astype(np.uint8)
 
         normalized_sdf = np.zeros(out_shape)
-        #print(out_shape)
-        for b in range(out_shape[0]):  # batch size
-            # ignore background
+        for b in range(out_shape[0]):
             for c in range(0, out_shape[1]):
-                posmask = img_gt[b][c].astype(np.bool)
+                posmask = img_gt[b][c].astype(bool)
                 if posmask.any():
                     negmask = ~posmask
                     posdis = distance(posmask)
@@ -125,20 +226,17 @@ class BoundaryLoss(nn.Module):
 
     def forward(self, outputs, gt):
         """
-        compute boundary loss for binary segmentation
-        input: outputs_soft: sigmoid results,  shape=(b,2,x,y,z)
-            gt_sdf: sdf of ground truth (can be original or normalized sdf); shape=(b,2,x,y,z)
-        output: boundary_loss; sclar
+        Compute boundary loss for binary segmentation.
+        outputs: sigmoid results,  shape=(b, 2, x, y, z)
+        gt:      ground truth mask; shape=(b, 2, x, y, z)
         """
-        # outputs_soft = F.softmax(outputs, dim=1)
         outputs_soft = outputs.sigmoid()
         gt_sdf = self.compute_sdf1_1(gt, outputs_soft.shape)
         pc = outputs_soft[:, self.idx, ...]
-        dc = torch.from_numpy(gt_sdf[:, self.idx, ...]).cuda()
+        # Use outputs_soft.device instead of hardcoded .cuda()
+        dc = torch.from_numpy(gt_sdf[:, self.idx, ...]).to(outputs_soft.device)
         multipled = torch.einsum("bxyz, bxyz->bxyz", pc, dc)
         bd_loss = multipled.mean()
-        
-        print(bd_loss)
         return bd_loss
 
 
@@ -156,26 +254,19 @@ class BoundaryDoULoss(nn.Module):
         return output_tensor.float()
 
     def _adaptive_size(self, score, target):
-        kernel = torch.Tensor([[0, 1, 0], [1, 1, 1], [0, 1, 0]]).half()
-        padding_out = torch.zeros(
-            (target.shape[0], target.shape[-2] + 2, target.shape[-1] + 2)
+        device = target.device
+        kernel = torch.tensor(
+            [[0., 1., 0.], [1., 1., 1.], [0., 1., 0.]],
+            dtype=torch.float32,
+            device=device,
         )
-        padding_out[:, 1:-1, 1:-1] = target
-        h, w = 3, 3
 
-        Y = torch.zeros(
-            (
-                padding_out.shape[0],
-                padding_out.shape[1] - h + 1,
-                padding_out.shape[2] - w + 1,
-            )
-        ).cuda()
-        for i in range(Y.shape[0]):
-            Y[i, :, :] = torch.conv2d(
-                target[i].unsqueeze(0).unsqueeze(0).half(),
-                kernel.unsqueeze(0).unsqueeze(0).cuda(),
-                padding=1,
-            )
+        # Batched conv2d: (B, 1, H, W) -> (B, 1, H, W) -> (B, H, W)
+        Y = F.conv2d(
+            target.unsqueeze(1).float(),
+            kernel.unsqueeze(0).unsqueeze(0),
+            padding=1,
+        ).squeeze(1)
 
         Y = Y * target
         Y[Y == 5] = 0
@@ -183,18 +274,14 @@ class BoundaryDoULoss(nn.Module):
         S = torch.count_nonzero(target)
         smooth = 1e-5
         alpha = 1 - (C + smooth) / (S + smooth)
-        alpha = 2 * alpha - 1
+        alpha = min(float(2 * alpha - 1), 0.8)
 
         intersect = torch.sum(score * target)
         y_sum = torch.sum(target * target)
         z_sum = torch.sum(score * score)
-        alpha = min(
-            alpha, 0.8
-        )  ## We recommend using a truncated alpha of 0.8, as using truncation gives better results on some datasets and has rarely effect on others.
         loss = (z_sum + y_sum - 2 * intersect + smooth) / (
             z_sum + y_sum - (1 + alpha) * intersect + smooth
         )
-
         return loss
 
     def forward(self, inputs, target):
@@ -230,26 +317,20 @@ class BoundaryDoULossV2(nn.Module):
         return output_tensor.float()
 
     def _adaptive_size(self, score, target):
-        kernel = torch.Tensor([[0, 1, 0], [1, 1, 1], [0, 1, 0]]).half()
-        padding_out = torch.zeros(
-            (target.shape[0], target.shape[-2] + 2, target.shape[-1] + 2)
+        # Replace per-sample loop with a single batched F.conv2d call
+        device = target.device
+        kernel = torch.tensor(
+            [[0., 1., 0.], [1., 1., 1.], [0., 1., 0.]],
+            dtype=torch.float32,
+            device=device,
         )
-        padding_out[:, 1:-1, 1:-1] = target
-        h, w = 3, 3
 
-        Y = torch.zeros(
-            (
-                padding_out.shape[0],
-                padding_out.shape[1] - h + 1,
-                padding_out.shape[2] - w + 1,
-            )
-        ).cuda()
-        for i in range(Y.shape[0]):
-            Y[i, :, :] = torch.conv2d(
-                target[i].unsqueeze(0).unsqueeze(0).half(),
-                kernel.unsqueeze(0).unsqueeze(0).cuda(),
-                padding=1,
-            )
+        # Batched conv2d: (B, 1, H, W) -> (B, 1, H, W) -> (B, H, W)
+        Y = F.conv2d(
+            target.unsqueeze(1).float(),
+            kernel.unsqueeze(0).unsqueeze(0),
+            padding=1,
+        ).squeeze(1)
 
         Y = Y * target
         Y[Y == 5] = 0
@@ -257,18 +338,14 @@ class BoundaryDoULossV2(nn.Module):
         S = torch.count_nonzero(target)
         smooth = 1e-5
         alpha = 1 - (C + smooth) / (S + smooth)
-        alpha = 2 * alpha - 1
+        alpha = min(float(2 * alpha - 1), 0.8)
 
         intersect = torch.sum(score * target)
         y_sum = torch.sum(target * target)
         z_sum = torch.sum(score * score)
-        alpha = min(
-            alpha, 0.8
-        )  ## We recommend using a truncated alpha of 0.8, as using truncation gives better results on some datasets and has rarely effect on others.
         loss = (z_sum + y_sum - 2 * intersect + smooth) / (
             z_sum + y_sum - (1 + alpha) * intersect + smooth
         )
-
         return loss
 
     def forward(self, inputs, target):
@@ -284,20 +361,16 @@ class BoundaryDoULossV2(nn.Module):
         for i in range(0, self.n_classes):
             loss += self._adaptive_size(inputs[:, i], target[:, i])
 
-        # Apply outlier fraction logic to BoundaryDoULoss
-        output = inputs[:, 0]  # Assuming binary classification
+        # Outlier fraction term -- binary, applied to channel 0
+        # inputs is already a probability; do NOT apply sigmoid again.
+        # Use log(1-p) directly instead of logsigmoid(-logit).
+        output = inputs[:, 0]
+        target_f = target[:, 0].float()
 
-        output = output.float()
-        target = target.float()
+        neg_mask = target_f.eq(0.0)
 
-        pos_mask = target.eq(1.0)
-        neg_mask = ~pos_mask
-
-        pt = output.sigmoid().clamp(1e-6, 1 - 1e-6)
-
-        neg_loss = (
-            -torch.pow(pt, 2) * torch.nn.functional.logsigmoid(-output) * neg_mask
-        )
+        pt = output.clamp(1e-6, 1 - 1e-6)
+        neg_loss = -torch.pow(pt, 2) * torch.log(1.0 - pt) * neg_mask
 
         if self.allowed_outlier_fraction < 1:
             neg_loss = neg_loss.flatten()
@@ -308,52 +381,68 @@ class BoundaryDoULossV2(nn.Module):
             )
 
         neg_loss_reduced = neg_loss.sum() / (neg_mask.sum() + 1e-6)
-        loss_outlier = neg_loss_reduced
 
-        return (loss + loss_outlier) / (self.n_classes + 1)
+        return (loss + neg_loss_reduced) / (self.n_classes + 1)
 
 
 class TverskyLoss(nn.Module):
-    def __init__(self, classes, alpha=0.7, beta=0.3) -> None:
+    """
+    Tversky loss: T(P,G) = TP / (TP + alpha*FP + beta*FN)
+
+    alpha controls FP penalty, beta controls FN penalty.
+    For imbalanced biomedical segmentation where missing structure is costly,
+    prefer alpha < beta (e.g. alpha=0.3, beta=0.7).
+
+    By default the background class (index 0) is excluded from the sum;
+    set include_background=True to include it.
+    """
+
+    def __init__(
+        self,
+        classes: int,
+        alpha: float = 0.3,
+        beta: float = 0.7,
+        include_background: bool = False,
+    ) -> None:
         super().__init__()
         self.classes = classes
         self.alpha = alpha
         self.beta = beta
+        self.include_background = include_background
 
     def _one_hot_encoder(self, input_tensor):
         tensor_list = []
         for i in range(self.classes):
-            temp_prob = input_tensor == i  # * torch.ones_like(input_tensor)
+            temp_prob = input_tensor == i
             tensor_list.append(temp_prob.unsqueeze(1))
         output_tensor = torch.cat(tensor_list, dim=1)
         return output_tensor.float()
 
-    def forward(self, y_pred, y_true):
+    def _tversky_index(
+        self, score: torch.Tensor, target: torch.Tensor
+    ) -> torch.Tensor:
+        EPS = 1e-5
+        tp = torch.sum(score * target)
+        fp = self.alpha * torch.sum(score * (1.0 - target))
+        fn = self.beta  * torch.sum((1.0 - score) * target)
+        return tp / (tp + fp + fn + EPS)
+
+    def forward(self, y_pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
         y_pred = torch.softmax(y_pred, dim=1)
         y_true = self._one_hot_encoder(y_true)
-        loss = 0
-        print(self.classes)
-        for i in range(1, self.classes):
-            p0 = y_pred[:, i, :, :]
-            print(y_pred.shape)
-            ones = torch.ones_like(p0)
-            print(ones.shape)
-            # p1: prob that the pixel is of class 0
-            p1 = ones - p0
-            g0 = y_true[:, i, :, :]
-            g1 = ones - g0
-            # terms in the Tversky loss function combined with weights
-            tp = torch.sum(p0 * g0)
-            fp = self.alpha * torch.sum(p0 * g1)
-            fn = self.beta * torch.sum(p1 * g0)
-            # add to the denominator a small epsilon to prevent the value from being undefined
-            EPS = 1e-5
-            num = tp
-            den = tp + fp + fn + EPS
-            result = num / den
-            loss += result
-            print(loss)
-        return 1 - loss / self.classes
+
+        start_class = 0 if self.include_background else 1
+        n_terms = self.classes - start_class
+        if n_terms <= 0:
+            raise ValueError(
+                f"No classes to evaluate: classes={self.classes}, "
+                f"include_background={self.include_background}"
+            )
+        loss = sum(
+            self._tversky_index(y_pred[:, i, ...], y_true[:, i, ...])
+            for i in range(start_class, self.classes)
+        )
+        return 1.0 - loss / n_terms
 
 
 def compute_per_channel_dice(input, target, epsilon=1e-6, weight=None):
@@ -663,7 +752,7 @@ def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
     if name == 'BCEWithLogitsLoss':
         return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     elif name == 'BCEDiceLoss':
-        alpha = loss_config.get('alphs', 1.)
+        alpha = loss_config.get('alpha', 1.)
         beta = loss_config.get('beta', 1.)
         return BCEDiceLoss(alpha, beta)
     elif name == 'CrossEntropyLoss':

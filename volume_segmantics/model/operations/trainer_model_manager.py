@@ -214,6 +214,7 @@ class ModelManager:
             model_struc_dict["num_tasks"] = num_tasks
             model_struc_dict["decoder_sharing"] = decoder_sharing
             model_struc_dict["task_out_channels"] = task_out_channels
+            model_struc_dict["task3_activation"] = getattr(settings, "task3_activation", None)
             
             logging.info(f"Multi-task config: {num_tasks} tasks, output channels: {task_out_channels}")
         

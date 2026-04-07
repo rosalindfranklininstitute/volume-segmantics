@@ -1,0 +1,109 @@
+# DINO Encoder Basic Smoke Tests
+#
+# Tests core train -> predict pipeline with DINOv2 encoders.
+#
+# Run:
+#   python tests/scripts/run_smoke.py dino_basic
+#   python tests/scripts/run_smoke.py dino_basic --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/dino_basic_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    encoder_lr_multiplier: 0.1
+    model:
+      type: U_Net
+      encoder_weights: dinov2
+      encoder_depth: 4
+  predict:
+    quality: low
+    prediction_axis: Z
+    use_sliding_window: true
+    sw_roi_size: [512, 512]
+    sw_overlap: 0.25
+    sw_mode: gaussian
+
+tests:
+  # 1. DINO-S U-Net
+  - name: dino_s_unet
+    type: train
+    model_key: dino_s_unet
+    overrides:
+      train:
+        model_output_fn: dino_s_unet
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          encoder_name: dinov2_vits14
+
+  # 2. Predict low
+  - name: predict_dino_s_low
+    type: predict
+    model_key: dino_s_unet
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # 3. Predict medium with probs
+  - name: predict_dino_s_medium
+    type: predict
+    model_key: dino_s_unet
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+
+  # 4. Predict z_only with entropy
+  - name: predict_dino_s_entropy
+    type: predict
+    model_key: dino_s_unet
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"
+
+  # 5. DINO-B U-Net
+  - name: dino_b_unet
+    type: train
+    model_key: dino_b_unet
+    overrides:
+      train:
+        model_output_fn: dino_b_unet
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          encoder_name: dinov2_vitb14
+
+  # 6. Predict DINO-B
+  - name: predict_dino_b_low
+    type: predict
+    model_key: dino_b_unet
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"

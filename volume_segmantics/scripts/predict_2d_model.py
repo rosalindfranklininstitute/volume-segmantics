@@ -20,7 +20,6 @@ def create_output_path(root_path, data_vol_path):
     return Path(root_path, pred_out_fn)
 
 
-
 def main():
     logging.basicConfig(
         level=logging.INFO, format=cfg.LOGGING_FMT, datefmt=cfg.LOGGING_DATE_FMT

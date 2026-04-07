@@ -118,6 +118,7 @@ class MultiTaskLossCalculator:
         task3_weight: float = 1.0,
         use_cross_entropy: bool = False,
         boundary_loss_type: str = "bce",  # "bce", "dice", or "bce_dice"
+        task3_loss_type: str = "bce",  # "bce" for binary, "regression" for SDF/EDT
         num_classes: int = 6,
     ):
         self.seg_criterion = seg_criterion
@@ -126,6 +127,7 @@ class MultiTaskLossCalculator:
         self.task3_weight = task3_weight
         self.use_cross_entropy = use_cross_entropy
         self.boundary_loss_type = boundary_loss_type
+        self.task3_loss_type = task3_loss_type
         self.num_classes = num_classes
         
         if boundary_loss_type in ("dice", "bce_dice"):
@@ -233,7 +235,16 @@ class MultiTaskLossCalculator:
             if task3_output.shape[1] != task3_target.shape[1]:
                 task3_output = task3_output[:, :task3_target.shape[1], :, :]
             
-            task3_loss = F.binary_cross_entropy_with_logits(task3_output, task3_target)
+            if self.task3_loss_type == "regression":
+                task3_loss = F.smooth_l1_loss(task3_output, task3_target)
+                pred_dx = task3_output[:, :, :, 1:] - task3_output[:, :, :, :-1]
+                pred_dy = task3_output[:, :, 1:, :] - task3_output[:, :, :-1, :]
+                gt_dx = task3_target[:, :, :, 1:] - task3_target[:, :, :, :-1]
+                gt_dy = task3_target[:, :, 1:, :] - task3_target[:, :, :-1, :]
+                grad_loss = F.smooth_l1_loss(pred_dx, gt_dx) + F.smooth_l1_loss(pred_dy, gt_dy)
+                task3_loss = task3_loss + grad_loss
+            else:
+                task3_loss = F.binary_cross_entropy_with_logits(task3_output, task3_target)
             losses["task3"] = task3_loss
             total = total + self.task3_weight * task3_loss
         

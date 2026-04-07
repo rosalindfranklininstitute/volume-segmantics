@@ -14,6 +14,73 @@ from volume_segmantics.model.operations.vol_seg_2d_predictor import VolSeg2dImag
 
 import cv2
 
+
+def _smooth_probs_along_axis(probs, sigma, spatial_axis=0, axis_name="Z"):
+    """Apply Gaussian smoothing along a spatial axis to softmax probabilities.
+
+    Reduces slice-to-slice inconsistency by smoothing each class channel independently
+    along the specified spatial axis, then re-deriving labels from the smoothed
+    probabilities.
+
+    Args:
+        probs: Probability volume, 4D with channel-last (Z, Y, X, C) or
+               channel-first (C, Z, Y, X).
+        sigma: Gaussian sigma in slices (e.g. 2.0).
+        spatial_axis: Which spatial axis to smooth along (0=Z, 1=Y, 2=X)
+                      in the (Z, Y, X, C) channel-last convention.
+        axis_name: Name of the smoothing axis for logging.
+
+    Returns:
+        (smoothed_labels, smoothed_probs) tuple. Probs returned in the same
+        channel convention as the input. Returns (None, None) if smoothing
+        is not possible.
+    """
+    from scipy.ndimage import gaussian_filter1d
+
+    if probs is None:
+        return None, None
+
+    # Detect channel position and normalise to channel-last (Z, Y, X, C)
+    if probs.ndim == 4:
+        if probs.shape[0] < probs.shape[-1]:
+            # (C, Z, Y, X) ? (Z, Y, X, C)
+            probs_zyxc = np.moveaxis(probs, 0, -1)
+            was_channel_first = True
+        else:
+            probs_zyxc = probs
+            was_channel_first = False
+    elif probs.ndim == 3:
+        logging.info(f"[Z-smooth] Probs are 3D (max prob only), skipping per-class smoothing.")
+        return None, None
+    else:
+        logging.warning(f"[Z-smooth] Unexpected probs shape {probs.shape}, skipping.")
+        return None, None
+
+    num_classes = probs_zyxc.shape[-1]
+    logging.info(
+        f"[Z-smooth] Smoothing {num_classes} class probabilities along {axis_name} "
+        f"(axis={spatial_axis}) with sigma={sigma}, volume shape={probs_zyxc.shape[:3]}"
+    )
+
+    # Smooth each class channel along the specified spatial axis
+    smoothed = np.empty_like(probs_zyxc)
+    for c in range(num_classes):
+        smoothed[..., c] = gaussian_filter1d(
+            probs_zyxc[..., c].astype(np.float32), sigma=sigma, axis=spatial_axis
+        )
+
+    # Re-derive labels from smoothed probabilities
+    smoothed_labels = np.argmax(smoothed, axis=-1).astype(np.uint8)
+
+    # Convert back to original channel convention
+    if was_channel_first:
+        smoothed_probs = np.moveaxis(smoothed, -1, 0)
+    else:
+        smoothed_probs = smoothed
+
+    return smoothed_labels, smoothed_probs
+
+
 class VolSeg2DPredictionManager(BaseDataManager):
     """Class that manages prediction of data volumes to disk using a
     2d deep learning network.
@@ -69,6 +136,12 @@ class VolSeg2DPredictionManager(BaseDataManager):
         one_hot = self.settings.one_hot
         output_probs = self.settings.output_probs
         output_entropy = self.settings.output_entropy
+        z_smooth = getattr(self.settings, 'z_smooth', False)
+        z_smooth_sigma = getattr(self.settings, 'z_smooth_sigma', 2.0)
+        # Z-smooth needs full per-class probs even if output_probs is False
+        if z_smooth and not output_probs:
+            output_probs = True
+            logging.info("[Z-smooth] Forcing output_probs=True for probability smoothing.")
         preferred_axis = utils.get_prediction_axis(
             self.settings
         )  # Specify single axis for prediction
@@ -83,12 +156,15 @@ class VolSeg2DPredictionManager(BaseDataManager):
                 prediction, probs, logits = self.predictor._predict_single_axis(
                     self.data_vol, axis=preferred_axis
                 )
+        # Resolve z_smooth_sigma for multi-axis paths
+        _smooth_sigma = z_smooth_sigma if z_smooth else None
+
         if quality == utils.Quality.MEDIUM:
             if one_hot:
                 prediction = self.predictor._predict_3_ways_one_hot(self.data_vol)
             elif output_probs and not output_entropy:
                 prediction, probs = self.predictor._predict_3_ways_max_probs(
-                    self.data_vol
+                    self.data_vol, z_smooth_sigma=_smooth_sigma
                 )
             elif output_entropy and not output_probs:
                 prediction, _, entropy = self.predictor._prediction_estimate_entropy(
@@ -100,7 +176,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
                 )
             else:
                 prediction, _ = self.predictor._predict_3_ways_max_probs(
-                    self.data_vol
+                    self.data_vol, z_smooth_sigma=_smooth_sigma
                 )
 
         if quality == utils.Quality.HIGH:
@@ -143,8 +219,57 @@ class VolSeg2DPredictionManager(BaseDataManager):
                     self.data_vol
                 )
 
+        # Z-axis probability smoothing for LOW/Z_ONLY quality
+        # (MEDIUM quality smoothing is handled inside _predict_3_ways_max_probs)
+        if z_smooth and probs is not None and not one_hot and quality in (utils.Quality.LOW, utils.Quality.Z_ONLY):
+            smoothed_labels, smoothed_probs = _smooth_probs_along_axis(
+                probs, sigma=z_smooth_sigma,
+                axis_name=preferred_axis.name if hasattr(preferred_axis, 'name') else "Z"
+            )
+            if smoothed_labels is not None:
+                logging.info(
+                    f"[Z-smooth] Applied Gaussian smoothing (sigma={z_smooth_sigma}). "
+                    f"Labels changed: {int(np.sum(prediction != smoothed_labels))} voxels "
+                    f"({100*np.mean(prediction != smoothed_labels):.2f}%)"
+                )
+                prediction = smoothed_labels
+                probs = smoothed_probs
+
         # Get additional task outputs if multi-task model
         additional_tasks = self.predictor.get_additional_task_outputs()
+
+        # Diagnostic: check if task labels need Y/X transpose to align with prediction
+        if additional_tasks and prediction is not None:
+            for task_name, task_data in additional_tasks.items():
+                task_labels = task_data.get('labels')
+                if task_labels is not None:
+                    logging.info(
+                        f"[DIAG] {task_name}: prediction.shape={prediction.shape}, "
+                        f"task_labels.shape={task_labels.shape}"
+                    )
+                    # Check a non-trivial slice for alignment
+                    mid = prediction.shape[0] // 2
+                    seg_slice = (prediction[mid] > 0).astype(int)
+                    tsk_slice = (task_labels[mid] > 0).astype(int)
+                    tsk_transposed = (task_labels[mid].T > 0).astype(int)
+                    from scipy import ndimage
+                    seg_bnd = (ndimage.binary_dilation(seg_slice) ^ ndimage.binary_erosion(seg_slice)).astype(int)
+                    overlap_orig = int(np.sum(tsk_slice & seg_bnd))
+                    overlap_trans = int(np.sum(tsk_transposed & seg_bnd))
+                    logging.info(
+                        f"[DIAG] {task_name} mid-slice overlap: original={overlap_orig}, "
+                        f"transposed={overlap_trans}"
+                    )
+                    if overlap_trans > overlap_orig * 1.3:
+                        logging.warning(
+                            f"[DIAG] {task_name} appears Y/X transposed! "
+                            f"Applying transpose fix."
+                        )
+                        task_data['labels'] = np.transpose(task_labels, (0, 2, 1))
+                        if task_data.get('probs') is not None:
+                            task_data['probs'] = np.transpose(task_data['probs'], (0, 2, 1))
+                        if task_data.get('logits') is not None and task_data['logits'].ndim == 3:
+                            task_data['logits'] = np.transpose(task_data['logits'], (0, 2, 1))
 
         if output_path is not None and cfg.OUTPUT_FORMAT == "hdf":
             # Save primary segmentation output
@@ -263,7 +388,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
                         f"{output_path.parent / output_path.stem}_votes.tif",
                         compress=True
                     )
-            
+
         if output_path is not None and cfg.OUTPUT_FORMAT == "mrc":
             utils.save_data_to_mrc(prediction, output_path)
             if probs is not None and self.settings.output_probs:
@@ -308,6 +433,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
                     votes,
                     f"{output_path.parent / output_path.stem}_votes.mrc",
                 )
+
         return prediction
 
     def _get_task_suffix(self, task_name):

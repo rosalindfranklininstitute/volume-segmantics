@@ -1,0 +1,134 @@
+# Loss Function Smoke Tests
+#
+# Trains a minimal model with each supported loss function to verify
+# end-to-end compatibility. Uses the bundled vessels_256cube training data.
+#
+# Run:
+#   python tests/scripts/run_smoke.py losses
+#   python tests/scripts/run_smoke.py losses --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/loss_function_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+      dropout_rate: 0.0
+
+tests:
+  # 1. CombinedCEDiceLoss (default)
+  - name: loss_combined_ce_dice
+    type: train
+    model_key: model_combined_ce_dice
+    overrides:
+      train:
+        model_output_fn: loss_combined_ce_dice
+        loss_criterion: CombinedCEDiceLoss
+        ce_weight: 0.2
+        dice_weight: 0.8
+        dice_weight_mode: inverse_sqrt_freq
+
+  # 2. DiceLoss
+  - name: loss_dice
+    type: train
+    model_key: model_dice
+    overrides:
+      train:
+        model_output_fn: loss_dice
+        loss_criterion: DiceLoss
+
+  # 3. BCELoss
+  - name: loss_bce
+    type: train
+    model_key: model_bce
+    overrides:
+      train:
+        model_output_fn: loss_bce
+        loss_criterion: BCELoss
+
+  # 4. CrossEntropyLoss
+  - name: loss_cross_entropy
+    type: train
+    model_key: model_ce
+    overrides:
+      train:
+        model_output_fn: loss_cross_entropy
+        loss_criterion: CrossEntropyLoss
+
+  # 5. GeneralizedDiceLoss
+  - name: loss_generalized_dice
+    type: train
+    model_key: model_gen_dice
+    overrides:
+      train:
+        model_output_fn: loss_generalized_dice
+        loss_criterion: GeneralizedDiceLoss
+
+  # 6. ClassWeightedDiceLoss
+  - name: loss_class_weighted_dice
+    type: train
+    model_key: model_cw_dice
+    overrides:
+      train:
+        model_output_fn: loss_class_weighted_dice
+        loss_criterion: ClassWeightedDiceLoss
+        dice_weight_mode: inverse_sqrt_freq
+        exclude_background_from_dice: false
+
+  # 7. TverskyLoss
+  - name: loss_tversky
+    type: train
+    model_key: model_tversky
+    overrides:
+      train:
+        model_output_fn: loss_tversky
+        loss_criterion: TverskyLoss
+
+  # 8. BoundaryDoULoss
+  - name: loss_boundary_dou
+    type: train
+    model_key: model_bdou
+    overrides:
+      train:
+        model_output_fn: loss_boundary_dou
+        loss_criterion: BoundaryDoULoss
+
+  # 9. BoundaryDoUDiceLoss
+  - name: loss_boundary_dou_dice
+    type: train
+    model_key: model_bdou_dice
+    overrides:
+      train:
+        model_output_fn: loss_boundary_dou_dice
+        loss_criterion: BoundaryDoUDiceLoss
+
+  # 10. BCEDiceLoss (legacy)
+  - name: loss_bce_dice_legacy
+    type: train
+    model_key: model_bce_dice
+    overrides:
+      train:
+        model_output_fn: loss_bce_dice_legacy
+        loss_criterion: BCEDiceLoss
+        alpha: 0.5
+        beta: 0.5

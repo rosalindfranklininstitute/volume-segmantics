@@ -1,0 +1,349 @@
+# Multi-task Quality Assurance Tests
+#
+# Longer training runs (8 frozen + 5 unfrozen epochs) at full resolution
+# (512x512) to verify that multi-task models produce meaningful
+# segmentation and boundary predictions.
+# 
+#
+# Boundary labels are derived automatically from the segmentation labels
+# via the derive_boundary step. For 3-task tests, an SDF distance map
+# is also derived.
+#
+# Run:
+#   python tests/scripts/run_smoke.py qa_multitask
+#
+# Dry-run:
+#   python tests/scripts/run_smoke.py qa_multitask --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/multitask_qa
+
+global_overrides:
+  train:
+    image_size: 512
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 5
+    patience: 4
+    starting_lr: 0.00005
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    use_multitask: true
+    num_tasks: 2
+    seg_loss_weight: 1.0
+    boundary_loss_weight: 1.0
+    model:
+      type: Multitask_Unet
+      encoder_name: tu-convnextv2_base
+      encoder_weights: imagenet
+  predict:
+    quality: medium
+    output_probs: false
+    prediction_axis: Z
+
+tests:
+  # ==================================================================
+  # Derive proper boundary and SDF labels from segmentation
+  # ==================================================================
+  - name: derive_boundary
+    type: derive_boundary
+    input: "${path:label}"
+    output_key: boundary_labels
+    output_filename: boundary_labels.h5
+    width: 1
+    mode: 3d
+
+  - name: derive_sdf
+    type: derive_distance
+    input: "${path:label}"
+    output_key: sdf_labels
+    output_filename: sdf_labels.h5
+    dist_type: sdf
+    mode: 3d
+    normalize: true
+    clip_max: 10.0
+
+  - name: derive_edt
+    type: derive_distance
+    input: "${path:label}"
+    output_key: edt_labels
+    output_filename: edt_labels.h5
+    dist_type: edt
+    mode: 3d
+    normalize: true
+
+  # ==================================================================
+  # 2-TASK MODELS
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 1. Shared decoder, BCE boundary loss, CombinedCEDiceLoss
+  # ------------------------------------------------------------------
+  - name: qa_mt_shared_bce_ce_dice
+    type: train
+    model_key: qa_mt_shared_bce
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_mt_shared_bce_ce_dice
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        loss_criterion: CombinedCEDiceLoss
+        ce_weight: 0.2
+        dice_weight: 0.8
+
+  # ------------------------------------------------------------------
+  # 2a. Predict shared model low quality
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_shared_low
+    type: predict
+    model_key: qa_mt_shared_bce
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 2b. Predict shared model medium quality with probs
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_shared_medium
+    type: predict
+    model_key: qa_mt_shared_bce
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+
+  # ------------------------------------------------------------------
+  # 2c. Predict shared model z_only with entropy
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_shared_entropy
+    type: predict
+    model_key: qa_mt_shared_bce
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"
+
+  # ------------------------------------------------------------------
+  # 3. Separate decoders, BCE boundary loss
+  # ------------------------------------------------------------------
+  - name: qa_mt_separate_bce
+    type: train
+    model_key: qa_mt_separate_bce
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_mt_separate_bce
+        decoder_sharing: separate
+        boundary_loss_type: bce
+        loss_criterion: CombinedCEDiceLoss
+
+  # ------------------------------------------------------------------
+  # 3b. Predict separate-decoder model low
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_separate_low
+    type: predict
+    model_key: qa_mt_separate_bce
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 3c. Predict separate-decoder model medium with probs
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_separate_medium
+    type: predict
+    model_key: qa_mt_separate_bce
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+
+  # ------------------------------------------------------------------
+  # 3d. Predict separate-decoder model z_only with entropy
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_separate_entropy
+    type: predict
+    model_key: qa_mt_separate_bce
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"
+
+  # ------------------------------------------------------------------
+  # 4. Shared decoder, Dice boundary loss
+  # ------------------------------------------------------------------
+  - name: qa_mt_shared_dice_boundary
+    type: train
+    model_key: qa_mt_shared_dice_bnd
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_mt_shared_dice_boundary
+        decoder_sharing: shared
+        boundary_loss_type: dice
+        loss_criterion: CombinedCEDiceLoss
+
+  # ------------------------------------------------------------------
+  # 5. Shared decoder, BCE+Dice boundary loss
+  # ------------------------------------------------------------------
+  - name: qa_mt_shared_bce_dice_boundary
+    type: train
+    model_key: qa_mt_shared_bce_dice_bnd
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_mt_shared_bce_dice_boundary
+        decoder_sharing: shared
+        boundary_loss_type: bce_dice
+        loss_criterion: CombinedCEDiceLoss
+
+  # ==================================================================
+  # 3-TASK MODELS (seg + boundary + SDF)
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 6. Shared decoder, 3 tasks with SDF regression
+  # ------------------------------------------------------------------
+  - name: qa_mt_shared_3task_sdf
+    type: train
+    model_key: qa_mt_shared_3task
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+      - "--task3"
+      - "${artifact:sdf_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_mt_shared_3task_sdf
+        num_tasks: 3
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        task3_loss_weight: 10.0
+        task3_loss_type: regression
+        task3_activation: null
+        loss_criterion: CombinedCEDiceLoss
+
+  # ------------------------------------------------------------------
+  # 7. Separate decoders, 3 tasks with SDF regression
+  # ------------------------------------------------------------------
+  - name: qa_mt_separate_3task_sdf
+    type: train
+    model_key: qa_mt_separate_3task
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+      - "--task3"
+      - "${artifact:sdf_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_mt_separate_3task_sdf
+        num_tasks: 3
+        decoder_sharing: separate
+        boundary_loss_type: bce
+        task3_loss_weight: 10.0
+        task3_loss_type: regression
+        task3_activation: null
+        loss_criterion: CombinedCEDiceLoss
+
+  # ------------------------------------------------------------------
+  # 8. Shared decoder, 3 tasks with EDT regression
+  # ------------------------------------------------------------------
+  - name: qa_mt_shared_3task_edt
+    type: train
+    model_key: qa_mt_shared_3task_edt
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+      - "--task3"
+      - "${artifact:edt_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_mt_shared_3task_edt
+        num_tasks: 3
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        task3_loss_weight: 10.0
+        task3_loss_type: regression
+        task3_activation: null
+        loss_criterion: CombinedCEDiceLoss
+
+  # ------------------------------------------------------------------
+  # 9a. Predict shared 3-task SDF model
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_shared_3task_sdf
+    type: predict
+    model_key: qa_mt_shared_3task
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 9b. Predict separate 3-task SDF model
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_separate_3task_sdf
+    type: predict
+    model_key: qa_mt_separate_3task
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 9c. Predict separate 3-task SDF medium with probs
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_separate_3task_sdf_medium
+    type: predict
+    model_key: qa_mt_separate_3task
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+
+  # ------------------------------------------------------------------
+  # 10a. Predict shared 3-task EDT model
+  # ------------------------------------------------------------------
+  - name: qa_predict_mt_shared_3task_edt
+    type: predict
+    model_key: qa_mt_shared_3task_edt
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"

@@ -1,0 +1,145 @@
+# Basic Quality Assurance Tests
+#
+# Longer training runs (8 frozen + 5 unfrozen epochs) at full resolution
+# (512x512) to verify that models learn meaningful segmentation.
+#
+# Run:
+#   python tests/scripts/run_smoke.py qa_basic
+#
+# Dry-run:
+#   python tests/scripts/run_smoke.py qa_basic --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/basic_qa
+
+global_overrides:
+  train:
+    image_size: 512
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 5
+    patience: 4
+    starting_lr: 0.00005
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      encoder_name: resnet34
+      encoder_weights: imagenet
+  predict:
+    quality: medium
+    output_probs: true
+    output_entropy: false
+    prediction_axis: Z
+    z_smooth: true                  # Enable Z-axis probability smoothing
+    z_smooth_sigma: 2.0             # Gaussian sigma in slices (larger = smoother, try 1.0-3.0)
+
+
+tests:
+  # ------------------------------------------------------------------
+  # 1. U-Net with CombinedCEDiceLoss (default, most common)
+  # ------------------------------------------------------------------
+  - name: qa_unet_ce_dice
+    type: train
+    model_key: qa_unet
+    overrides:
+      train:
+        model_output_fn: qa_unet_ce_dice
+        loss_criterion: CombinedCEDiceLoss
+        ce_weight: 0.2
+        dice_weight: 0.8
+        dice_weight_mode: inverse_sqrt_freq
+        model:
+          type: U_Net
+
+  # ------------------------------------------------------------------
+  # 2. Predict medium quality (3-axis) with probs
+  # ------------------------------------------------------------------
+  - name: qa_predict_unet_medium
+    type: predict
+    model_key: qa_unet
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 2b. Predict high quality (12-way)
+  # ------------------------------------------------------------------
+  - name: qa_predict_unet_high
+    type: predict
+    model_key: qa_unet
+    overrides:
+      predict:
+        quality: high
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # ------------------------------------------------------------------
+  # 2c. Predict z_only with entropy + probs
+  # ------------------------------------------------------------------
+  - name: qa_predict_unet_entropy
+    type: predict
+    model_key: qa_unet
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+        - "*_entropy.*"
+
+  # ------------------------------------------------------------------
+  # 3. U-Net++ with DiceLoss
+  # ------------------------------------------------------------------
+  - name: qa_unetpp_dice
+    type: train
+    model_key: qa_unetpp
+    overrides:
+      train:
+        model_output_fn: qa_unetpp_dice
+        loss_criterion: DiceLoss
+        model:
+          type: U_Net_Plus_plus
+
+  # ------------------------------------------------------------------
+  # 4. FPN with ClassWeightedDiceLoss
+  # ------------------------------------------------------------------
+  - name: qa_fpn_cw_dice
+    type: train
+    model_key: qa_fpn
+    overrides:
+      train:
+        model_output_fn: qa_fpn_cw_dice
+        loss_criterion: ClassWeightedDiceLoss
+        dice_weight_mode: inverse_sqrt_freq
+        model:
+          type: FPN
+
+  # ------------------------------------------------------------------
+  # 5. DeepLabV3+ with TverskyLoss
+  # ------------------------------------------------------------------
+  - name: qa_deeplabv3p_tversky
+    type: train
+    model_key: qa_deeplabv3p
+    overrides:
+      train:
+        model_output_fn: qa_deeplabv3p_tversky
+        loss_criterion: TverskyLoss
+        model:
+          type: DeepLabV3_Plus

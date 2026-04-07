@@ -102,22 +102,49 @@ class DINOEncoder(nn.Module):
             self._adapt_input_channels(in_channels)
         
         # Define output channels for each stage
-        self.out_channels = self._get_out_channels(depth)
-        
+        # SMP convention: out_channels has depth+1 elements, first is "stem"
+        stage_channels = self._get_out_channels(depth)
+        self._stem_channels = in_channels  # stem = input channels
+        self.out_channels = [self._stem_channels] + stage_channels
+
         # Select layers for feature extraction
         self.selected_layers = self._select_layers(depth)
-        
-        # Create projection layers to match reported out_channels
-        # DINO outputs embed_dim for all layers, but we report different channel counts
-        self.feature_projections = nn.ModuleList([
-            nn.Conv2d(self.embed_dim, out_ch, kernel_size=1) if out_ch != self.embed_dim else nn.Identity()
-            for out_ch in self.out_channels
-        ])
+        # Create projection + upsampling layers to build a multi-scale feature pyramid.
+        self._stage_upsample_factors = []
+        self.feature_projections = nn.ModuleList()
+        for i, out_ch in enumerate(stage_channels):
+            # Upsample factor: early stages get 2^(depth-1-i) upsampling
+            # e.g. for depth=4: factors are [8, 4, 2, 1]
+            factor = 2 ** (depth - 1 - i)
+            self._stage_upsample_factors.append(factor)
+
+            # 1x1 channel projection (always needed unless channels match)
+            proj_out = out_ch
+            if self.embed_dim != out_ch:
+                proj = nn.Conv2d(self.embed_dim, out_ch, kernel_size=1)
+            else:
+                proj = nn.Identity()
+                proj_out = self.embed_dim
+
+            if factor > 1:
+                # Upsample + 3x3 refinement conv for smoothness
+                block = nn.Sequential(
+                    proj,
+                    nn.Upsample(scale_factor=factor, mode='bilinear', align_corners=False),
+                    nn.Conv2d(proj_out, out_ch, kernel_size=3, padding=1, bias=False),
+                    nn.BatchNorm2d(out_ch),
+                    nn.GELU(),
+                )
+            else:
+                # Last stage: just project channels, no upsampling
+                block = proj
+            self.feature_projections.append(block)
         
         logger.info(
             f"DINOEncoder initialized: {model_name}, "
             f"embed_dim={self.embed_dim}, depth={depth}, "
-            f"out_channels={self.out_channels}"
+            f"out_channels={self.out_channels}, "
+            f"stage_upsample_factors={self._stage_upsample_factors}"
         )
     
     def _load_dino_model(
@@ -615,45 +642,53 @@ class DINOEncoder(nn.Module):
             List of feature maps at different scales (B, C_i, H_i, W_i)
         """
         B, C, H, W = x.shape
-        
-        # Pad input to be divisible by patch_size (required by DINO)
         patch_size = self.patch_size
-        pad_h = (patch_size - (H % patch_size)) % patch_size
-        pad_w = (patch_size - (W % patch_size)) % patch_size
-        
+
+        # Reflect-pad by one patch_size on each side so that edge patches
+        # see real mirrored content instead of zeros. After processing,
+        # crop back to the original spatial extent. This eliminates
+        # the 1px lighter border and generally improves edge predictions.
+        border = patch_size
+        x_padded = F.pad(x, (border, border, border, border), mode='reflect')
+        H_ext = H + 2 * border
+        W_ext = W + 2 * border
+
+        # Pad to be divisible by patch_size (on top of border padding)
+        pad_h = (patch_size - (H_ext % patch_size)) % patch_size
+        pad_w = (patch_size - (W_ext % patch_size)) % patch_size
         if pad_h > 0 or pad_w > 0:
-            # Pad: (pad_left, pad_right, pad_top, pad_bottom)
-            x = F.pad(x, (0, pad_w, 0, pad_h), mode='reflect')
-            H_padded = H + pad_h
-            W_padded = W + pad_w
-        else:
-            H_padded = H
-            W_padded = W
-        
+            x_padded = F.pad(x_padded, (0, pad_w, 0, pad_h), mode='reflect')
+        H_proc = H_ext + pad_h
+        W_proc = W_ext + pad_w
+
         # Extract intermediate features from transformer
-        token_features = self._extract_intermediate_features(x)  # List of (B, N, D)
-        
+        token_features = self._extract_intermediate_features(x_padded)
+
+        # Number of patches covering the original (un-bordered) region
+        native_h = H // patch_size
+        native_w = W // patch_size
+        # Offset in patch-grid coordinates for the border region
+        border_patches = border // patch_size  # = 1 (since border == patch_size)
+
+        # SMP convention: first element is the "stem" (input-level features).
+        feature_maps = [x]  # stem: original input at full resolution
+
         # Convert patch tokens to spatial feature maps and apply projections
-        feature_maps = []
         for idx, tokens in enumerate(token_features):
-            # Use padded dimensions for conversion
-            feat_map = self._patch_tokens_to_feature_map(tokens, H_padded, W_padded)
-            
-            # Crop back to original dimensions if padding was applied
-            if pad_h > 0 or pad_w > 0:
-                # Calculate target feature map dimensions based on original input
-                # Use floor division to match what the feature map would be without padding
-                target_h = H // patch_size
-                target_w = W // patch_size
-                
-                # Crop feature map to match original input dimensions
-                # This ensures the feature maps align with the decoder's expectations
-                feat_map = feat_map[:, :, :target_h, :target_w]
-            
-            # Apply projection to match reported out_channels
+            feat_map = self._patch_tokens_to_feature_map(tokens, H_proc, W_proc)
+
+            # Crop to the region corresponding to the original input
+            # (remove the border padding from both sides in patch-grid space)
+            feat_map = feat_map[
+                :, :,
+                border_patches : border_patches + native_h,
+                border_patches : border_patches + native_w,
+            ]
+
+            # Apply projection (+ upsampling for early stages)
             feat_map = self.feature_projections[idx](feat_map)
             feature_maps.append(feat_map)
-        
+
         return feature_maps
 
 

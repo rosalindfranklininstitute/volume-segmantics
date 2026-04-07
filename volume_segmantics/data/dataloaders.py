@@ -39,11 +39,15 @@ def get_2d_training_dataloaders(
     Returns:
         Tuple[DataLoader, DataLoader]: 2d training and validation dataloaders
     """
+    # Multitask requires MONAI datasets (they return dicts with boundary/task3 keys)
+    use_multitask = getattr(settings, "use_multitask", False)
     use_monai = (
-        getattr(settings, "augmentation_library", "albumentations") == "monai"
-        and getattr(settings, "use_monai_datasets", True)
-        and MONAI_DATASETS_AVAILABLE
-    )
+        (
+            getattr(settings, "augmentation_library", "albumentations") == "monai"
+            and getattr(settings, "use_monai_datasets", True)
+        )
+        or use_multitask  # Force MONAI datasets for multitask
+    ) and MONAI_DATASETS_AVAILABLE
 
     if use_monai:
         return get_monai_training_dataloaders(image_dir, label_dir, settings)

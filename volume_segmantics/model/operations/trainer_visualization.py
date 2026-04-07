@@ -64,8 +64,15 @@ class TrainingVisualizer:
         epochs = range(1, len(epoch_history["train_total"]) + 1)
         
         if self.use_multitask:
-            fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-            
+            # Detect if task3 data is present
+            has_task3 = (
+                "train_task3" in epoch_history
+                and epoch_history["train_task3"]
+                and any(v != 0 for v in epoch_history["train_task3"])
+            )
+            num_rows = 3 if has_task3 else 2
+            fig, axes = plt.subplots(num_rows, 3, figsize=(18, 5 * num_rows))
+
             # Total Loss
             ax = axes[0, 0]
             ax.plot(epochs, epoch_history["train_total"], label="Train Total")
@@ -77,7 +84,7 @@ class TrainingVisualizer:
             ax.set_title("Total Loss")
             ax.legend()
             ax.grid(True)
-            
+
             # Segmentation Loss
             ax = axes[0, 1]
             ax.plot(epochs, epoch_history["train_seg"], label="Train Seg")
@@ -87,7 +94,7 @@ class TrainingVisualizer:
             ax.set_title("Segmentation Loss")
             ax.legend()
             ax.grid(True)
-            
+
             # Boundary Loss
             ax = axes[0, 2]
             if any(epoch_history["train_boundary"]):
@@ -98,7 +105,7 @@ class TrainingVisualizer:
             ax.set_title("Boundary Loss")
             ax.legend()
             ax.grid(True)
-            
+
             # Mean Dice Metrics
             ax = axes[1, 0]
             ax.plot(epochs, epoch_history["seg_dice"], label="Seg Dice (mean)")
@@ -109,7 +116,7 @@ class TrainingVisualizer:
             ax.set_title("Mean Evaluation Metrics")
             ax.legend()
             ax.grid(True)
-            
+
             # Per-class Dice
             ax = axes[1, 1]
             for c in range(self.num_classes):
@@ -122,7 +129,7 @@ class TrainingVisualizer:
             ax.set_title("Per-Class Dice")
             ax.legend(loc="lower right", fontsize=8)
             ax.grid(True)
-            
+
             # Per-class Dice bar chart
             ax = axes[1, 2]
             final_dice = []
@@ -132,7 +139,7 @@ class TrainingVisualizer:
                 if key in epoch_history and epoch_history[key]:
                     final_dice.append(epoch_history[key][-1])
                     class_names.append(self.label_codes.get(c, f"C{c}") if self.label_codes else f"C{c}")
-            
+
             if final_dice:
                 bars = ax.bar(class_names, final_dice, color='steelblue')
                 ax.axhline(np.mean(final_dice), color='r', linestyle='--', label=f"Mean: {np.mean(final_dice):.3f}")
@@ -141,12 +148,55 @@ class TrainingVisualizer:
                 ax.set_title("Final Per-Class Dice")
                 ax.legend()
                 ax.set_ylim(0, 1)
-                
+
                 # Add value labels on bars
                 for bar, val in zip(bars, final_dice):
                     ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
                            f'{val:.3f}', ha='center', va='bottom', fontsize=8)
-            
+
+            # Task3 row (only if 3-task model)
+            if has_task3:
+                # Task3 Loss
+                ax = axes[2, 0]
+                ax.plot(epochs, epoch_history["train_task3"], label="Train Task3")
+                ax.plot(epochs, epoch_history["valid_task3"], label="Val Task3")
+                ax.set_xlabel("Epoch")
+                ax.set_ylabel("Loss")
+                ax.set_title("Task3 Loss (SDF/EDT)")
+                ax.legend()
+                ax.grid(True)
+
+                # Task3 train vs val overlay with total for scale comparison
+                ax = axes[2, 1]
+                ax.plot(epochs, epoch_history["train_total"], label="Train Total", alpha=0.4, color="gray")
+                ax.plot(epochs, epoch_history["train_seg"], label="Train Seg", alpha=0.4, color="blue")
+                ax.plot(epochs, epoch_history["train_boundary"], label="Train Boundary", alpha=0.4, color="green")
+                ax.plot(epochs, epoch_history["train_task3"], label="Train Task3", linewidth=2, color="red")
+                ax.set_xlabel("Epoch")
+                ax.set_ylabel("Loss")
+                ax.set_title("Task3 vs Other Losses (Train)")
+                ax.legend(fontsize=8)
+                ax.grid(True)
+
+                # Task3 loss reduction percentage
+                ax = axes[2, 2]
+                train_t3 = epoch_history["train_task3"]
+                valid_t3 = epoch_history["valid_task3"]
+                if len(train_t3) > 1 and train_t3[0] != 0:
+                    train_pct = [100 * (1 - v / train_t3[0]) for v in train_t3]
+                    valid_pct = [100 * (1 - v / valid_t3[0]) for v in valid_t3]
+                    ax.plot(epochs, train_pct, label="Train Reduction %")
+                    ax.plot(epochs, valid_pct, label="Val Reduction %")
+                    ax.axhline(0, color="gray", linestyle="--", alpha=0.5)
+                    ax.set_xlabel("Epoch")
+                    ax.set_ylabel("Loss Reduction (%)")
+                    ax.set_title("Task3 Loss Reduction from Epoch 1")
+                    ax.legend()
+                    ax.grid(True)
+                else:
+                    ax.text(0.5, 0.5, "Insufficient data", ha="center", va="center")
+                    ax.set_title("Task3 Loss Reduction")
+
             plt.suptitle(f"Training History: {output_path.stem}", fontsize=14)
             plt.tight_layout()
         else:
@@ -333,6 +383,17 @@ class TrainingVisualizer:
                 seg_target = targets
                 boundary_target = None
                 task3_target = None
+
+            # Convert MONAI MetaTensors to plain tensors to avoid
+            # metadata collation errors during indexing/slicing
+            def _to_tensor(t):
+                if t is not None and hasattr(t, 'as_tensor'):
+                    return t.as_tensor()
+                return t
+
+            seg_target = _to_tensor(seg_target)
+            boundary_target = _to_tensor(boundary_target)
+            task3_target = _to_tensor(task3_target)
             
             seg_gt = None
             if seg_target is not None:
@@ -360,7 +421,16 @@ class TrainingVisualizer:
                 else:
                     if task3_output.shape[1] > 1:
                         task3_output = task3_output[:, 0:1, :, :]
-                task3_preds = (torch.sigmoid(task3_output) > 0.5).float()
+                # Detect regression targets: SDF/EDT are continuous floats,
+                # not binary {0,1}. Check if target has >2 unique values or negatives.
+                is_regression = False
+                if task3_target is not None:
+                    t_flat = task3_target.detach().flatten()
+                    is_regression = (t_flat.min() < -0.01) or (len(torch.unique(t_flat[:1000])) > 10)
+                if is_regression:
+                    task3_preds = task3_output  # Raw regression output
+                else:
+                    task3_preds = (torch.sigmoid(task3_output) > 0.5).float()
         
         bs = min(validation_loader.batch_size, 4)
         num_cols = 3

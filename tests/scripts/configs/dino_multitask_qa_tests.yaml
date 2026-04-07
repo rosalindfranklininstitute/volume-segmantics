@@ -1,0 +1,318 @@
+# DINO Encoder Multi-task Quality Assurance Tests
+#
+# Longer training runs (8 frozen + 5 unfrozen epochs) at full resolution
+# (512x512) with DINOv2 encoders. Tests single-task, 2-task, and 3-task
+# configurations with both ViT-S and ViT-B encoders.
+#
+# NOTE: Downloads DINOv2 weights from torch.hub on first run.
+# 
+#
+# Run:
+#   python tests/scripts/run_smoke.py qa_dino_multitask
+#
+# Dry-run:
+#   python tests/scripts/run_smoke.py qa_dino_multitask --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/dino_multitask_qa
+
+global_overrides:
+  train:
+    image_size: 512
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 5
+    patience: 4
+    starting_lr: 0.00005
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    use_multitask: true
+    num_tasks: 2
+    seg_loss_weight: 1.0
+    boundary_loss_weight: 1.0
+    encoder_lr_multiplier: 0.1
+    model:
+      type: Multitask_Unet
+      encoder_weights: dinov2
+      encoder_depth: 4
+  predict:
+    quality: medium
+    output_probs: false
+    prediction_axis: Z
+    use_sliding_window: true
+    sw_roi_size: [512, 512]
+    sw_overlap: 0.5
+    sw_mode: gaussian
+
+tests:
+  # ==================================================================
+  # Derive boundary, SDF, and EDT labels
+  # ==================================================================
+  - name: derive_boundary
+    type: derive_boundary
+    input: "${path:label}"
+    output_key: boundary_labels
+    output_filename: boundary_labels.h5
+    width: 1
+    mode: 3d
+
+  - name: derive_sdf
+    type: derive_distance
+    input: "${path:label}"
+    output_key: sdf_labels
+    output_filename: sdf_labels.h5
+    dist_type: sdf
+    mode: 3d
+    normalize: true
+    clip_max: 10.0
+
+  - name: derive_edt
+    type: derive_distance
+    input: "${path:label}"
+    output_key: edt_labels
+    output_filename: edt_labels.h5
+    dist_type: edt
+    mode: 3d
+    normalize: true
+
+  # ==================================================================
+  # DINOv2 ViT-S/14 (Small, 21M params)
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 1. DINO-S single-task
+  # ------------------------------------------------------------------
+  - name: qa_dino_s_single_task
+    type: train
+    model_key: qa_dino_s_single
+    overrides:
+      train:
+        model_output_fn: qa_dino_s_single_task
+        use_multitask: false
+        loss_criterion: CombinedCEDiceLoss
+        ce_weight: 0.2
+        dice_weight: 0.8
+        model:
+          type: U_Net
+          encoder_name: dinov2_vits14
+
+  # ------------------------------------------------------------------
+  # 2. DINO-S 2-task shared decoder
+  # ------------------------------------------------------------------
+  - name: qa_dino_s_2task_shared
+    type: train
+    model_key: qa_dino_s_2task
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_dino_s_2task_shared
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          encoder_name: dinov2_vits14
+
+  # ------------------------------------------------------------------
+  # 3. Predict DINO-S 2-task medium + entropy
+  # ------------------------------------------------------------------
+  - name: qa_dino_s_predict_medium
+    type: predict
+    model_key: qa_dino_s_2task
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  - name: qa_dino_s_predict_entropy
+    type: predict
+    model_key: qa_dino_s_2task
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"
+
+  # ------------------------------------------------------------------
+  # 4. DINO-S 3-task with SDF regression
+  # ------------------------------------------------------------------
+  - name: qa_dino_s_3task_sdf
+    type: train
+    model_key: qa_dino_s_3task
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+      - "--task3"
+      - "${artifact:sdf_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_dino_s_3task_sdf
+        num_tasks: 3
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        task3_loss_weight: 10.0
+        task3_loss_type: regression
+        task3_activation: null
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          encoder_name: dinov2_vits14
+
+  # ==================================================================
+  # DINOv2 ViT-B/14 (Base, 86M params)
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # 5. DINO-B 2-task shared decoder
+  # ------------------------------------------------------------------
+  - name: qa_dino_b_2task_shared
+    type: train
+    model_key: qa_dino_b_2task_shared
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_dino_b_2task_shared
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          encoder_name: dinov2_vitb14
+
+  # ------------------------------------------------------------------
+  # 6. DINO-B 2-task separate decoders
+  # ------------------------------------------------------------------
+  - name: qa_dino_b_2task_separate
+    type: train
+    model_key: qa_dino_b_2task_sep
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_dino_b_2task_separate
+        decoder_sharing: separate
+        boundary_loss_type: bce
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          encoder_name: dinov2_vitb14
+
+  # ------------------------------------------------------------------
+  # 7. Predict DINO-B medium, high, entropy
+  # ------------------------------------------------------------------
+  - name: qa_dino_b_predict_medium
+    type: predict
+    model_key: qa_dino_b_2task_shared
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  - name: qa_dino_b_predict_high
+    type: predict
+    model_key: qa_dino_b_2task_shared
+    overrides:
+      predict:
+        quality: high
+        output_probs: true
+
+  - name: qa_dino_b_predict_entropy
+    type: predict
+    model_key: qa_dino_b_2task_shared
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"
+
+  # ------------------------------------------------------------------
+  # 8. DINO-B 3-task with SDF
+  # ------------------------------------------------------------------
+  - name: qa_dino_b_3task_sdf
+    type: train
+    model_key: qa_dino_b_3task_sdf
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+      - "--task3"
+      - "${artifact:sdf_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_dino_b_3task_sdf
+        num_tasks: 3
+        decoder_sharing: shared
+        boundary_loss_type: bce
+        task3_loss_weight: 10.0
+        task3_loss_type: regression
+        task3_activation: null
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          encoder_name: dinov2_vitb14
+
+  # ------------------------------------------------------------------
+  # 9. DINO-B 3-task with EDT
+  # ------------------------------------------------------------------
+  - name: qa_dino_b_3task_edt
+    type: train
+    model_key: qa_dino_b_3task_edt
+    args:
+      - "--task2"
+      - "${artifact:boundary_labels}"
+      - "--task3"
+      - "${artifact:edt_labels}"
+    overrides:
+      train:
+        model_output_fn: qa_dino_b_3task_edt
+        num_tasks: 3
+        decoder_sharing: separate
+        boundary_loss_type: bce
+        task3_loss_weight: 10.0
+        task3_loss_type: regression
+        task3_activation: null
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          encoder_name: dinov2_vitb14
+
+  # ------------------------------------------------------------------
+  # 10. Predict 3-task DINO-B models
+  # ------------------------------------------------------------------
+  - name: qa_dino_b_predict_3task_sdf
+    type: predict
+    model_key: qa_dino_b_3task_sdf
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  - name: qa_dino_b_predict_3task_edt
+    type: predict
+    model_key: qa_dino_b_3task_edt
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"

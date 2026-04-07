@@ -1,0 +1,140 @@
+# 2.5D Slicing Quality Assurance Tests
+#
+# Longer training runs (8 frozen + 5 unfrozen epochs) at full resolution
+# (512x512) to verify that 2.5D multi-slice models learn meaningful
+# segmentation using adjacent-slice context.
+# 
+#
+# Run:
+#   python tests/scripts/run_smoke.py qa_2.5d
+#
+# Dry-run:
+#   python tests/scripts/run_smoke.py qa_2.5d --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/two_5d_qa
+
+global_overrides:
+  train:
+    image_size: 512
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 5
+    patience: 4
+    starting_lr: 0.00005
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    use_2_5d_slicing: true
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet
+  predict:
+    quality: low
+    prediction_axis: Z
+
+tests:
+  # ------------------------------------------------------------------
+  # 1. 3-slice 2.5D (train + predict)
+  # ------------------------------------------------------------------
+  - name: qa_2_5d_3slice
+    type: train
+    model_key: qa_3slice
+    overrides:
+      train:
+        model_output_fn: qa_2_5d_3slice
+        num_slices: 3
+        slice_file_format: png
+        skip_border_slices: false
+        loss_criterion: CombinedCEDiceLoss
+
+  - name: qa_predict_3slice_medium
+    type: predict
+    model_key: qa_3slice
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 3
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  - name: qa_predict_3slice_entropy
+    type: predict
+    model_key: qa_3slice
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 3
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"
+
+  # ------------------------------------------------------------------
+  # 2. 5-slice 2.5D (train + predict)
+  # ------------------------------------------------------------------
+  - name: qa_2_5d_5slice
+    type: train
+    model_key: qa_5slice
+    overrides:
+      train:
+        model_output_fn: qa_2_5d_5slice
+        num_slices: 5
+        slice_file_format: tiff
+        skip_border_slices: false
+        loss_criterion: CombinedCEDiceLoss
+
+  - name: qa_predict_5slice_medium
+    type: predict
+    model_key: qa_5slice
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 5
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  - name: qa_predict_5slice_entropy
+    type: predict
+    model_key: qa_5slice
+    overrides:
+      predict:
+        use_2_5d_prediction: true
+        num_slices: 5
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_entropy.*"
+
+  # ------------------------------------------------------------------
+  # 3. 7-slice 2.5D with border skipping (train only)
+  # ------------------------------------------------------------------
+  - name: qa_2_5d_7slice_skip_border
+    type: train
+    model_key: qa_7slice
+    overrides:
+      train:
+        model_output_fn: qa_2_5d_7slice_skip
+        num_slices: 7
+        slice_file_format: tiff
+        skip_border_slices: true
+        loss_criterion: CombinedCEDiceLoss
