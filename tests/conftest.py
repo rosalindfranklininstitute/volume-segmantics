@@ -1,5 +1,8 @@
-from pathlib import Path
 
+
+from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
 import h5py as h5
 import numpy as np
 import pytest
