@@ -69,24 +69,6 @@ class TestVolSeg2dTrainer:
         assert wrapped_e.type == SystemExit
         assert wrapped_e.value.code == 1
 
-<<<<<<< HEAD
-
-    # @pytest.mark.gpu
-    # @pytest.mark.slow
-    # def test_train_model_one_epoch_produces_artifacts(self, volseg_2d_trainer, empty_dir):
-    #     """Short integration: train 1 epoch, then assert checkpoint and loss plot exist."""
-    #     output_path = empty_dir / "one_epoch_model.pytorch"
-    #     volseg_2d_trainer.train_model(
-    #         output_path, num_epochs=1, patience=10, create=True, frozen=True
-    #     )
-    #     assert output_path.is_file()
-    #     volseg_2d_trainer.output_loss_fig(output_path)
-    #     loss_fig_path = empty_dir / "one_epoch_model_loss_plot.png"
-    #     assert loss_fig_path.is_file()
-    #     volseg_2d_trainer.output_prediction_figure(output_path)
-    #     pred_fig_path = empty_dir / "one_epoch_model_prediction_image.png"
-    #     assert pred_fig_path.is_file()
-=======
     @pytest.mark.gpu
     @pytest.mark.parametrize(
         "eval_metric_name",
@@ -132,4 +114,3 @@ class TestVolSeg2dTrainer:
             model_path, num_epochs=1, patience=1, create=False, frozen=True
         )
         assert model_path.is_file()
->>>>>>> c68f176 (optimization using optuna)

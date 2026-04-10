@@ -788,10 +788,6 @@ class VolSeg2dTrainer:
                             logging.warning(f"Failed to generate pseudo-labeling visualization at epoch {epoch}: {e}")
                             import traceback
                             logging.warning(traceback.format_exc())
-<<<<<<< HEAD
-
-            # Diagnostic Logging
-=======
             
             # Track best validation metric for Optuna
             current_eval_metric = self.epoch_history["seg_dice"][-1]
@@ -805,7 +801,6 @@ class VolSeg2dTrainer:
                     raise optuna.exceptions.TrialPruned()
                 
             # Diagnostic Logging 
->>>>>>> c68f176 (optimization using optuna)
             if epoch == 1 or epoch % 5 == 0:
                 self._log_gradient_statistics(epoch)
 
