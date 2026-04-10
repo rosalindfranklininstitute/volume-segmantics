@@ -32,6 +32,7 @@ kaleido
 
 [tool.poetry.dev-dependencies]
 opencv-python-headless = "4.8.0.74"
+torch = "< 2.0.1"
 black = ">=22.1.0"
 pdoc = ">=10"
 pylint = ">=2.4.0"
