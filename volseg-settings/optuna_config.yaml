@@ -1,0 +1,56 @@
+# Study settings
+study_name: "volseg_optimization"
+n_trials: 2
+seed: 42
+direction: "maximize"   # maximize (Dice) or minimize (loss)
+timeout: null           # max seconds to run, null = no limit
+visualize: true      # set true to generate HTML plots after optimization
+
+# Optional: uncomment for distributed/resumable optimization
+# storage: "sqlite:///optuna.db"
+
+# Pruning settings
+n_startup_trials: 5     # don't prune the first N trials
+n_warmup_steps: 3       # wait N epochs before pruning within a trial
+
+model:
+  type: "U_Net"
+
+# Search space
+search_space:
+
+  starting_lr:
+    type: "loguniform"
+    low: 1e-5
+    high: 1e-3
+
+  end_lr:
+    type: "loguniform"
+    low: 1e-4
+    high: 5e-3
+
+  encoder_name:
+    type: "categorical"
+    choices: ["resnet34", "resnet50", "tu-convnextv2_base", "tu-convnext_base"]
+
+  num_cyc_frozen:
+    type: "int"
+    low: 5
+    high: 15
+    step: 1
+
+  num_cyc_unfrozen:
+    type: "int"
+    low: 3
+    high: 10
+    step: 1
+
+  # Uncomment to include these in the search:
+  # loss_criterion:
+  #   type: "categorical"
+  #   choices: ["CombinedCEDiceLoss", "DiceLoss", "GeneralizedDiceLoss"]
+
+  # encoder_lr_multiplier:
+  #   type: "uniform"
+  #   low: 0.05
+  #   high: 0.5
