@@ -50,13 +50,7 @@ from volume_segmantics.model.operations.trainer_visualization import TrainingVis
 
 import optuna
 
-
 from volume_segmantics.model.training.sam import SAM
-
-
-
-
-
 
 class VolSeg2dTrainer:
     """
