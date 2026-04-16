@@ -13,7 +13,6 @@ import torch
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-
 def main():
     logging.basicConfig(
         level=logging.INFO, format=cfg.LOGGING_FMT, datefmt=cfg.LOGGING_DATE_FMT
@@ -66,22 +65,22 @@ def main():
     task2_dir = getattr(args, "task2", None)
     task3_dir = getattr(args, "task3", None)
     unlabeled_data_dir = getattr(args, "unlabeled_data_dir", None)
-    print("Mode: ", mode)
+    print("Mode: ",mode )
 
+    # Check if slicing unlabeled data (mode=slicer and no labels provided)
     is_unlabeled_slicing = (mode == 'slicer' and label_vols is None)
 
+    # Create the settings object
     settings_path = Path(root_path, cfg.SETTINGS_DIR, cfg.TRAIN_SETTINGS_FN)
     settings = get_settings_data(settings_path)
 
+    # Override unlabeled_data_dir from command line if provided
     if unlabeled_data_dir is not None:
         settings.unlabeled_data_dir = str(Path(unlabeled_data_dir).resolve())
-        logging.info(
-            f"Using unlabeled_data_dir from command line: "
-            f"{settings.unlabeled_data_dir}"
-        )
+        logging.info(f"Using unlabeled_data_dir from command line: {settings.unlabeled_data_dir}")
 
-    task2_im_out_dir = root_path / "task2"
-    task3_im_out_dir = root_path / "task3"
+    task2_im_out_dir = root_path / "task2"  # dir for task2 imgs
+    task3_im_out_dir = root_path / "task3"  # dir for task3 imgs
 
     task2_vols = None
     task3_vols = None
@@ -98,14 +97,11 @@ def main():
         settings.task3_dir = str(task3_im_out_dir.resolve())
         if not getattr(settings, "use_multitask", False):
             settings.use_multitask = True
-            logging.info(
-                "Auto-enabling multitask mode because --task3 was provided"
-            )
+            logging.info("Auto-enabling multitask mode because --task3 was provided")
+    data_im_out_dir = root_path / settings.data_im_dirname  # dir for data imgs
+    seg_im_out_dir = root_path / settings.seg_im_out_dirname  # dir for seg imgs
 
-    data_im_out_dir = root_path / settings.data_im_dirname
-    seg_im_out_dir  = root_path / settings.seg_im_out_dirname
-
-    if mode == 'slicer':
+    if(mode=='slicer'):
         if is_unlabeled_slicing:
             if unlabeled_data_dir:
                 unlabeled_output_dir = Path(unlabeled_data_dir)
