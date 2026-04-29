@@ -16,7 +16,32 @@ A machine capable of running CUDA enabled PyTorch version 2.0 or greater is requ
 
 ## Installation
 
-The easiest way to install the package is to first create a new conda environment or virtualenv with python (ideally >= version 3.10) and also pip, then activate the environment and `pip install volume-segmantics`. If a CUDA-enabled build of PyTorch is not being installed by pip, you can try `pip install volume-segmantics --extra-index-url https://download.pytorch.org/whl` this particularity seems to be an issue on Windows. 
+### Conda/Virtualenv (PyPI)
+
+The latest published release may be installed from the Python Package Index in a new conda environment or virtualenv with python (ideally >= version 3.10) and pip: activate the environment and `pip install volume-segmantics`. 
+
+If you find a CUDA-enabled build of PyTorch is not being installed by pip (this particularity seems to be an issue on Windows), you can try `pip install volume-segmantics --extra-index-url https://download.pytorch.org/whl`.
+
+### Docker/Apptainer Container (quay.io)
+A container image with the latest published release is available on the
+Rosalind Franklin's quay.io instance. You can pull and run this using
+Apptainer:
+```
+apptainer run --nv docker://quay.io/rosalindfranklininstitute/volume-segmantics
+```
+Or docker:
+```
+docker run \
+    --gpus all \
+    --ipc=host \
+    -v /path/to/data:/data
+    quay.io/rosalindfranklininstitute/volume-segmantics
+```
+Note `--ipc=host` grants the container access to host shared
+memory, since the default allocation in Docker (64M) may
+be insufficient. More details can be found
+on the [Volume EM Container documentation](https://rosalindfranklininstitute.github.io/volume-em-container-documentation/software/volume-segmantics/).
+
 
 ## Configuration and command line use
 
