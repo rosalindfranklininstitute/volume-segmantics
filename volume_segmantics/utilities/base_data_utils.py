@@ -53,7 +53,8 @@ class ModelType(Enum):
     PAN = 8
     SEGFORMER = 9
     VANILLA_UNET = 10 # No pretrained encoder
-    MULTITASK_UNET = 11
+    MULTITASK_UNET = 11  # Deprecated, use PIPELINE_MULTITASK_UNET via pipeline.yaml.
+    PIPELINE_MULTITASK_UNET = 12  
 
 
 

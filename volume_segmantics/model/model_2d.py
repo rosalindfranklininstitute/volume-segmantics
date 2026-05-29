@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Tuple, Optional, Union, Callable, Sequence, Any
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 from dataclasses import dataclass
 
 import segmentation_models_pytorch as smp
@@ -362,6 +362,19 @@ import volume_segmantics.utilities.config as cfg
 def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.Module:
     struct_dict_copy = model_struc_dict.copy()
     model_type = struct_dict_copy.pop("type")
+    # b3 trainer saves model_struc_dict["type"] as a string
+    # ("PIPELINE_MULTITASK_UNET", "U_NET", ...); legacy v0.4 saves the
+    # ``ModelType`` enum value itself. Coerce both to the enum so the
+    # downstream ``==`` comparisons work for either format.
+    if isinstance(model_type, str):
+        try:
+            model_type = utils.ModelType[model_type]
+        except KeyError as e:
+            raise ValueError(
+                f"create_model_on_device: unknown model type "
+                f"{model_type!r}; known: "
+                f"{[m.name for m in utils.ModelType]}"
+            ) from e
     in_channels_requested = struct_dict_copy.get("in_channels", cfg.MODEL_INPUT_CHANNELS)
     encoder_weights = struct_dict_copy.get("encoder_weights", None)
 
@@ -533,46 +546,64 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
         model = VanillaUNet(in_channels=in_channels, out_classes=struct_dict_copy["classes"], up_sample_mode='conv_transpose')
         logging.info(f"Sending the Vanilla Unet model to device {device_num}")
     elif model_type == utils.ModelType.MULTITASK_UNET:
-
-        heads_config = struct_dict_copy.pop("heads_config", None)
-        decoder_sharing = struct_dict_copy.pop("decoder_sharing", "shared")  # "shared" or "separate"
-        task_out_channels = struct_dict_copy.pop("task_out_channels", None)  # Remove if present (not used by MultitaskUnet)
-        task3_activation = struct_dict_copy.pop("task3_activation", None)  # e.g. "tanh" for SDF/EDT regression
-
-        classes = struct_dict_copy.pop("classes", 1)
-
-        if heads_config is None:
-            num_tasks = struct_dict_copy.pop("num_tasks", 1)
-            if num_tasks is None:
-                num_tasks = 1
-            num_tasks = int(num_tasks)
-
-            # Resolve task3 activation: "tanh" bounds output to [-1, 1] for SDF targets
-            t3_act = None
-            if task3_activation and str(task3_activation).lower() not in ("none", "null"):
-                t3_act = str(task3_activation).lower()
-
-            if decoder_sharing == "shared":
-                # All heads share decoder 0
-                heads_config = [
-                    {"classes": classes, "decoder_idx": 0, "activation": None}
-                ]
-                if num_tasks >= 2:
-                    heads_config.append({"classes": 1, "decoder_idx": 0, "activation": None})
-                if num_tasks >= 3:
-                    heads_config.append({"classes": 1, "decoder_idx": 0, "activation": t3_act})
-            else:
-                # Each head has its own decoder
-                heads_config = [
-                    {"classes": classes, "decoder_idx": 0, "activation": None}
-                ]
-                if num_tasks >= 2:
-                    heads_config.append({"classes": 1, "decoder_idx": 1, "activation": None})
-                if num_tasks >= 3:
-                    heads_config.append({"classes": 1, "decoder_idx": 2, "activation": t3_act})
-
-        model = MultitaskUnet(heads_config=heads_config, **struct_dict_copy)
-        logging.info(f"Sending the Multitask U-Net model to device {device_num}")
+        raise DeprecationWarning(
+            "v0.4 'Multitask_Unet' is deprecated as of v0.4.0b3. "
+            "Use the new pipeline.yaml head registry instead — drop a "
+            "pipeline.yaml into your project's volseg-settings/ "
+            "directory and enable boundary / distance / sdm heads "
+            "under heads: "
+        )
+    elif model_type == utils.ModelType.PIPELINE_MULTITASK_UNET:
+        from volume_segmantics.model.pipeline_multitask_unet import (
+            PipelineMultitaskUnet,
+        )
+        head_modules = struct_dict_copy.pop("head_modules", None)
+        heads_descriptor = struct_dict_copy.pop("heads", None)
+        if head_modules is None:
+            if not heads_descriptor:
+                raise ValueError(
+                    "PIPELINE_MULTITASK_UNET requires either 'head_modules' "
+                    "(pre-built) or 'heads' (saved descriptor list) in the "
+                    "model_struc_dict — neither was present."
+                )
+            from volume_segmantics.data.pipeline_loader import HeadConfig
+            from volume_segmantics.model.heads import build_head_modules
+            heads_cfg: Dict[str, "HeadConfig"] = {}
+            for entry in heads_descriptor:
+                if not isinstance(entry, dict) or "name" not in entry:
+                    raise ValueError(
+                        f"PIPELINE_MULTITASK_UNET 'heads' entry must be a "
+                        f"dict with 'name'; got {entry!r}"
+                    )
+                hc = HeadConfig(enabled=True)
+                oc = entry.get("out_channels")
+                if oc is not None:
+                    hc.out_channels = int(oc)
+                heads_cfg[str(entry["name"])] = hc
+            # The saved struct gives us encoder feature width via the
+            # encoder_depth × encoder_name -> smp.Unet decoder channels;
+            # heads are decoder-driven so this version hardcodes ``in_channels=16``
+            # which is what build_head_modules expects from the decoder
+            # bottleneck output. Mirrors the trainer's path.
+            decoder_in = int(struct_dict_copy.get("decoder_in_channels", 16))
+            head_modules = build_head_modules(
+                heads_cfg,
+                in_channels=decoder_in,
+                num_classes=int(struct_dict_copy.get("classes", 2)),
+                dim=2,
+            )
+        # Discard fields that smp constructors consume but
+        # PipelineMultitaskUnet does not (they live on heads now).
+        struct_dict_copy.pop("classes", None)
+        struct_dict_copy.pop("activation", None)
+        struct_dict_copy.pop("aux_params", None)
+        model = PipelineMultitaskUnet(
+            head_modules=head_modules, **struct_dict_copy,
+        )
+        logging.info(
+            f"Sending the Pipeline Multitask U-Net model "
+            f"(heads={list(model.head_names)}) to device {device_num}"
+        )
 
     # If using pretrained weights with >3 input channels, adapt first conv by averaging RGB.
     # Skip this for DINO encoders as they handle channel adaptation internally
