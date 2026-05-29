@@ -1,0 +1,122 @@
+# pipeline default
+
+schema_version: pipeline_v1
+
+#  Heads 
+# Semantic is on by default. All geometric heads are off.
+heads:
+  semantic:
+    enabled: true
+    out_channels: null              # null -> infer from label classes
+    loss: dice_ce                   # name from the loss registry
+    loss_weight: 1.0
+
+  boundary:
+    enabled: false
+    loss: boundary_bce_dice         # bce | boundary_bce | boundary_dice | boundary_bce_dice
+    loss_weight: 0.5
+
+  distance:
+    enabled: false
+    d_clip: 10.0                    # max distance in voxels
+    loss: distance_l1               # distance_l1 | distance_mse
+    loss_weight: 0.5
+
+  sdm:
+    enabled: false
+    variant: per_class              # binary | per_class
+    d_clip: 10.0
+    loss: sdm_l1                    # sdm_l1 | sdm_mse
+    loss_weight: 0.5
+
+#  Target generators 
+# Targets are computed on-the-fly per dataloader worker. Caching is
+# deferred to a future b4+ release.
+targets:
+  boundary:
+    width: 3                        # boundary structuring-element size
+  distance:
+    distance_transform: edt         # only edt supported in b3
+  sdm:
+    distance_transform: edt
+
+#  Augmentations 
+augmentations:
+  backend: auto                     # auto | albumentations | monai
+  train_transforms:
+    - { name: HorizontalFlip, p: 0.5 }
+    - { name: VerticalFlip,   p: 0.5 }
+    - { name: RandomRotate90, p: 0.5 }
+    - { name: Rotate, limit: 30, p: 0.5, border_mode: reflect }
+    - { name: RandomBrightnessContrast, brightness_limit: 0.2,
+        contrast_limit: 0.2, p: 0.3 }
+    - { name: GaussNoise, var_limit: [10.0, 50.0], p: 0.3 }
+
+#  EMA teacher (semi-supervised learning) 
+#  Requires --unlabeled_data_dir on the CLI.
+ema_teacher:
+  enabled: false
+  schedule:
+    alpha_warmup: 0.99
+    alpha_end:    0.999
+    warmup_steps: 500
+  consistency_weights:
+    semantic: 0.5
+    boundary: 0.5
+    distance: 0.3
+    sdm:      0.3
+
+#  Per-head loss scheduling 
+# linear_warmup: start_weight -> end_weight over the first
+# warmup_fraction of training. linear_decay: opposite. constant: flat.
+loss_schedule:
+  boundary:
+    schedule: linear_warmup
+    start_weight: 0.0
+    end_weight: 1.0
+    warmup_fraction: 0.10
+  distance:
+    schedule: linear_warmup
+    start_weight: 0.0
+    end_weight: 1.0
+    warmup_fraction: 0.10
+  sdm:
+    schedule: linear_warmup
+    start_weight: 0.0
+    end_weight: 1.0
+    warmup_fraction: 0.10
+
+#  Inference and uncertainty 
+prediction:
+  inference_mode: multi_axis        # single_axis | multi_axis |
+                                    #   sliding_window | tta_uncertainty
+  uncertainty_provider: null        # null | tta_uncertainty (auto-set
+                                    #   when inference_mode = tta_uncertainty)
+
+  per_axis_instances:
+    enabled: false                  # auto-enables when backend = usegment3d
+    producer: null                  # null = auto-select:
+                                    #   distance_watershed when `distance` head enabled
+                                    #   semantic_cc otherwise
+                                    # explicit: distance_watershed | semantic_cc
+    axes: [xy, xz, yz]
+    params:
+      # distance_watershed-only knobs (ignored by semantic_cc)
+      peak_min_distance: 5
+      # semantic_cc-only knobs (ignored by distance_watershed)
+      connectivity: 1               # 1 = 4-conn, 2 = 8-conn
+      # shared
+      foreground_class_ids: []      # [] = any non-zero class
+
+#  Instance assembly 
+# null -> no instance assembly (semantic-only output).
+# usegment3d -> DanuserLab u-Segment3D orthoview consensus over the
+# per-axis 2D instance maps. Requires the optional [usegment3d] extra:
+#   pip install volume-segmantics[usegment3d]
+instance_assembly:
+  backend: null
+  params:
+    axes: [xy, xz, yz]
+    params_overrides:               # deep-merged onto upstream defaults
+      indirect_method:
+        dtform_method: edt          # avoids Dask LocalCluster on Windows
