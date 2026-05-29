@@ -118,16 +118,37 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to directory containing unlabeled image slices (required for semi-supervised learning or pseudo-labeling)",
     )
-
+    # v0.4.0b3 — Lightning is the new default. Opt back into the
+    # raw-torch trainer for one release behind --legacy-trainer.
     parser.add_argument(
-        "--optimization",
-        metavar="PATH",
+        "--legacy-trainer",
+        action="store_true",
+        default=False,
+        help=(
+            "[deprecated, scheduled for removal in v0.5] Use the raw-torch "
+            "VolSeg2dTrainer instead of the new PyTorch Lightning trainer. "
+            "Required for SAM optimiser (`use_sam: true`) which has not "
+            "been ported to Lightning."
+        ),
+    )
+    parser.add_argument(
+        "--strategy",
         type=str,
         default=None,
-        nargs="?",
-        const="volseg-settings/optuna_config.yaml", # Default if no path is given
-        help="Path to Optuna search space config YAML. When provided, runs "
-            "hyperparameter optimization instead of a single training run.",
+        help=(
+            "Lightning strategy override (e.g. 'ddp', 'auto'). Default "
+            "depends on the device count auto-detected by Lightning."
+        ),
+    )
+    parser.add_argument(
+        "--devices",
+        type=str,
+        default=None,
+        help=(
+            "Lightning devices override (e.g. 'auto', '1', '2'). Default "
+            "is 'auto'. Replaces the legacy USE_ALL_GPUS flag in "
+            "config.py."
+        ),
     )
     return parser
 

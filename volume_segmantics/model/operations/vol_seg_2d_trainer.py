@@ -74,6 +74,23 @@ class VolSeg2dTrainer:
             labels: Either number of labels or dictionary containing label names.
             settings: A training settings object.
         """
+        # v0.4.0b3 deprecation: the raw torch trainer is replaced by the
+        # PyTorch Lightning path (default in `model-train-2d`). This
+        # class is preserved for one release behind the
+        # ``--legacy-trainer`` flag.
+        import os
+        if not os.environ.get("VOLSEG_SUPPRESS_RAW_TRAINER_DEPRECATION"):
+            import warnings
+            warnings.warn(
+                "VolSeg2dTrainer (the raw-torch trainer) is deprecated as "
+                "of v0.4.0b3 and scheduled for removal in v0.5. The "
+                "PyTorch Lightning trainer is now the default — pass "
+                "--legacy-trainer to model-train-2d to keep using this "
+                "class. See docs/v0_4_b3_release_plan.md §4.2.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         # Semi-supervised learning settings
         self.use_semi_supervised = getattr(settings, "use_semi_supervised", False)
         self.use_pseudo_labeling = getattr(settings, "use_pseudo_labeling", False)
