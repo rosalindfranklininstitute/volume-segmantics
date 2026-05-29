@@ -1,6 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -11,6 +11,8 @@ from volume_segmantics.data.datasets import (get_2d_prediction_dataset,
                                              get_2d_training_dataset,
                                              get_2d_validation_dataset,
                                              get_2d_image_dir_prediction_dataset)
+from volume_segmantics.data.pipeline_dataset import PipelineMultiTaskDataset
+from volume_segmantics.data.pipeline_loader import PipelineConfig
 
 
 try:
@@ -39,6 +41,12 @@ def get_2d_training_dataloaders(
     Returns:
         Tuple[DataLoader, DataLoader]: 2d training and validation dataloaders
     """
+    pipeline_cfg = getattr(settings, "pipeline_config", None)
+    if pipeline_cfg is not None and _pipeline_mode_required(pipeline_cfg):
+        return get_pipeline_training_dataloaders(
+            image_dir, label_dir, settings, pipeline_cfg,
+        )
+
     # Multitask requires MONAI datasets (they return dicts with boundary/task3 keys)
     use_multitask = getattr(settings, "use_multitask", False)
     use_monai = (
@@ -265,3 +273,106 @@ def get_semi_supervised_dataloaders(
         )
 
     return labeled_train_loader, unlabeled_loader, validation_loader
+
+
+#  pipeline-mode dataloaders 
+
+
+def _pipeline_mode_required(pipeline_config: PipelineConfig) -> bool:
+    """Returns True iff the parsed config needs the pipeline-mode path.
+
+    """
+    for head_name, head_cfg in pipeline_config.heads.items():
+        if head_cfg.enabled and head_name != "semantic":
+            return True
+    if pipeline_config.instance_assembly.backend is not None:
+        return True
+    return False
+
+
+def get_pipeline_training_dataloaders(
+    image_dir: Path,
+    label_dir: Path,
+    settings: SimpleNamespace,
+    pipeline_config: PipelineConfig,
+    *,
+    num_classes: Optional[int] = None,
+) -> Tuple[DataLoader, DataLoader]:
+    """Build pipeline-mode train and val dataloaders over
+    :class:`PipelineMultiTaskDataset`.
+
+
+    Parameters
+    ----------
+    image_dir, label_dir
+        Directories of pre-sliced ``data*.png|.tiff`` images and
+        ``seg*.png`` masks (produced by :class:`TrainingDataSlicer`).
+    settings
+        Legacy ``SimpleNamespace`` settings — read for
+        ``training_set_proportion``, ``image_size``,
+        ``use_imagenet_norm``, ``use_2_5d_slicing``, ``num_slices``,
+        and the GPU-tiered batch size.
+    pipeline_config
+        Parsed :class:`PipelineConfig` driving the head set + per-head
+        target generators + augmentation list.
+    num_classes
+        Number of semantic classes. ``None`` reads from
+        ``settings.max_label_no`` and falls back to 2.
+    """
+    if num_classes is None:
+        num_classes = int(getattr(settings, "max_label_no", 2) or 2)
+
+    img_size = int(getattr(settings, "image_size", 512) or 512)
+    use_imagenet_norm = bool(getattr(settings, "use_imagenet_norm", True))
+    use_2_5d_slicing = bool(getattr(settings, "use_2_5d_slicing", False))
+    num_2_5d_slices = int(getattr(settings, "num_slices", 3) or 3)
+    training_set_prop = float(
+        getattr(settings, "training_set_proportion", 0.85) or 0.85
+    )
+    batch_size = utils.get_batch_size(settings)
+
+    train_dset = PipelineMultiTaskDataset(
+        image_dir, label_dir,
+        pipeline_config=pipeline_config,
+        num_classes=num_classes,
+        settings=settings,
+        validation=False,
+        img_size=img_size,
+        imagenet_norm=use_imagenet_norm,
+        use_2_5d_slicing=use_2_5d_slicing,
+        num_2_5d_slices=num_2_5d_slices,
+    )
+    val_dset = PipelineMultiTaskDataset(
+        image_dir, label_dir,
+        pipeline_config=pipeline_config,
+        num_classes=num_classes,
+        settings=settings,
+        validation=True,
+        img_size=img_size,
+        imagenet_norm=use_imagenet_norm,
+        use_2_5d_slicing=use_2_5d_slicing,
+        num_2_5d_slices=num_2_5d_slices,
+    )
+
+    n = len(train_dset)
+    indices = torch.randperm(n).tolist()
+    train_idx, val_idx = np.split(indices, [int(n * training_set_prop)])
+    training_dataset = Subset(train_dset, train_idx)
+    validation_dataset = Subset(val_dset, val_idx)
+
+    training_dataloader = DataLoader(
+        training_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=cfg.NUM_WORKERS,
+        pin_memory=cfg.PIN_CUDA_MEMORY,
+        drop_last=True,
+    )
+    validation_dataloader = DataLoader(
+        validation_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=cfg.NUM_WORKERS,
+        pin_memory=cfg.PIN_CUDA_MEMORY,
+    )
+    return training_dataloader, validation_dataloader

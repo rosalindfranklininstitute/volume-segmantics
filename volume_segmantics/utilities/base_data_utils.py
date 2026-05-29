@@ -202,6 +202,14 @@ def prepare_training_batch(
         For dict format: (inputs, targets_dict) where targets_dict contains all task targets
     """
     if isinstance(batch, dict):
+        # pipeline-mode dict: keys are "image" and every enabled
+        # head's name from {semantic, boundary, distance, sdm}. The
+        # PipelineMultiTaskDataset already produces tensors in the
+        # exact shapes the calculator expects, so we just move them to
+        # device and return the targets dict verbatim.
+        if "image" in batch:
+            return _prepare_pipeline_batch(batch, device)
+
         # dictionary with keys like "img", "seg", "boundary" (MONAI)
         inputs = batch["img"].to(torch.float32)
         inputs = inputs.to(device)
@@ -269,6 +277,37 @@ def prepare_training_batch(
         targets = torch.nn.functional.one_hot(targets, num_classes=num_labels)
         targets = targets.permute((0, 3, 1, 2)).to(device, dtype=torch.uint8)
         return inputs, targets
+
+
+def _prepare_pipeline_batch(
+    batch: dict, device,
+) -> "tuple[torch.Tensor, dict]":
+    """Move pipeline-mode batch to device.
+
+    The :class:`PipelineMultiTaskDataset` (B3.D) produces per-sample
+    dicts ``{"image": ..., "semantic": ..., "boundary": ..., ...}``
+    whose tensor shapes already match the
+    :class:`PipelineMultiTaskLossCalculator`'s contract:
+
+    * image: ``(B, C, H, W) float32``
+    * semantic: ``(B, H, W) int64``
+    * boundary / distance / sdm: ``(B, K, H, W) float32`` (K=1 except
+      per_class SDM)
+
+    """
+    inputs = batch["image"].to(torch.float32).to(device)
+    targets: dict = {}
+    for key, val in batch.items():
+        if key == "image":
+            continue
+        if not isinstance(val, torch.Tensor):
+            # tolerate non-tensor extras (file paths, indices etc.)
+            continue
+        if key == "semantic":
+            targets[key] = val.to(torch.int64).to(device)
+        else:
+            targets[key] = val.to(torch.float32).to(device)
+    return inputs, targets
 
 
 def downsample_data(data, factor=2):
