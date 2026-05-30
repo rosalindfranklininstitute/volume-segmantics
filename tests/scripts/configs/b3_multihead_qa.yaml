@@ -1,0 +1,114 @@
+# Multi-head QA test (real training, real predictions).
+#
+# Run:
+#   python tests/scripts/run_smoke.py qa_b3_multihead
+#   python tests/scripts/run_smoke.py qa_b3_multihead --dry-run
+#
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/b3_multihead_qa
+
+global_overrides:
+  train:
+    image_size: 512
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 5
+    patience: 4
+    starting_lr: 0.00005
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false        # b3 — multi-head lives in pipeline.yaml.
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet  # production pretrained weights.
+  predict:
+    quality: medium
+    output_probs: true
+    output_entropy: false
+    prediction_axis: Z
+    z_smooth: true
+    z_smooth_sigma: 2.0
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: true
+        loss: boundary_bce_dice
+        loss_weight: 0.5
+        width: 2
+      distance:
+        enabled: true
+        loss: distance_l1
+        loss_weight: 0.25
+      sdm:
+        enabled: true
+        loss: sdm_l1
+        loss_weight: 0.25
+        variant: binary
+    targets:
+      boundary:
+        width: 2
+      distance:
+        distance_transform: edt
+      sdm:
+        distance_transform: edt
+
+tests:
+  # 1. Train multi-head via Lightning (b3 default trainer).
+  - name: qa_b3_multihead
+    type: train
+    model_key: qa_b3_multihead
+    overrides:
+      train:
+        model_output_fn: qa_b3_multihead
+        loss_criterion: CombinedCEDiceLoss
+        ce_weight: 0.2
+        dice_weight: 0.8
+        dice_weight_mode: inverse_sqrt_freq
+
+  # 2. v0.5-Bug-2 guard: BN stats trained.
+  - name: assert_bn_trained
+    type: b3_assert
+    subcommand: checkpoint-trained
+    args:
+      - "${model:qa_b3_multihead}"
+
+  # 3. Predict medium quality (3-axis, semantic head argmax).
+  - name: qa_predict_b3_multihead_medium
+    type: predict
+    model_key: qa_b3_multihead
+    overrides:
+      predict:
+        quality: medium
+        output_probs: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+
+  # 4. Predict z_only with entropy.
+  - name: qa_predict_b3_multihead_z_entropy
+    type: predict
+    model_key: qa_b3_multihead
+    overrides:
+      predict:
+        quality: z_only
+        output_probs: true
+        output_entropy: true
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"
+        - "*_entropy.*"

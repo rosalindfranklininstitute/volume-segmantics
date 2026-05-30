@@ -116,7 +116,7 @@ def compute_per_head_disagreement(
     }
     weight_sum = sum(active_weights.values())
     if weight_sum <= 0:
-        # All-zero weights → uniform mean fallback so the caller
+        # All-zero weights -> uniform mean fallback so the caller
         # doesn't silently get zeros when they clearly wanted signal.
         stacked = torch.stack(list(per_head_maps.values()), dim=0)
         return stacked.mean(dim=0).clamp_(0.0, 1.0)

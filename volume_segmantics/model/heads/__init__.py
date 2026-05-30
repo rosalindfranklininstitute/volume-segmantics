@@ -48,14 +48,14 @@ def _resolve_default_out_channels(
     """Per-head default ``out_channels`` when the YAML omits it.
 
 
-    * ``semantic`` → ``num_classes`` (matches v0.4 behaviour).
-    * ``sdm`` → ``1`` for ``binary`` variant, ``num_classes - 1`` for
+    * ``semantic`` -> ``num_classes`` (matches v0.4 behaviour).
+    * ``sdm`` -> ``1`` for ``binary`` variant, ``num_classes - 1`` for
       ``per_class``. Variant lives in :class:`HeadConfig.extra`; default
       matches :class:`SDMHead`'s own default of ``"binary"``.
-    * ``boundary`` / ``distance`` → ``None``: the head's own ``__init__``
+    * ``boundary`` / ``distance`` -> ``None``: the head's own ``__init__``
       knows the right channel count (1) and we let it default. Avoids
       duplicating that knowledge here.
-    * Unknown heads → ``None``: pass through; the head decides.
+    * Unknown heads -> ``None``: pass through; the head decides.
     """
     if head_name == SEMANTIC_HEAD_NAME:
         return num_classes
@@ -80,8 +80,8 @@ def build_head_modules(
     * ``out_channels`` resolution order:
 
       1. ``head_config.out_channels`` if explicitly set.
-      2. Else :func:`_resolve_default_out_channels` (semantic →
-         ``num_classes``; sdm → 1 or ``num_classes - 1`` by variant).
+      2. Else :func:`_resolve_default_out_channels` (semantic ->
+         ``num_classes``; sdm -> 1 or ``num_classes - 1`` by variant).
       3. Else (boundary / distance) the kwarg is omitted and the head's
          own ``__init__`` default kicks in.
 
@@ -91,7 +91,7 @@ def build_head_modules(
       configs.
     * Each head is instantiated via
       :func:`pipeline_registry.build_head` so the registry stays the
-      single source of truth for head-name → class.
+      single source of truth for head-name -> class.
     * ``dim`` selects between 2D (default) and 3D head variants. b3
       raises on ``dim=3`` — the 3D path is deferred. The kwarg is
       preserved for forward-compat: when 3D heads land, callers won't

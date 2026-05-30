@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# smoke run artefacts
+checkpoints/
+tmp/
+
 # C extensions
 *.so
 

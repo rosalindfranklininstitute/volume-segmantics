@@ -1,0 +1,80 @@
+#  DINO encoder carry-forward
+#
+# Confirms the DINOv2 encoder (used for sliding-window prediction)
+# still works under the b3 pipeline-mode Lightning trainer with a
+# pipeline.yaml present (semantic-only).
+#
+# Run:
+#   python tests/scripts/run_smoke.py b3_dino
+#   python tests/scripts/run_smoke.py b3_dino --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/b3_dino_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    encoder_lr_multiplier: 0.1
+    model:
+      type: U_Net
+      encoder_weights: dinov2
+      encoder_depth: 4
+  predict:
+    quality: low
+    prediction_axis: Z
+    use_sliding_window: true
+    sw_roi_size: [512, 512]
+    sw_overlap: 0.25
+    sw_mode: gaussian
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+
+tests:
+  # 1. DINO-S U-Net under b3 trainer.
+  - name: train_b3_dino_s
+    type: train
+    model_key: b3_dino_s
+    overrides:
+      train:
+        model_output_fn: b3_dino_s
+        loss_criterion: CombinedCEDiceLoss
+        model:
+          encoder_name: dinov2_vits14
+
+  # 2. BN-trained guard.
+  - name: assert_bn_trained
+    type: b3_assert
+    subcommand: checkpoint-trained
+    args:
+      - "${model:b3_dino_s}"
+
+  # 3. Predict via sliding window (the DINO common path).
+  - name: predict_b3_dino_s_low
+    type: predict
+    model_key: b3_dino_s
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"

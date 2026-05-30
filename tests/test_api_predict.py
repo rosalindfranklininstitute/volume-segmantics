@@ -237,7 +237,7 @@ def test_predict_tta_uncertainty_produces_variance_and_entropy(
 def test_predict_tta_uncertainty_auto_picks_provider(
     tiny_model_path, tiny_volume_path,
 ):
-    """uncertainty_provider=None + inference_mode='tta_uncertainty' →
+    """uncertainty_provider=None + inference_mode='tta_uncertainty' ->
     auto-set to 'tta_uncertainty'."""
     result = predict(
         model_path=tiny_model_path,

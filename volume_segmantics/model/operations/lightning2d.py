@@ -111,7 +111,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
                 ema_decay=ema_cfg.schedule.alpha_end,
                 schedule=schedule,
             )
-            # consistency_weights: dict head_name → float. Heads
+            # consistency_weights: dict head_name -> float. Heads
             # missing from the dict get weight 0 (not contributing).
             self._consistency_weights: Dict[str, float] = dict(
                 ema_cfg.consistency_weights
@@ -341,7 +341,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
     def configure_optimizers(self):
         starting_lr = float(getattr(self.settings, "starting_lr", 5e-5) or 5e-5)
         encoder_lr_mult = getattr(self.settings, "encoder_lr_multiplier", 1.0)
-        # ``False`` / ``None`` / 1.0 → no parameter-group split.
+        # ``False`` / ``None`` / 1.0 -> no parameter-group split.
         if encoder_lr_mult in (None, False) or float(encoder_lr_mult) == 1.0:
             optimizer = torch.optim.AdamW(
                 self._optimised_parameters(), lr=starting_lr,
@@ -436,7 +436,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
 
 
 class UnfreezeEncoderCallback(pl.Callback if pl is not None else object):
-    """Two-stage frozen → unfrozen fine-tuning.
+    """Two-stage frozen -> unfrozen fine-tuning.
 
     Mirrors v0.4's ``num_cyc_frozen`` / ``num_cyc_unfrozen`` semantics.
     The encoder is frozen at fit start; on the boundary epoch the

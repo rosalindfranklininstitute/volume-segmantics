@@ -155,7 +155,7 @@ class _CrossEntropyWrapper(nn.Module):
             if target.size(1) == 1:
                 target = target.squeeze(1)
             else:
-                # one-hot → indices
+                # one-hot -> indices
                 target = target.argmax(dim=1)
         return self.inner(pred, target.long())
 

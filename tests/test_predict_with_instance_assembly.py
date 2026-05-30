@@ -117,9 +117,9 @@ class _IdentityAssembler:
                 if axis == "xy":
                     return arr.astype(np.uint32, copy=False)
                 if axis == "xz":
-                    # (Y, Z, X) → (Z, Y, X)
+                    # (Y, Z, X) -> (Z, Y, X)
                     return np.transpose(arr, (1, 0, 2)).astype(np.uint32)
-                # yz: (X, Z, Y) → (Z, Y, X)
+                # yz: (X, Z, Y) -> (Z, Y, X)
                 return np.transpose(arr, (1, 2, 0)).astype(np.uint32)
         raise RuntimeError("identity assembler: no per-axis maps available")
 
@@ -156,7 +156,7 @@ def test_run_assembly_adds_arrays(identity_backend):
 
 
 def test_run_assembly_auto_selects_semantic_cc(identity_backend):
-    """Producer=None + only semantic populated → semantic_cc auto-pick."""
+    """Producer=None + only semantic populated -> semantic_cc auto-pick."""
     sem = _structured_semantic_volume()
     arrays = {"teacher_argmax": sem}
     cfg = _pipeline(producer=None, asm_params={})
@@ -166,13 +166,13 @@ def test_run_assembly_auto_selects_semantic_cc(identity_backend):
         pipeline_config=cfg,
         voxel_size=(1.0, 1.0, 1.0),
     )
-    # semantic_cc on two well-separated blobs → 2 instances per slice.
+    # semantic_cc on two well-separated blobs -> 2 instances per slice.
     paxis = arrays["per_axis_instances"]
     assert int(paxis["xy"][0].max()) >= 2
 
 
 def test_run_assembly_auto_selects_distance_watershed(identity_backend):
-    """Producer=None + distance_map present → distance_watershed picked."""
+    """Producer=None + distance_map present -> distance_watershed picked."""
     sem = _structured_semantic_volume()
     Z, Y, X = sem.shape
     yy, xx = np.indices((Y, X))
@@ -194,7 +194,7 @@ def test_run_assembly_auto_selects_distance_watershed(identity_backend):
         voxel_size=(1.0, 1.0, 1.0),
     )
     paxis = arrays["per_axis_instances"]
-    # Two peaks → two instances per slice.
+    # Two peaks -> two instances per slice.
     assert int(paxis["xy"][0].max()) == 2
 
 
@@ -232,7 +232,7 @@ def test_run_assembly_subset_axes(identity_backend):
 
 
 def test_run_assembly_voxel_size_flows_to_config(identity_backend):
-    """voxel_size kwarg → AssemblyConfig.voxel_size on the call.
+    """voxel_size kwarg -> AssemblyConfig.voxel_size on the call.
 
     Captured via the identity backend's stored kwargs.
     """
@@ -424,7 +424,7 @@ def test_predict_with_assembly_kwarg_writes_zarr(
 def test_predict_assembly_from_pipeline_config_only(
     seeded_tiny_model_path, structured_volume_path,
 ):
-    """No instance_assembly_backend kwarg + cfg.backend set → assembly runs."""
+    """No instance_assembly_backend kwarg + cfg.backend set -> assembly runs."""
     cfg = _pipeline()
     result = predict(
         model_path=seeded_tiny_model_path,
@@ -442,7 +442,7 @@ def test_predict_assembly_from_pipeline_config_only(
 def test_predict_no_assembly_when_backend_unset(
     seeded_tiny_model_path, structured_volume_path,
 ):
-    """Both kwarg + cfg.backend ``None`` → no assembly arrays."""
+    """Both kwarg + cfg.backend ``None`` -> no assembly arrays."""
     cfg = PipelineConfig(
         heads={"semantic": HeadConfig(enabled=True, loss="dice_ce")},
         prediction=PredictionConfig(inference_mode="single_axis"),

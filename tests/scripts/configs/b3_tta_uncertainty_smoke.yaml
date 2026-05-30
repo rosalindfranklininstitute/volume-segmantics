@@ -1,0 +1,119 @@
+# tta_uncertainty inference mode smoke
+#
+# Trains semantic-only, then predicts with inference_mode=tta_uncertainty.
+# Asserts the prediction.zarr contains the expected uncertainty arrays
+# with values in the right ranges (variance >= 0; entropy in [0, log(C)])
+# and that high variance correlates with low max-prob (Spearman >= 0.3).
+#
+# Run:
+#   python tests/scripts/run_smoke.py b3_tta_uncertainty
+#   python tests/scripts/run_smoke.py b3_tta_uncertainty --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/b3_tta_uncertainty_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: medium  # multi-axis ≥ medium is what tta_uncertainty rides on.
+    output_probs: true
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+    prediction:
+      inference_mode: tta_uncertainty
+      uncertainty_provider: tta_uncertainty
+
+tests:
+  # 1. Train semantic-only.
+  - name: train_b3_tta
+    type: train
+    model_key: b3_tta_model
+    overrides:
+      train:
+        model_output_fn: b3_tta_smoke
+
+  # 2. BN-trained guard.
+  - name: assert_bn_trained
+    type: b3_assert
+    subcommand: checkpoint-trained
+    args:
+      - "${model:b3_tta_model}"
+
+  # 3. Predict with tta_uncertainty mode -> prediction.zarr.
+  - name: predict_tta_uncertainty
+    type: b3_predict_zarr
+    model_key: b3_tta_model
+    inference_mode: tta_uncertainty
+    output_zarr: prediction.zarr
+    zarr_key: tta_zarr
+
+  # 4. Required arrays present.
+  - name: assert_tta_zarr_keys
+    type: b3_assert
+    subcommand: zarr-keys
+    args:
+      - "${artifact:tta_zarr}"
+      - "--keys"
+      - teacher_argmax
+      - teacher_probs
+      - tta_variance_map
+      - tta_entropy_map
+
+  # 5. Variance >= 0.
+  - name: assert_variance_nonneg
+    type: b3_assert
+    subcommand: zarr-array-range
+    args:
+      - "${artifact:tta_zarr}"
+      - "--key"
+      - tta_variance_map
+      - "--min"
+      - "0.0"
+
+  # 6. Entropy in [0, log(2)] (binary semantic head from vessels fixture).
+  - name: assert_entropy_bounds
+    type: b3_assert
+    subcommand: zarr-array-range
+    args:
+      - "${artifact:tta_zarr}"
+      - "--key"
+      - tta_entropy_map
+      - "--min"
+      - "0.0"
+      - "--max"
+      - "0.7"  # log(2) + tolerance.
+
+  # 7. High variance ↔ low max-prob (Spearman ≥ 0.3).
+  - name: assert_variance_low_max_prob
+    type: b3_assert
+    subcommand: variance-low-max-prob
+    args:
+      - "${artifact:tta_zarr}"
+      - "--min-spearman"
+      - "0.3"

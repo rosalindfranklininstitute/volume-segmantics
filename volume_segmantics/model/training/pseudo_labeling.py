@@ -11,13 +11,13 @@ generalises the single-semantic-head behaviour to the four-head set
 (``semantic`` / ``boundary`` / ``distance`` / ``sdm``). Per-head
 pseudo-target dispatch:
 
-* ``semantic`` — softmax → argmax → class indices ``(B, H, W) long``;
+* ``semantic`` — softmax -> argmax -> class indices ``(B, H, W) long``;
   per-pixel acceptance mask from the existing max-prob / entropy /
   per-class confidence path.
-* ``boundary`` — sigmoid → soft target ``(B, 1, H, W)`` float;
+* ``boundary`` — sigmoid -> soft target ``(B, 1, H, W)`` float;
   acceptance mask = pixels where teacher is *confident* (``|0.5 - p|
   >= margin``). Pixels near 0.5 (uncertain) are rejected.
-* ``distance`` — identity → raw target ``(B, 1, H, W)`` float; mask =
+* ``distance`` — identity -> raw target ``(B, 1, H, W)`` float; mask =
   all-True. Distance regression has no natural confidence proxy in
   this minimal implementation; consistency loss does the work.
 * ``sdm`` — tanh-bounded raw target ``(B, K, H, W)`` float; mask =
@@ -264,7 +264,7 @@ class PseudoLabelGenerator:
             "per_class_acceptance": {},
         }
 
-    # ─── v0.4.0b3 per-head pseudo-label generation (Phase B3.E.4) ──
+    #  per-head pseudo-label generation
 
     def generate_per_head_pseudo_labels(
         self,

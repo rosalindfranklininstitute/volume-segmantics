@@ -259,7 +259,7 @@ def predict(
         )
 
     #  Instance assembly dispatch  
-    # kwarg overrides pipeline_config; both null → no assembly.
+    # kwarg overrides pipeline_config; both null -> no assembly.
     effective_backend = instance_assembly_backend
     if effective_backend is None:
         effective_backend = pipeline_config.instance_assembly.backend
@@ -351,7 +351,7 @@ def _run_tta_uncertainty(
                 f"api.predict[tta_uncertainty]: axis {tag} returned no "
                 f"probability stack — predictor returned probs=None"
             )
-        # Transpose (Z, Y, X, C) → (C, Z, Y, X).
+        # Transpose (Z, Y, X, C) -> (C, Z, Y, X).
         per_axis_probs[tag] = np.transpose(
             probs.astype(np.float32, copy=False), (3, 0, 1, 2),
         )

@@ -1,0 +1,95 @@
+# B3.H.2 — Multi-head (semantic + boundary + distance + sdm) smoke
+#
+# Confirms the head-registry path trains end-to-end via the Lightning
+# trainer with all four geometric heads enabled. Asserts the saved
+# checkpoint actually trained.
+#
+# Run:
+#   python tests/scripts/run_smoke.py b3_multihead
+#   python tests/scripts/run_smoke.py b3_multihead --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/b3_multihead_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false  # b3 — multi-head lives in pipeline.yaml.
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: low
+    output_probs: false
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: true
+        loss: boundary_bce_dice
+        loss_weight: 0.5
+        width: 2
+      distance:
+        enabled: true
+        loss: distance_l1
+        loss_weight: 0.25
+      sdm:
+        enabled: true
+        loss: sdm_l1
+        loss_weight: 0.25
+        variant: binary
+    targets:
+      boundary:
+        width: 2
+      distance:
+        distance_transform: edt
+      sdm:
+        distance_transform: edt
+
+tests:
+  # 1. Train multi-head via Lightning.
+  - name: train_b3_multihead
+    type: train
+    model_key: b3_multihead_model
+    overrides:
+      train:
+        model_output_fn: b3_multihead_smoke
+
+  # 2. v0.5-Bug-2 guard: BN stats trained.
+  - name: assert_bn_trained
+    type: b3_assert
+    subcommand: checkpoint-trained
+    args:
+      - "${model:b3_multihead_model}"
+
+  # 3. Legacy single-file predict produces a vol_pred for sanity.
+  - name: predict_b3_multihead_low
+    type: predict
+    model_key: b3_multihead_model
+    overrides:
+      predict:
+        quality: low
+    assert_outputs:
+      should_exist_globs:
+        - "*_vol_pred.*"

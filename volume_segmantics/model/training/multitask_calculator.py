@@ -47,7 +47,7 @@ class MultiTaskLossOutput(NamedTuple):
     per_head_weights: Dict[str, float]
 
 
-# ─── Default loss names per head ────────────────────────────────────
+# Default loss names per head 
 
 
 _DEFAULT_LOSS_PER_HEAD: Mapping[str, str] = {
@@ -75,7 +75,7 @@ def _resolve_head_loss_name(head_name: str, head_cfg: HeadConfig) -> str:
     )
 
 
-# ─── Calculator ─────────────────────────────────────────────────────
+#  Calculator 
 
 
 class PipelineMultiTaskLossCalculator(nn.Module):
@@ -165,7 +165,7 @@ class PipelineMultiTaskLossCalculator(nn.Module):
                 sched_src.get(head_name),
             )
 
-    # ─── Class-method constructor: from PipelineConfig ─────────────
+    #  Class-method constructor: from PipelineConfig 
 
     @classmethod
     def from_pipeline_config(
@@ -184,7 +184,7 @@ class PipelineMultiTaskLossCalculator(nn.Module):
             loss_schedules=config.loss_schedule,
         )
 
-    # ─── Per-batch compute ────────────────────────────────────────
+    #  Per-batch compute 
 
     def compute(
         self,

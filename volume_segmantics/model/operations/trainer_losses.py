@@ -34,7 +34,7 @@ class ConsistencyLoss(nn.Module):
         return seg_consistency_loss(student_pred, teacher_pred)
 
 
-# ─── v0.4.0b3 per-head consistency losses (Phase B3.E.2) ────────────
+# per-head consistency losses 
 # Each function takes raw head outputs (in the head's native
 # activation space — semantic = logits, boundary = logits,
 # distance = identity, sdm = tanh-bounded). Per-head activation is
@@ -87,7 +87,7 @@ def sdm_consistency_loss(
     return F.mse_loss(student_pred, teacher_pred.detach())
 
 
-# ─── Per-head consistency dispatcher ────────────────────────────────
+#  Per-head consistency dispatcher 
 
 
 _PER_HEAD_CONSISTENCY = {

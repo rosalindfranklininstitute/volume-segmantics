@@ -49,7 +49,7 @@ class InferenceModeDescriptor:
     description: str = ""
 
 
-# ─── Registry ──────────────────────────────────────────────────────
+#  Registry 
 
 
 _MODES: Dict[str, InferenceModeDescriptor] = {}
@@ -75,7 +75,7 @@ def list_inference_modes() -> List[str]:
     return sorted(_MODES)
 
 
-# ─── b3 ships four modes ────────────────────────────────────────────
+#  b3 ships four modes 
 
 
 # Common keys every mode populates.

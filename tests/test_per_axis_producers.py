@@ -127,8 +127,8 @@ def test_semantic_cc_basic_two_blobs_xy():
 
 
 def test_semantic_cc_4_vs_8_connectivity():
-    """Two diagonally-adjacent pixels: 4-conn → 2 components,
-    8-conn → 1 component."""
+    """Two diagonally-adjacent pixels: 4-conn -> 2 components,
+    8-conn -> 1 component."""
     sem = np.zeros((1, 4, 4), dtype=np.uint8)
     sem[0, 0, 0] = 1
     sem[0, 1, 1] = 1
@@ -175,7 +175,7 @@ def test_semantic_cc_empty_foreground_returns_zeros():
 
 
 def test_semantic_cc_axis_xz_shape():
-    """xz axis: slice along Y → output stack shape (Y, Z, X)."""
+    """xz axis: slice along Y -> output stack shape (Y, Z, X)."""
     sem = _semantic_volume_two_blobs()
     bundle = PredictionBundle(semantic_argmax=sem)
     out = SemanticCcSliceProducer().produce(bundle, ("xz",), {})
@@ -184,7 +184,7 @@ def test_semantic_cc_axis_xz_shape():
 
 
 def test_semantic_cc_axis_yz_shape():
-    """yz axis: slice along X → output stack shape (X, Z, Y)."""
+    """yz axis: slice along X -> output stack shape (X, Z, Y)."""
     sem = _semantic_volume_two_blobs()
     bundle = PredictionBundle(semantic_argmax=sem)
     out = SemanticCcSliceProducer().produce(bundle, ("yz",), {})
@@ -302,7 +302,7 @@ def test_distance_watershed_no_peaks_falls_back_to_centroid():
     Z, Y, X = 1, 6, 6
     sem = np.zeros((Z, Y, X), dtype=np.uint8)
     sem[0, 2:4, 2:4] = 1
-    # Constant distance inside FG → no local max under high min_distance.
+    # Constant distance inside FG -> no local max under high min_distance.
     dist = np.zeros((Z, Y, X), dtype=np.float32)
     dist[0, 2:4, 2:4] = 1.0
     bundle = PredictionBundle(semantic_argmax=sem, distance_map=dist)

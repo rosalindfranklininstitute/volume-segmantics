@@ -342,7 +342,7 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
     * :class:`VolSeg2dLightningModule` from ``settings.pipeline_config``
       via :meth:`from_pipeline_config`.
     * :class:`VolSeg2dDataModule` over the pipeline-mode dataloader.
-    * Callbacks: :class:`UnfreezeEncoderCallback` (frozen→unfrozen
+    * Callbacks: :class:`UnfreezeEncoderCallback` (frozen->unfrozen
       two-stage), :class:`VolSegCheckpointCallback` (with the v0.5
       Bug 2 sanity-check + always-save-final fixes),
       :class:`EpochHistoryCallback`, Lightning's :class:`EarlyStopping`
@@ -419,7 +419,7 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         "encoder_depth": int((settings.model or {}).get("encoder_depth", 5) or 5),
         "in_channels": cfg.get_model_input_channels(settings) or 1,
         "classes": int(max_label_no),
-        # SSL on → ``pl_module.model`` is a ``MeanTeacherModel`` wrapper;
+        # SSL on -> ``pl_module.model`` is a ``MeanTeacherModel`` wrapper;
         # use ``pl_module.head_names`` + ``_underlying_student`` so the
         # accessor works regardless.
         "heads": [

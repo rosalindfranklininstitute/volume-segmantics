@@ -68,6 +68,15 @@ NAMED_CONFIGS = {
     "qa_dino_multitask": "tests/scripts/configs/dino_multitask_qa_tests.yaml",
     "qa_dino_semisup": "tests/scripts/configs/dino_semisup_qa_tests.yaml",
     "qa_dino_2.5d": "tests/scripts/configs/dino_two_5d_qa_tests.yaml",
+    # v0.4.0b3 smoke gates
+    "b3_semantic": "tests/scripts/configs/b3_semantic_smoke.yaml",
+    "b3_multihead": "tests/scripts/configs/b3_multihead_smoke.yaml",
+    "b3_instance_seg": "tests/scripts/configs/b3_instance_seg_smoke.yaml",
+    "b3_semisup": "tests/scripts/configs/b3_semisup_smoke.yaml",
+    "b3_tta_uncertainty": "tests/scripts/configs/b3_tta_uncertainty_smoke.yaml",
+    "b3_trainer_parity": "tests/scripts/configs/b3_trainer_parity_smoke.yaml",
+    "b3_2.5d": "tests/scripts/configs/b3_two5d_smoke.yaml",
+    "b3_dino": "tests/scripts/configs/b3_dino_smoke.yaml",
 }
 
 # Groups that expand to multiple configs run in sequence
@@ -76,6 +85,12 @@ NAMED_GROUPS = {
     "all_qa": ["qa_basic", "qa_losses", "qa_multitask", "qa_semisup", "qa_2.5d"],
     "all_dino_smoke": ["dino_basic", "dino_multitask", "dino_semisup", "dino_2.5d"],
     "all_dino_qa": ["qa_dino_basic", "qa_dino_multitask", "qa_dino_semisup", "qa_dino_2.5d"],
+    # v0.4.0b3 release gate (all 8 must be green for the b3 tag).
+    "b3_all": [
+        "b3_semantic", "b3_multihead", "b3_instance_seg",
+        "b3_semisup", "b3_tta_uncertainty", "b3_trainer_parity",
+        "b3_2.5d", "b3_dino",
+    ],
 }
 
 # Data profiles: named sets of path overrides that can be applied to any config.

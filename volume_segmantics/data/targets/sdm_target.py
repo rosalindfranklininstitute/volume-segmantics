@@ -12,9 +12,9 @@ Output range
 ------------
 Distances are divided by ``d_clip`` and clipped to ``[-1, 1]``:
 
-* Voxel deep inside foreground at distance ``> d_clip`` → ``+1.0``.
-* Voxel deep in background at distance ``> d_clip`` → ``-1.0``.
-* Boundary → ``0.0``.
+* Voxel deep inside foreground at distance ``> d_clip`` -> ``+1.0``.
+* Voxel deep in background at distance ``> d_clip`` -> ``-1.0``.
+* Boundary -> ``0.0``.
 
 The default ``d_clip = 10.0`` voxels matches the head's default and
 is appropriate for object scales in the 5–50 voxel range. Tune via
@@ -28,8 +28,8 @@ Variants
 
 Output shape
 ------------
-* ``binary`` → ``(H, W) float32``.
-* ``per_class`` → ``(num_classes - 1, H, W) float32`` (channel-first).
+* ``binary`` -> ``(H, W) float32``.
+* ``per_class`` -> ``(num_classes - 1, H, W) float32`` (channel-first).
 
 Loss path
 ---------
@@ -76,8 +76,8 @@ def derive_sdm_target_2d(
     Returns
     -------
     np.ndarray
-        ``binary`` → ``(H, W) float32`` in ``[-1, 1]``.
-        ``per_class`` → ``(num_classes - 1, H, W) float32`` in ``[-1, 1]``.
+        ``binary`` -> ``(H, W) float32`` in ``[-1, 1]``.
+        ``per_class`` -> ``(num_classes - 1, H, W) float32`` in ``[-1, 1]``.
     """
     if label_slice.ndim != 2:
         raise ValueError(

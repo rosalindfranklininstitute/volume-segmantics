@@ -37,6 +37,8 @@ class HarnessContext:
     pred_template: Path
     global_train_overrides: Dict[str, Any]
     global_pred_overrides: Dict[str, Any]
+    pipeline_template: Optional[Path] = None
+    global_pipeline_overrides: Dict[str, Any] = field(default_factory=dict)
     task2_path: Optional[Path] = None
     task3_path: Optional[Path] = None
     dry_run: bool = False
@@ -84,7 +86,15 @@ def _write_settings_pair(
     run_dir: Path,
     train_overrides: Optional[Dict[str, Any]] = None,
     pred_overrides: Optional[Dict[str, Any]] = None,
+    pipeline_overrides: Optional[Dict[str, Any]] = None,
 ) -> tuple[Path, Path]:
+    """Write the volseg-settings/{train,predict}.yaml pair into ``run_dir``.
+
+    When the harness config has a ``settings_templates.pipeline`` key
+    (or the step provides ``pipeline_overrides``), also writes a
+    ``pipeline.yaml`` next to them so the b3 trainer + predictor pick
+    it up from the per-run settings directory.
+    """
     settings_dir = run_dir / "volseg-settings"
     settings_dir.mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +112,19 @@ def _write_settings_pair(
     pred_settings = settings_dir / "2d_model_predict_settings.yaml"
     _save_yaml(train_settings, train_cfg)
     _save_yaml(pred_settings, pred_cfg)
+
+    # b3 — pipeline.yaml is layered on top of the legacy yamls.
+    if ctx.pipeline_template is not None or pipeline_overrides or ctx.global_pipeline_overrides:
+        pipeline_cfg: Dict[str, Any] = {}
+        if ctx.pipeline_template is not None and ctx.pipeline_template.exists():
+            pipeline_cfg = _load_yaml(ctx.pipeline_template)
+        if ctx.global_pipeline_overrides:
+            _deep_update(pipeline_cfg, copy.deepcopy(ctx.global_pipeline_overrides))
+        if pipeline_overrides:
+            _deep_update(pipeline_cfg, copy.deepcopy(pipeline_overrides))
+        if pipeline_cfg:
+            pipeline_settings = settings_dir / "pipeline.yaml"
+            _save_yaml(pipeline_settings, pipeline_cfg)
     return train_settings, pred_settings
 
 
@@ -188,7 +211,10 @@ def _run_train_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
 
     train_overrides = step_cfg.get("overrides", {}).get("train", {})
     pred_overrides = step_cfg.get("overrides", {}).get("predict", {})
-    train_settings, _ = _write_settings_pair(ctx, run_dir, train_overrides, pred_overrides)
+    pipeline_overrides = step_cfg.get("overrides", {}).get("pipeline", {})
+    train_settings, _ = _write_settings_pair(
+        ctx, run_dir, train_overrides, pred_overrides, pipeline_overrides,
+    )
     train_cfg = _load_yaml(train_settings)
 
     image_value = step_cfg.get("image", "${path:image}")
@@ -212,18 +238,20 @@ def _run_train_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
 
     model_path = _expected_model_path(run_dir, train_cfg)
     if not ctx.dry_run and not model_path.exists():
-        # Training may have crossed midnight ? try glob for any date
         model_cfg = train_cfg.get("model", {})
         model_type = str(model_cfg.get("type", "U_Net")).upper()
         model_output_fn = str(train_cfg.get("model_output_fn", "trained_2d_model"))
-        pattern = f"*_{model_type}_{model_output_fn}.pytorch"
-        candidates = sorted(run_dir.glob(pattern))
+        strict_pattern = f"*_{model_type}_{model_output_fn}.pytorch"
+        relaxed_pattern = f"*_*_{model_output_fn}.pytorch"
+        candidates = sorted(run_dir.glob(strict_pattern))
+        if not candidates:
+            candidates = sorted(run_dir.glob(relaxed_pattern))
         if candidates:
             model_path = candidates[-1]  # most recent
         else:
             raise FileNotFoundError(
                 f"Training finished but model not found: {model_path} "
-                f"(also tried glob '{pattern}' in {run_dir})"
+                f"(tried '{strict_pattern}' and '{relaxed_pattern}' in {run_dir})"
             )
     ctx.models[model_key] = model_path
     status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
@@ -249,7 +277,10 @@ def _run_predict_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
 
     train_overrides = step_cfg.get("overrides", {}).get("train", {})
     pred_overrides = step_cfg.get("overrides", {}).get("predict", {})
-    _write_settings_pair(ctx, run_dir, train_overrides, pred_overrides)
+    pipeline_overrides = step_cfg.get("overrides", {}).get("pipeline", {})
+    _write_settings_pair(
+        ctx, run_dir, train_overrides, pred_overrides, pipeline_overrides,
+    )
 
     image_value = step_cfg.get("image", "${path:image}")
     cmd = [
@@ -284,13 +315,88 @@ def _run_predict_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     print(f"{status} Assertions passed for '{name}'")
 
 
+def _run_b3_predict_zarr_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
+    """Prediction step that writes a ``prediction_v1`` zarr.
+
+    """
+    name = str(step_cfg["name"])
+    model_key = str(step_cfg["model_key"])
+    if model_key not in ctx.models:
+        raise KeyError(f"Predict step '{name}' references unknown model_key '{model_key}'")
+    model_path = ctx.models[model_key]
+    run_dir = ctx.output_root / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    train_overrides = step_cfg.get("overrides", {}).get("train", {})
+    pred_overrides = step_cfg.get("overrides", {}).get("predict", {})
+    pipeline_overrides = step_cfg.get("overrides", {}).get("pipeline", {})
+    _write_settings_pair(
+        ctx, run_dir, train_overrides, pred_overrides, pipeline_overrides,
+    )
+
+    image_value = step_cfg.get("image", "${path:image}")
+    image_path = _resolve_token(str(image_value), ctx, run_dir)
+
+    output_zarr_rel = step_cfg.get("output_zarr", "prediction.zarr")
+    output_zarr_path = run_dir / output_zarr_rel
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "volume_segmantics.scripts.b3_predict",
+        str(model_path),
+        str(image_path),
+        "--data_dir",
+        str(run_dir),
+        "--output-zarr",
+        str(output_zarr_path),
+        "--overwrite-zarr",
+    ]
+    inference_mode = step_cfg.get("inference_mode")
+    if inference_mode is not None:
+        cmd.extend(["--inference-mode", str(inference_mode)])
+    backend = step_cfg.get("instance_assembly_backend")
+    if backend is not None:
+        cmd.extend(["--instance-assembly-backend", str(backend)])
+    voxel_size = step_cfg.get("voxel_size_zyx")
+    if voxel_size is not None:
+        cmd.extend(["--voxel-size-zyx", *[str(v) for v in voxel_size]])
+
+    extra_args = step_cfg.get("args", [])
+    cmd.extend(_resolve_tokens(list(extra_args), ctx, run_dir))
+    _run_command(cmd, cwd=ctx.root_dir, root_dir=ctx.root_dir, dry_run=ctx.dry_run)
+
+    for artifact_cfg in step_cfg.get("register_artifacts", []):
+        key = str(artifact_cfg["key"])
+        rel_path = str(artifact_cfg["path"])
+        artifact_path = run_dir / rel_path
+        ctx.artifacts[key] = artifact_path
+        status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
+        print(f"{status} Registered artifact '{key}' -> {artifact_path}")
+    # Auto-register the zarr under a derived key for assertion steps.
+    zarr_key = step_cfg.get("zarr_key", f"{name}_zarr")
+    ctx.artifacts[zarr_key] = output_zarr_path
+    status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
+    print(f"{status} Registered artifact '{zarr_key}' -> {output_zarr_path}")
+
+    assert_cfg = step_cfg.get("assert_outputs", {})
+    _assert_globs(
+        run_dir=run_dir,
+        should_exist=assert_cfg.get("should_exist_globs", []),
+        should_not_exist=assert_cfg.get("should_not_exist_globs", []),
+        dry_run=ctx.dry_run,
+    )
+    print(f"{status} Assertions passed for '{name}'")
+
+
 def _run_unlabeled_slicer_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     name = str(step_cfg["name"])
     run_dir = ctx.output_root / name
     run_dir.mkdir(parents=True, exist_ok=True)
 
     train_overrides = step_cfg.get("overrides", {}).get("train", {})
-    _write_settings_pair(ctx, run_dir, train_overrides, {})
+    pipeline_overrides = step_cfg.get("overrides", {}).get("pipeline", {})
+    _write_settings_pair(ctx, run_dir, train_overrides, {}, pipeline_overrides)
 
     output_key = str(step_cfg["output_key"])
     output_rel = str(step_cfg.get("output_dir", "unlabeled_data"))
@@ -356,6 +462,36 @@ def _run_unlabeled_slicer_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) ->
     print(f"{status} Registered artifact '{output_key}' -> {merged_dir}")
 
 
+def _run_b3_assert_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
+    """Invoke a b3_assertions.py subcommand with token-resolved args.
+
+    Config shape::
+
+        - name: assert_zarr_layout
+          type: b3_assert
+          subcommand: zarr-keys
+          args:
+            - "${artifact:semantic_pred_zarr}"
+            - "--keys"
+            - "teacher_argmax"
+            - "tta_variance_map"
+    """
+    name = str(step_cfg["name"])
+    subcommand = str(step_cfg["subcommand"])
+    run_dir = ctx.output_root / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "tests.scripts.b3_assertions",
+        subcommand,
+    ]
+    extra_args = step_cfg.get("args", [])
+    cmd.extend(_resolve_tokens(list(extra_args), ctx, run_dir))
+    _run_command(cmd, cwd=ctx.root_dir, root_dir=ctx.root_dir, dry_run=ctx.dry_run)
+
+
 def _run_pytest_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     name = str(step_cfg["name"])
     run_dir = ctx.output_root / name
@@ -396,6 +532,11 @@ def _build_context(root_dir: Path, cfg: Dict[str, Any], dry_run: bool = False) -
     pred_template = (
         root_dir / settings.get("predict", "volseg-settings/2d_model_predict_settings.yaml")
     ).resolve()
+    pipeline_template_raw = settings.get("pipeline")
+    pipeline_template = (
+        (root_dir / pipeline_template_raw).resolve()
+        if pipeline_template_raw else None
+    )
     output_root = (root_dir / cfg.get("output_root", "tmp/real_data_smoke")).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -414,6 +555,8 @@ def _build_context(root_dir: Path, cfg: Dict[str, Any], dry_run: bool = False) -
         raise FileNotFoundError(f"Train template not found: {train_template}")
     if not pred_template.exists():
         raise FileNotFoundError(f"Predict template not found: {pred_template}")
+    if pipeline_template is not None and not pipeline_template.exists():
+        raise FileNotFoundError(f"Pipeline template not found: {pipeline_template}")
 
     return HarnessContext(
         root_dir=root_dir,
@@ -426,6 +569,8 @@ def _build_context(root_dir: Path, cfg: Dict[str, Any], dry_run: bool = False) -
         pred_template=pred_template,
         global_train_overrides=global_overrides.get("train", {}),
         global_pred_overrides=global_overrides.get("predict", {}),
+        pipeline_template=pipeline_template,
+        global_pipeline_overrides=global_overrides.get("pipeline", {}),
         task2_path=task2_path,
         task3_path=task3_path,
         dry_run=dry_run,
@@ -512,6 +657,8 @@ def _run_derive_distance_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> 
 STEP_DISPATCH = {
     "train": _run_train_step,
     "predict": _run_predict_step,
+    "b3_predict_zarr": _run_b3_predict_zarr_step,
+    "b3_assert": _run_b3_assert_step,
     "unlabeled_slicer": _run_unlabeled_slicer_step,
     "pytest": _run_pytest_step,
     "derive_boundary": _run_derive_boundary_step,

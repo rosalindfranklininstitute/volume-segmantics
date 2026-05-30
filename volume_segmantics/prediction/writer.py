@@ -4,21 +4,21 @@
 Layout::
 
     prediction.zarr/
-    ├── .zattrs                     # manifest (see below)
-    ├── teacher_argmax/             # (Z, Y, X) uint8         [always present]
-    ├── teacher_probs/              # (C, Z, Y, X) float32    [optional]
-    ├── semantic_logits/            # (C, Z, Y, X) float32    [optional]
-    ├── semantic_probs/             # (C, Z, Y, X) float32    [optional]
-    ├── boundary_map/               # (1, Z, Y, X) float32    [optional]
-    ├── distance_map/               # (1, Z, Y, X) float32    [optional]
-    ├── sdm_map/                    # (K, Z, Y, X) float32    [optional]
-    ├── tta_variance_map/           # (Z, Y, X) float32       [optional]
-    ├── tta_entropy_map/            # (Z, Y, X) float32       [optional]
-    ├── per_axis_instances/         # group, optional
-    │   ├── xy                      # (Z, Y, X) uint32
-    │   ├── xz                      # (Y, Z, X) uint32
-    │   └── yz                      # (X, Z, Y) uint32
-    └── instance_labels/            # (Z, Y, X) uint32        [optional]
+    ├ .zattrs                     # manifest (see below)
+    ├ teacher_argmax/             # (Z, Y, X) uint8         [always present]
+    ├ teacher_probs/              # (C, Z, Y, X) float32    [optional]
+    ├ semantic_logits/            # (C, Z, Y, X) float32    [optional]
+    ├ semantic_probs/             # (C, Z, Y, X) float32    [optional]
+    ├ boundary_map/               # (1, Z, Y, X) float32    [optional]
+    ├ distance_map/               # (1, Z, Y, X) float32    [optional]
+    ├ sdm_map/                    # (K, Z, Y, X) float32    [optional]
+    ├ tta_variance_map/           # (Z, Y, X) float32       [optional]
+    ├ tta_entropy_map/            # (Z, Y, X) float32       [optional]
+    ├ per_axis_instances/         # group, optional
+    │   ├ xy                      # (Z, Y, X) uint32
+    │   ├ xz                      # (Y, Z, X) uint32
+    │   └ yz                      # (X, Z, Y) uint32
+    └ instance_labels/            # (Z, Y, X) uint32        [optional]
 
 """
 
@@ -82,7 +82,7 @@ class PredictionZarrWriter:
         One of :data:`_VALID_INFERENCE_MODES`. Written verbatim to
         ``.zattrs["inference_mode"]``.
     class_metadata
-        JSON-serialisable mapping of class ids → ``{"name", "color",
+        JSON-serialisable mapping of class ids -> ``{"name", "color",
         ...}``. Written verbatim to ``.zattrs["class_metadata"]``.
         Pass ``{}`` if unknown; the manifest still records the empty
         dict.
@@ -162,7 +162,7 @@ class PredictionZarrWriter:
         self._arrays: Dict[str, zarr.Array] = {}
         self._per_axis_group: Optional[zarr.Group] = None
 
-    # ─── Always-present array ───────────────────────────────────
+    #  Always-present array 
 
     def write_teacher_argmax(
         self, data: np.ndarray, region: Optional[Region3D] = None,
@@ -182,7 +182,7 @@ class PredictionZarrWriter:
         )
         self._write_into(arr, data.astype(np.uint8, copy=False), region)
 
-    # ─── Per-class arrays ───────────────────────────────────────
+    #  Per-class arrays 
 
     def write_teacher_probs(
         self, data: np.ndarray,
@@ -234,7 +234,7 @@ class PredictionZarrWriter:
             write_region = (slice(None),) + tuple(region)
             arr[write_region] = data.astype(np.float32, copy=False)
 
-    # ─── Per-head geometric arrays ──────────────────────────────
+    #  Per-head geometric arrays 
 
     def write_boundary_map(
         self, data: np.ndarray, region: Optional[Region3D] = None,
@@ -298,7 +298,7 @@ class PredictionZarrWriter:
             write_region = (slice(None),) + tuple(region)
             arr[write_region] = data.astype(np.float32, copy=False)
 
-    # ─── TTA uncertainty arrays ─────────────────────────────────
+    #  TTA uncertainty arrays 
 
     def write_tta_variance_map(
         self, data: np.ndarray, region: Optional[Region3D] = None,
@@ -328,7 +328,7 @@ class PredictionZarrWriter:
         )
         self._write_into(arr, data.astype(np.float32, copy=False), region)
 
-    # ─── Instance assembly arrays ───────────────────────────────
+    #  Instance assembly arrays 
 
     def write_per_axis_instances(
         self,
@@ -386,7 +386,7 @@ class PredictionZarrWriter:
         )
         self._write_into(arr, data.astype(np.uint32, copy=False), region)
 
-    # ─── Finalize ───────────────────────────────────────────────
+    #  Finalize 
 
     def finalize(
         self,
@@ -475,10 +475,10 @@ class PredictionZarrWriter:
         )
         return self.output_path
 
-    # ─── Internals ─────────────────────────────────────────────
+    #  Internals 
 
     def _derive_heads_present(self) -> List[str]:
-        """Map written-array names → canonical head names.
+        """Map written-array names -> canonical head names.
 
         Used by :meth:`finalize` to populate the manifest's
         ``heads_present`` list when the caller doesn't override it.
@@ -531,7 +531,7 @@ class PredictionZarrWriter:
             arr[tuple(region)] = data
 
 
-# ─── Standalone helper for in-memory → zarr persistence ─────────────
+#  Standalone helper for in-memory -> zarr persistence 
 
 
 def volseg_write_prediction_zarr(

@@ -18,7 +18,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# ─── UncertaintyOutputs ─────────────────────────────────────────────
+#  UncertaintyOutputs 
 
 
 @dataclass
@@ -77,7 +77,7 @@ class UncertaintyOutputs:
         return out
 
 
-# ─── Provider Protocol ─────────────────────────────────────────────
+#  Provider Protocol 
 
 
 @runtime_checkable
@@ -99,7 +99,7 @@ class UncertaintyProvider(Protocol):
         ...
 
 
-# ─── Provider registry ─────────────────────────────────────────────
+#  Provider registry 
 
 
 _PROVIDERS: Dict[str, type] = {}
@@ -127,7 +127,7 @@ def list_uncertainty_providers() -> List[str]:
     return sorted(_PROVIDERS)
 
 
-# ─── MultiAxisTTAProvider ──────────────────────────────────────────
+#  MultiAxisTTAProvider 
 
 
 class MultiAxisTTAProvider:
@@ -217,7 +217,7 @@ class MultiAxisTTAProvider:
             axis=0,
         )
 
-        # Max-prob merge across passes → (C, Z, Y, X).
+        # Max-prob merge across passes -> (C, Z, Y, X).
         merged_probs = stack.max(axis=0)
         # Renormalise per voxel so probs sum to 1 along C.
         norm_factor = merged_probs.sum(axis=0, keepdims=True)
@@ -234,7 +234,7 @@ class MultiAxisTTAProvider:
         teacher_argmax = merged_probs.argmax(axis=0).astype(np.uint8)
 
         # Per-voxel variance: per-class var across passes, mean over C.
-        # var → (C, Z, Y, X), mean over axis 0 → (Z, Y, X).
+        # var -> (C, Z, Y, X), mean over axis 0 -> (Z, Y, X).
         per_class_var = stack.var(axis=0)
         tta_variance_map = per_class_var.mean(axis=0).astype(np.float32)
 

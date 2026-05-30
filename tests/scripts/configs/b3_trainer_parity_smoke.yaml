@@ -1,0 +1,86 @@
+# Lightning vs raw-trainer parity smoke
+#
+# Trains semantic-only with both trainers using identical seed.
+# Asserts val loss within +/- 0.10 between the two checkpoints.
+#
+# Run:
+#   python tests/scripts/run_smoke.py b3_trainer_parity
+#   python tests/scripts/run_smoke.py b3_trainer_parity --dry-run
+
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+
+output_root: tmp/b3_trainer_parity_smoke
+
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 2
+    num_cyc_unfrozen: 0
+    patience: 2
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: low
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+
+tests:
+  # 1. Train via Lightning (b3 default).
+  - name: train_lightning
+    type: train
+    model_key: lightning_model
+    overrides:
+      train:
+        model_output_fn: parity_lightning
+
+  # 2. Train via raw trainer (--legacy-trainer).
+  - name: train_legacy
+    type: train
+    model_key: legacy_model
+    args:
+      - "--legacy-trainer"
+    overrides:
+      train:
+        model_output_fn: parity_legacy
+
+  # 3. Both checkpoints actually trained.
+  - name: assert_lightning_bn_trained
+    type: b3_assert
+    subcommand: checkpoint-trained
+    args:
+      - "${model:lightning_model}"
+  - name: assert_legacy_bn_trained
+    type: b3_assert
+    subcommand: checkpoint-trained
+    args:
+      - "${model:legacy_model}"
+
+  # 4. Val metric within smoke-gate tolerance between the two trainers.
+  # See header comment for why 0.10 (smoke) vs 0.03 (QA).
+  - name: assert_val_dice_within
+    type: b3_assert
+    subcommand: val-dice-within
+    args:
+      - "${model:lightning_model}"
+      - "${model:legacy_model}"
+      - "--max-drift"
+      - "0.10"

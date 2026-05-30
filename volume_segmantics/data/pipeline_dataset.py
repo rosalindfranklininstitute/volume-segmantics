@@ -187,7 +187,7 @@ def build_pipeline_augmentations(
     -----
     Albumentations + multi-channel images: Albumentations expects
     ``(H, W, C)``. The dataset transposes per_class SDM
-    ``(C, H, W) → (H, W, C)`` before feeding and back after.
+    ``(C, H, W) -> (H, W, C)`` before feeding and back after.
     """
     additional_targets: Dict[str, str] = {}
     for head_name, enabled in enabled_head_names.items():
@@ -458,7 +458,7 @@ class PipelineMultiTaskDataset(BaseDataset):
     ) -> Dict[str, torch.Tensor]:
         out: Dict[str, torch.Tensor] = {}
 
-        # Image: (H,W) or (H,W,C) → (C,H,W).
+        # Image: (H,W) or (H,W,C) -> (C,H,W).
         image = sample["image"]
         if image.ndim == 2:
             image = image[..., np.newaxis]
