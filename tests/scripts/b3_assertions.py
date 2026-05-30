@@ -317,11 +317,16 @@ def assert_loss_decreasing(
 def assert_val_dice_within(
     ckpt_a: Path, ckpt_b: Path, *, max_drift: float = 0.03,
 ) -> None:
-    """Read ``best_val_loss`` (or ``best_val_dice``) from two checkpoints
-    and assert |a - b| <= max_drift."""
+    """Read ``best_val_loss`` / ``best_val_dice`` / ``loss_val`` from two
+    checkpoints and assert |a - b| <= max_drift.
+
+    ``loss_val`` is the key the b3 trainer (and the legacy raw trainer)
+    actually persists; ``best_val_dice`` and ``best_val_loss`` are
+    forward-compatible candidates for future trainer revisions.
+    """
     a = _load_torch_checkpoint(ckpt_a)
     b = _load_torch_checkpoint(ckpt_b)
-    candidates = ("best_val_dice", "best_val_loss")
+    candidates = ("best_val_dice", "best_val_loss", "loss_val")
     val_a = val_b = None
     for k in candidates:
         if k in a and val_a is None:

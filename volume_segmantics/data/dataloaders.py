@@ -41,6 +41,7 @@ def get_2d_training_dataloaders(
     Returns:
         Tuple[DataLoader, DataLoader]: 2d training and validation dataloaders
     """
+
     pipeline_cfg = getattr(settings, "pipeline_config", None)
     if pipeline_cfg is not None and _pipeline_mode_required(pipeline_cfg):
         return get_pipeline_training_dataloaders(
@@ -77,6 +78,7 @@ def get_2d_training_dataloaders(
         batch_size=batch_size,
         shuffle=True,
         num_workers=cfg.NUM_WORKERS,
+        persistent_workers=cfg.PERSISTENT_WORKERS,
         pin_memory=cfg.PIN_CUDA_MEMORY,
         drop_last=True,
     )
@@ -85,6 +87,7 @@ def get_2d_training_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=cfg.NUM_WORKERS,
+        persistent_workers=cfg.PERSISTENT_WORKERS,
         pin_memory=cfg.PIN_CUDA_MEMORY,
     )
     return training_dataloader, validation_dataloader
@@ -120,6 +123,7 @@ def get_monai_training_dataloaders(
         batch_size=batch_size,
         shuffle=True,
         num_workers=cfg.NUM_WORKERS,
+        persistent_workers=cfg.PERSISTENT_WORKERS,
         collate_fn=list_data_collate,
         pin_memory=cfg.PIN_CUDA_MEMORY,
         drop_last=True,
@@ -129,6 +133,7 @@ def get_monai_training_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=cfg.NUM_WORKERS,
+        persistent_workers=cfg.PERSISTENT_WORKERS,
         collate_fn=list_data_collate,
         pin_memory=cfg.PIN_CUDA_MEMORY,
     )
@@ -231,6 +236,7 @@ def get_semi_supervised_dataloaders(
             batch_size=unlabeled_batch_size,
             shuffle=True,
             num_workers=cfg.NUM_WORKERS,
+            persistent_workers=cfg.PERSISTENT_WORKERS,
             collate_fn=list_data_collate,
             pin_memory=cfg.PIN_CUDA_MEMORY,
             drop_last=True,
@@ -268,6 +274,7 @@ def get_semi_supervised_dataloaders(
             batch_size=unlabeled_batch_size,
             shuffle=True,
             num_workers=cfg.NUM_WORKERS,
+            persistent_workers=cfg.PERSISTENT_WORKERS,
             pin_memory=cfg.PIN_CUDA_MEMORY,
             drop_last=True,
         )
@@ -280,7 +287,6 @@ def get_semi_supervised_dataloaders(
 
 def _pipeline_mode_required(pipeline_config: PipelineConfig) -> bool:
     """Returns True iff the parsed config needs the pipeline-mode path.
-
     """
     for head_name, head_cfg in pipeline_config.heads.items():
         if head_cfg.enabled and head_name != "semantic":
@@ -298,26 +304,8 @@ def get_pipeline_training_dataloaders(
     *,
     num_classes: Optional[int] = None,
 ) -> Tuple[DataLoader, DataLoader]:
-    """Build pipeline-mode train and val dataloaders over
-    :class:`PipelineMultiTaskDataset`.
+    """Build pipeline-mode train and val dataloaders 
 
-
-    Parameters
-    ----------
-    image_dir, label_dir
-        Directories of pre-sliced ``data*.png|.tiff`` images and
-        ``seg*.png`` masks (produced by :class:`TrainingDataSlicer`).
-    settings
-        Legacy ``SimpleNamespace`` settings — read for
-        ``training_set_proportion``, ``image_size``,
-        ``use_imagenet_norm``, ``use_2_5d_slicing``, ``num_slices``,
-        and the GPU-tiered batch size.
-    pipeline_config
-        Parsed :class:`PipelineConfig` driving the head set + per-head
-        target generators + augmentation list.
-    num_classes
-        Number of semantic classes. ``None`` reads from
-        ``settings.max_label_no`` and falls back to 2.
     """
     if num_classes is None:
         num_classes = int(getattr(settings, "max_label_no", 2) or 2)
@@ -365,6 +353,7 @@ def get_pipeline_training_dataloaders(
         batch_size=batch_size,
         shuffle=True,
         num_workers=cfg.NUM_WORKERS,
+        persistent_workers=cfg.PERSISTENT_WORKERS,
         pin_memory=cfg.PIN_CUDA_MEMORY,
         drop_last=True,
     )
@@ -373,6 +362,7 @@ def get_pipeline_training_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=cfg.NUM_WORKERS,
+        persistent_workers=cfg.PERSISTENT_WORKERS,
         pin_memory=cfg.PIN_CUDA_MEMORY,
     )
     return training_dataloader, validation_dataloader

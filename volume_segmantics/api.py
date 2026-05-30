@@ -236,6 +236,7 @@ def predict(
             # ``teacher_probs`` is omitted (consumer reads from the
             # tta_uncertainty mode if it wants the full stack).
             pass
+        _stash_per_head_maps(predictor, arrays)
 
     elif inference_mode == "tta_uncertainty":
         # Self-contained 3-axis loop that captures the per-axis
@@ -300,10 +301,14 @@ def predict(
     # b3 path exists primarily for the zarr + return_arrays flow.
 
     #  Manifest 
+    heads_present = ["semantic"]
+    for head_name in ("boundary", "distance", "sdm"):
+        if f"{head_name}_map" in arrays:
+            heads_present.append(head_name)
     manifest: Dict[str, Any] = {
         "schema_version": "prediction_v1",
         "inference_mode": inference_mode,
-        "heads_present": ["semantic"],  # b3 api wires only semantic today
+        "heads_present": heads_present,
         "uncertainty_provider": uncertainty_provider,
         "instance_assembly_backend": effective_backend,
         "volume_shape": list(data_vol.shape),
@@ -321,7 +326,59 @@ def predict(
     )
 
 
-#  tta_uncertainty: self-contained 3-axis loop 
+
+
+def _stash_per_head_maps(predictor: Any, arrays: Dict[str, Any]) -> None:
+    """Read multi-head outputs from the predictor and write them into ``arrays``.
+
+    """
+    if not predictor._is_multitask_model():
+        return
+    task_outputs = predictor.get_additional_task_outputs() or {}
+    if not task_outputs:
+        return
+    underlying = predictor.model
+    if hasattr(underlying, "module"):
+        underlying = underlying.module
+    head_names = list(getattr(underlying, "head_names", ()))
+    if len(head_names) < 2:
+        return
+    # task1-> head_names[1], task2-> head_names[2], … (head 0 = semantic).
+    sorted_keys = sorted(
+        task_outputs,
+        key=lambda k: int(k.replace("task", "")) if k.startswith("task") else 0,
+    )
+    sigmoid_heads = {"boundary"}
+    for task_idx, task_key in enumerate(sorted_keys, start=1):
+        if task_idx >= len(head_names):
+            break
+        head_name = head_names[task_idx]
+        task_data = task_outputs[task_key]
+        # Source-field preference:
+        # - boundary: post-sigmoid 'probs' (matches PredictionBundle's
+        #   "sigmoid probs" contract for boundary_map).
+        # - distance / sdm: prefer raw 'logits', but the predictor's
+        #   multi-axis merge (_predict_12_ways_max_probs) only retains
+        #   'labels' + 'probs' on the merged result — fall back to
+        #   'probs' (sigmoid-distorted but still a smooth signal that
+        #   watershed can find peaks in).
+        if head_name in sigmoid_heads:
+            raw = task_data.get("probs")
+        else:
+            raw = task_data.get("logits")
+            if raw is None:
+                raw = task_data.get("probs")
+        if raw is None:
+            continue
+        arr = np.asarray(raw, dtype=np.float32)
+        if arr.ndim == 4:
+            arr = np.transpose(arr, (1, 0, 2, 3))
+        elif arr.ndim == 3:
+            arr = arr[np.newaxis, ...]
+        arrays[f"{head_name}_map"] = arr
+
+
+# tta_uncertainty: self-contained 3-axis loop 
 
 
 def _run_tta_uncertainty(

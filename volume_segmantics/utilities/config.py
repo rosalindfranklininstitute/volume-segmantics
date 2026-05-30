@@ -1,5 +1,8 @@
 """Data to be shared across files.
 """
+
+import sys
+
 # Parser strings
 TRAIN_DATA_ARG = "data"
 LABEL_DATA_ARG = "labels"
@@ -32,11 +35,19 @@ TQDM_BAR_FORMAT = "{l_bar}{bar: 30}{r_bar}{bar: -30b}"  # tqdm progress bar form
 OUTPUT_FORMAT = "tif" # tif or hdf
 HDF5_COMPRESSION = "gzip"
 
+IS_WINDOWS = sys.platform == "win32"
+
+
 BIG_CUDA_THRESHOLD = 16 # GPU Memory (GB), above this value batch size is increased
 BIG_CUDA_TRAIN_BATCH = 16 # Size of training batch on big GPU
 BIG_CUDA_PRED_BATCH = 4 # Size of prediction batch on big GPU
 SMALL_CUDA_BATCH = 8 # Size of batch on small GPU
-NUM_WORKERS = 8 # Number of parallel workers for training/validation dataloaders
+import os as _os
+NUM_WORKERS = int(_os.environ.get(
+    "VOLSEG_NUM_WORKERS",
+    "4" if IS_WINDOWS else "8",
+))
+PERSISTENT_WORKERS = NUM_WORKERS > 0
 PIN_CUDA_MEMORY = True # Whether to pin CUDA memory for faster data transfer
 IM_SIZE_DIVISOR = 32 # Image dimensions need to be a multiple of this value
 MODEL_INPUT_CHANNELS = 3 # Use 1 for grayscale input images, 3 for RGB (2.5D)
@@ -50,6 +61,7 @@ IMAGENET_STD = 0.226 # Standard deviation for single channel imagenet normalisat
 
 IMAGENET_RGB_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_RGB_STD = [0.229, 0.224, 0.225]
+
 
 def get_model_input_channels(settings=None):
     """Return input channels: 2.5D (slicing or prediction) uses num_slices, else 1 for 2D."""

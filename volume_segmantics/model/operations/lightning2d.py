@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -51,13 +52,112 @@ else:
 logger = logging.getLogger(__name__)
 
 
-#  LightningModule 
+class _DropLitPromoFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
+        msg = record.getMessage().lower()
+        if "litlogger" in msg or "litmodels" in msg:
+            return False
+        return True
+
+
+logging.getLogger("pytorch_lightning.utilities.rank_zero").addFilter(
+    _DropLitPromoFilter()
+)
+
+
+# Rich-aware logging helper 
+
+
+def _emit_via_progress_console(trainer: Any, line: str) -> None:
+    """Print ``line`` through the active Rich progress console if any.
+
+    Lightning's :class:`RichProgressBar` owns a ``rich.progress.Progress``
+    with a ``.console`` attribute. Printing to that console while the
+    live display is rendering pushes the message *above* the running
+    progress bar without clobbering the redraw — which plain
+    :func:`logging.info` cannot do, because Rich's live display
+    repaints the terminal area on every tick. We duck-type for the
+    ``progress.console.print`` triple to remain compatible with any
+    Rich-backed progress callback (including subclasses like
+    :class:`NoVNumProgressBar`).
+
+    Falls back to :func:`logging.info` when no Rich progress is
+    attached (TQDMProgressBar handles this fine on its own; absence
+    of any progress bar is also fine).
+    """
+    for cb in getattr(trainer, "callbacks", ()) or ():
+        progress = getattr(cb, "progress", None)
+        if progress is None:
+            continue
+        console = getattr(progress, "console", None)
+        if console is not None and hasattr(console, "print"):
+            console.print(line)
+            return
+    logging.info(line)
+
+
+# Per-class Dice accumulator (legacy-trainer parity) 
+
+class _SemanticDiceAccumulator:
+    """Per-class Dice over the semantic head's argmax predictions.
+
+    Manual TP/FP/FN accumulator (rather than ``torchmetrics.Dice``) to
+    avoid version churn between Lightning / torchmetrics releases. The
+    accumulator state is plain Python ints, populated batchwise from
+    GPU tensors via small ``.sum().item()`` syncs — fine for validation
+    where batches are infrequent.
+
+    Usage::
+
+        acc = _SemanticDiceAccumulator(num_classes=2)
+        # per validation batch:
+        acc.update(preds, targets)  # both (B, H, W) int64
+        # at on_validation_epoch_end:
+        per_class = acc.compute()   # list[float]
+        mean      = sum(per_class) / len(per_class)
+        acc.reset()
+    """
+
+    def __init__(self, num_classes: int) -> None:
+        self.num_classes = int(num_classes)
+        self.tp: List[int] = [0] * self.num_classes
+        self.fp: List[int] = [0] * self.num_classes
+        self.fn: List[int] = [0] * self.num_classes
+
+    def reset(self) -> None:
+        self.tp = [0] * self.num_classes
+        self.fp = [0] * self.num_classes
+        self.fn = [0] * self.num_classes
+
+    def update(self, preds: torch.Tensor, targets: torch.Tensor) -> None:
+        preds_flat = preds.flatten()
+        targets_flat = targets.flatten()
+        for c in range(self.num_classes):
+            pred_c = preds_flat == c
+            target_c = targets_flat == c
+            self.tp[c] += int((pred_c & target_c).sum().item())
+            self.fp[c] += int((pred_c & ~target_c).sum().item())
+            self.fn[c] += int((~pred_c & target_c).sum().item())
+
+    def compute(self) -> List[float]:
+        out: List[float] = []
+        for c in range(self.num_classes):
+            denom = 2 * self.tp[c] + self.fp[c] + self.fn[c]
+            out.append(2 * self.tp[c] / denom if denom > 0 else 0.0)
+        return out
+
+
+# LightningModule 
 
 
 class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
     """LightningModule wrapping the pipeline-mode model and loss.
 
-    
+    Single batch contract: pipeline-mode dicts from
+    :class:`PipelineMultiTaskDataset`. Both the semantic-only (legacy
+    settings -> :func:`legacy_settings_to_pipeline_config`) and the
+    multi-head paths route through this module.
+
     Construction
     ------------
     Two factory contracts:
@@ -143,6 +243,11 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         # loss-figure script.
         self.epoch_history: List[Dict[str, float]] = []
 
+        # Per-class semantic Dice accumulator. Reset every val epoch in
+        # on_validation_epoch_end; updated per batch in _step when
+        # stage == "val". Mirrors legacy trainer's per-class breakdown.
+        self._val_dice_accumulator = _SemanticDiceAccumulator(self.num_classes)
+
     #  Pipeline-config factory 
 
     @classmethod
@@ -159,8 +264,10 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         """Build a Lightning module directly from a parsed pipeline config.
 
         Resolves ``encoder_name`` / ``encoder_weights`` / ``encoder_depth``
-        from the legacy ``settings.model`` dict. The head registry's :func:`build_head_modules` builds the head
-        modules; :class:`PipelineMultitaskUnet` wraps an SMP / DINO backbone around a single shared decoder and the heads.
+        from the legacy ``settings.model`` dict (v0.4 layout). The b3
+        head registry's :func:`build_head_modules` builds the head
+        modules; :class:`PipelineMultitaskUnet` wraps an SMP / DINO
+        backbone around a single shared decoder + the heads.
         """
         model_cfg = getattr(settings, "model", {}) or {}
         encoder_name = str(model_cfg.get("encoder_name", "resnet34"))
@@ -169,15 +276,27 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             encoder_weights = None
         encoder_depth = int(model_cfg.get("encoder_depth", 5) or 5)
 
-        # default: single-channel (grayscale) input. 2.5D slicing is
+        # b3 default: single-channel (grayscale) input. 2.5D slicing is
         # honoured if the legacy YAML enables it.
         resolved_in_channels = cfg.get_model_input_channels(settings) or in_channels
 
-        # Build heads from the pipeline config.
-        # Decoder out channels for PipelineMultitaskUnet = 16
-        # (last entry of the default decoder_channels tuple).
-        # The heads need that as their in_channels.
-        head_in_channels = 16
+        # Resolve the decoder's last-stage output channel count so the
+        # heads are built with the right in_channels. PipelineMultitaskUnet
+        # mirrors this resolution in __init__ but applies it to itself
+        # AFTER the heads are constructed — so we have to duplicate it
+        # here to avoid the in_channels=16 vs decoder=32 mismatch the
+        # DINO depth=4 path would otherwise hit.
+        default_decoder_channels = (256, 128, 64, 32, 16)
+        is_dino = (
+            encoder_name.startswith("dinov2_")
+            or encoder_name.startswith("dinov3_")
+        )
+        effective_depth = min(encoder_depth, 4) if is_dino else encoder_depth
+        if is_dino and effective_depth == 4:
+            effective_decoder_channels = (256, 128, 64, 32)
+        else:
+            effective_decoder_channels = default_decoder_channels[:effective_depth]
+        head_in_channels = int(effective_decoder_channels[-1])
         head_modules = build_head_modules(
             pipeline_config.heads,
             in_channels=head_in_channels,
@@ -191,6 +310,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             encoder_depth=encoder_depth,
             encoder_weights=encoder_weights,
             in_channels=resolved_in_channels,
+            decoder_channels=effective_decoder_channels,
         )
 
         calculator = PipelineMultiTaskLossCalculator.from_pipeline_config(
@@ -314,6 +434,23 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
                     f"weight_{head_name}", float(weight),
                     on_step=False, on_epoch=True, sync_dist=True,
                 )
+
+        # Legacy-parity Dice: at val time, take the semantic head's
+        # argmax and accumulate per-class TP/FP/FN. The mean + per-class
+        # Dice are emitted in on_validation_epoch_end so the
+        # LegacyEpochSummaryCallback can print them in the
+        # "Seg Dice: …" / "Per-class Dice: …" line.
+        if stage == "val":
+            head_names = self.head_names
+            sem_idx = head_names.index("semantic") if "semantic" in head_names else 0
+            sem_logits = preds[sem_idx]
+            sem_pred = torch.argmax(sem_logits, dim=1).long()
+            sem_target = targets.get("semantic")
+            if sem_target is not None:
+                self._val_dice_accumulator.update(
+                    sem_pred.detach(), sem_target.long().detach(),
+                )
+
         return total_loss
 
     def on_train_batch_end(self, outputs, batch, batch_idx) -> None:
@@ -335,6 +472,28 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         self, batch: Mapping[str, torch.Tensor], batch_idx: int,
     ) -> torch.Tensor:
         return self._step(batch, "val")
+
+    def on_validation_epoch_end(self) -> None:
+        # Compute Dice from the accumulator and log it so callbacks
+        # (notably LegacyEpochSummaryCallback) can render the legacy-
+        # format "Seg Dice: … | Per-class Dice: …" line. Reset the
+        # accumulator unconditionally — even during the sanity-check
+        # phase, where we deliberately skip emitting metrics — so the
+        # next epoch starts with a clean slate.
+        per_class = self._val_dice_accumulator.compute()
+        sanity = bool(getattr(self.trainer, "sanity_checking", False))
+        if not sanity and per_class:
+            mean_dice = sum(per_class) / len(per_class)
+            self.log(
+                "val_seg_dice", mean_dice,
+                prog_bar=True, on_epoch=True, sync_dist=True,
+            )
+            for c, val in enumerate(per_class):
+                self.log(
+                    f"val_dice_class_{c}", float(val),
+                    on_epoch=True, sync_dist=True,
+                )
+        self._val_dice_accumulator.reset()
 
     #  Optimizer + scheduler 
 
@@ -432,7 +591,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         return self._underlying_student.state_dict()
 
 
-#  Callbacks 
+# Callbacks 
 
 
 class UnfreezeEncoderCallback(pl.Callback if pl is not None else object):
@@ -497,6 +656,130 @@ class EpochHistoryCallback(pl.Callback if pl is not None else object):
         pl_module.epoch_history.append(row)
 
 
+class LegacyEpochSummaryCallback(pl.Callback if pl is not None else object):
+    """Print a v0.4-style end-of-epoch summary line to the console.
+
+    Reproduces the legacy raw trainer's per-epoch log so users (and
+    downstream regex-based parsers) see the same format under
+    Lightning::
+
+        Epoch 1 | Train Loss: 0.5234 | Val Loss: 0.4521 | Seg Dice: 0.6123 | Time: 12.3s
+          Per-class Dice: bg: 0.850 | fg: 0.620
+
+    Reads ``train_loss``, ``val_loss``, ``val_seg_dice``, and
+    ``val_dice_class_<i>`` from ``trainer.callback_metrics`` (all
+    populated by :class:`VolSeg2dLightningModule`). Tracks epoch
+    elapsed time via :meth:`on_train_epoch_start`. Skipped during the
+    sanity-check phase. Per-head losses (boundary, distance, sdm)
+    appear in parens after Train Loss / Val Loss when present, mirroring
+    legacy's multitask formatting.
+    """
+
+    def __init__(self) -> None:
+        self._tic: Optional[float] = None
+
+    def on_train_epoch_start(self, trainer, pl_module) -> None:
+        self._tic = time.perf_counter()
+
+    def on_validation_epoch_end(self, trainer, pl_module) -> None:
+        if trainer.global_rank != 0:
+            return
+        if getattr(trainer, "sanity_checking", False):
+            return
+        metrics = trainer.callback_metrics
+        elapsed = (
+            time.perf_counter() - self._tic if self._tic is not None else 0.0
+        )
+
+        def _emit(line: str) -> None:
+            _emit_via_progress_console(trainer, line)
+
+        def _get(key: str) -> Optional[float]:
+            v = metrics.get(key)
+            if v is None:
+                return None
+            try:
+                return float(v.item()) if hasattr(v, "item") else float(v)
+            except (TypeError, ValueError):
+                return None
+
+        train_loss = _get("train_loss")
+        val_loss = _get("val_loss")
+        seg_dice = _get("val_seg_dice")
+
+        # Per-head loss breakdowns (matches legacy's multitask format).
+        head_names: Tuple[str, ...] = tuple(
+            getattr(pl_module, "head_names", ()) or ()
+        )
+
+        def _head_breakdown(stage: str) -> str:
+            if len(head_names) <= 1:
+                return ""
+            parts: List[str] = []
+            for h in head_names:
+                v = _get(f"{stage}_{h}_loss")
+                if v is not None:
+                    short = h[:4].capitalize()
+                    parts.append(f"{short}: {v:.4f}")
+            return f" ({', '.join(parts)})" if parts else ""
+
+        epoch_no = int(trainer.current_epoch) + 1  # 1-indexed for display
+        log_parts: List[str] = [f"Epoch {epoch_no}"]
+        if train_loss is not None:
+            log_parts.append(f"Train Loss: {train_loss:.4f}{_head_breakdown('train')}")
+        if val_loss is not None:
+            log_parts.append(f"Val Loss: {val_loss:.4f}{_head_breakdown('val')}")
+        if seg_dice is not None:
+            log_parts.append(f"Seg Dice: {seg_dice:.4f}")
+        log_parts.append(f"Time: {elapsed:.1f}s")
+        _emit(" | ".join(log_parts))
+
+        # Per-class Dice breakdown.
+        num_classes = int(getattr(pl_module, "num_classes", 0) or 0)
+        if num_classes > 0:
+            label_codes = getattr(pl_module, "label_codes", {}) or {}
+            class_parts: List[str] = []
+            for c in range(num_classes):
+                dice_c = _get(f"val_dice_class_{c}")
+                if dice_c is None:
+                    continue
+                name = label_codes.get(c, f"C{c}")
+                class_parts.append(f"{name}: {dice_c:.3f}")
+            if class_parts:
+                _emit(f"  Per-class Dice: {' | '.join(class_parts)}")
+
+
+# Custom progress bar that drops Lightning's ``v_num`` postfix from
+# the live metrics display. ``v_num`` is the TensorBoardLogger version
+# number — not a training-state quantity, just visual noise. Keep
+# RichProgressBar (default when ``rich`` is installed) and fall back
+# to TQDMProgressBar otherwise. ``pl is None`` only when Lightning
+# isn't installed; in that case we never instantiate the class so a
+# stub base of ``object`` is sufficient.
+if pl is not None:
+    try:
+        from pytorch_lightning.callbacks import RichProgressBar as _PB_BASE
+    except ImportError:  # pragma: no cover — older Lightning without Rich
+        from pytorch_lightning.callbacks import TQDMProgressBar as _PB_BASE
+else:  # pragma: no cover — Lightning not installed
+    _PB_BASE = object  # type: ignore[assignment,misc]
+
+
+class NoVNumProgressBar(_PB_BASE):  # type: ignore[misc,valid-type]
+    """Progress bar that drops the ``v_num`` postfix.
+
+    Subclass of whichever progress bar Lightning would have selected
+    by default (Rich if available, else TQDM). Override ``get_metrics``
+    to remove the auto-injected ``v_num`` entry that the base class
+    pulls from the trainer's logger.
+    """
+
+    def get_metrics(self, trainer, pl_module):  # type: ignore[override]
+        items = super().get_metrics(trainer, pl_module)
+        items.pop("v_num", None)
+        return items
+
+
 class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
     """Vol-seg-compatible ``.pytorch`` checkpoint writer.
 
@@ -504,8 +787,7 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
     vol-seg ``.pytorch`` format is what v0.4's prediction scripts
     (``model-predict-2d``) load — Lightning's ``.ckpt`` is not
     interoperable.
-
-    """
+  """
 
     def __init__(
         self,
@@ -540,7 +822,7 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
             return
         if current_val < self.best_val_loss:
             self.best_val_loss = current_val
-            self._save_volseg_checkpoint(pl_module, current_val)
+            self._save_volseg_checkpoint(trainer, pl_module, current_val)
 
     def on_train_end(self, trainer, pl_module) -> None:
         # v0.5 Bug 2 fix #2: always-save-final.
@@ -554,10 +836,13 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
             )
         except (TypeError, ValueError):
             current_val = float("nan")
-        self._save_volseg_checkpoint(pl_module, current_val)
+        self._save_volseg_checkpoint(trainer, pl_module, current_val)
 
     def _save_volseg_checkpoint(
-        self, pl_module: VolSeg2dLightningModule, val_loss: float,
+        self,
+        trainer: Any,
+        pl_module: VolSeg2dLightningModule,
+        val_loss: float,
     ) -> None:
         state_dict = pl_module.get_model_state_dict_for_volseg()
         model_dict: Dict[str, Any] = {
@@ -570,7 +855,11 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
         if self.head_metadata is not None:
             model_dict["head_metadata"] = self.head_metadata
 
-        logger.info("Saving vol-seg checkpoint to %s", self.output_path)
+        # Route through the Rich progress console so the message
+        # doesn't get clobbered by the next-epoch progress redraw.
+        _emit_via_progress_console(
+            trainer, f"Saving vol-seg checkpoint to {self.output_path}"
+        )
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(model_dict, self.output_path)
 

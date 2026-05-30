@@ -77,6 +77,7 @@ NAMED_CONFIGS = {
     "b3_trainer_parity": "tests/scripts/configs/b3_trainer_parity_smoke.yaml",
     "b3_2.5d": "tests/scripts/configs/b3_two5d_smoke.yaml",
     "b3_dino": "tests/scripts/configs/b3_dino_smoke.yaml",
+    "qa_b3_multihead": "tests/scripts/configs/b3_multihead_qa.yaml",
 }
 
 # Groups that expand to multiple configs run in sequence

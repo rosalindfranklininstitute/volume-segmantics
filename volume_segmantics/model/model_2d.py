@@ -580,17 +580,49 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
                 if oc is not None:
                     hc.out_channels = int(oc)
                 heads_cfg[str(entry["name"])] = hc
-            # The saved struct gives us encoder feature width via the
-            # encoder_depth × encoder_name -> smp.Unet decoder channels;
-            # heads are decoder-driven so this version hardcodes ``in_channels=16``
-            # which is what build_head_modules expects from the decoder
-            # bottleneck output. Mirrors the trainer's path.
-            decoder_in = int(struct_dict_copy.get("decoder_in_channels", 16))
+            # Mirror PipelineMultitaskUnet.__init__'s DINO-aware
+            # decoder_channels resolution so the heads we build here
+            # have in_channels matching the decoder's last-stage
+            # output. The trainer saves encoder_name + encoder_depth
+            # in struct_dict; we replicate the SMP-vs-DINO branching
+            # so the predict-side rebuild does not hardcode 16.
+            encoder_name_ckpt = str(struct_dict_copy.get("encoder_name", ""))
+            encoder_depth_ckpt = int(
+                struct_dict_copy.get("encoder_depth", 5) or 5
+            )
+            is_dino_ckpt = (
+                encoder_name_ckpt.startswith("dinov2_")
+                or encoder_name_ckpt.startswith("dinov3_")
+            )
+            default_decoder_channels = (256, 128, 64, 32, 16)
+            effective_depth_ckpt = (
+                min(encoder_depth_ckpt, 4)
+                if is_dino_ckpt
+                else encoder_depth_ckpt
+            )
+            if is_dino_ckpt and effective_depth_ckpt == 4:
+                effective_decoder_channels_ckpt = (256, 128, 64, 32)
+            else:
+                effective_decoder_channels_ckpt = (
+                    default_decoder_channels[:effective_depth_ckpt]
+                )
+            decoder_in = int(
+                struct_dict_copy.get(
+                    "decoder_in_channels",
+                    int(effective_decoder_channels_ckpt[-1]),
+                )
+            )
             head_modules = build_head_modules(
                 heads_cfg,
                 in_channels=decoder_in,
                 num_classes=int(struct_dict_copy.get("classes", 2)),
                 dim=2,
+            )
+            # Make sure PipelineMultitaskUnet rebuilds the decoder
+            # with the same channel sequence the trainer used.
+            struct_dict_copy.setdefault(
+                "decoder_channels",
+                tuple(effective_decoder_channels_ckpt),
             )
         # Discard fields that smp constructors consume but
         # PipelineMultitaskUnet does not (they live on heads now).

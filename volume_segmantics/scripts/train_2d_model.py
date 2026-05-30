@@ -356,6 +356,8 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
     from volume_segmantics.data.lightning_dataloaders import VolSeg2dDataModule
     from volume_segmantics.model.operations.lightning_2d import (
         EpochHistoryCallback,
+        LegacyEpochSummaryCallback,
+        NoVNumProgressBar,
         UnfreezeEncoderCallback,
         VolSeg2dLightningModule,
         VolSegCheckpointCallback,
@@ -436,6 +438,8 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
     callbacks = [
         UnfreezeEncoderCallback(num_frozen_epochs=num_cyc_frozen),
         EpochHistoryCallback(),
+        LegacyEpochSummaryCallback(),
+        NoVNumProgressBar(),
         VolSegCheckpointCallback(
             output_path=model_out,
             model_struc_dict=model_struc_dict,
