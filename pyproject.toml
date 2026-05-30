@@ -51,6 +51,17 @@ pytest = ">=6"
 pytest-cov = "*"
 
 
+# Optional dependency groups. Install via
+#   pip install volume-segmantics[usegment3d]
+#
+# ``usegment3d`` pulls DanuserLab's u-Segment3D 
+[tool.poetry.extras]
+usegment3d = ["u-segment3d"]
+
+[tool.poetry.dependencies.u-segment3d]
+version = ">=0.1.4"
+optional = true
+
 
 [tool.pytest.ini_options]
 addopts = "-v --cov=volume_segmantics --cov-report term-missing"
