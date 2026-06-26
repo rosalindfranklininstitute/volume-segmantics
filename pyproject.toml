@@ -34,6 +34,7 @@ sparse = "*"
 mrcfile = ">=1.5"
 optuna = ">=3.0.0"
 plotly = ">=5.0.0"
+pandas = "*"
 
 [tool.poetry.dev-dependencies]
 opencv-python-headless = "4.8.0.74"
