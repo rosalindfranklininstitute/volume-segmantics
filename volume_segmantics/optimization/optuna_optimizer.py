@@ -8,6 +8,9 @@ from datetime import date
 import optuna
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
+import matplotlib.pyplot as plt
+from optuna.visualization.matplotlib import plot_optimization_history,plot_param_importances
+from .plot_parallel_coordinates import plot_parallel_coordinates
 
 from volume_segmantics.data import TrainingDataSlicer, get_settings_data
 from volume_segmantics.model import VolSeg2dTrainer
@@ -117,7 +120,9 @@ class OptunaOptimizer:
         """Update a config dict with suggested trial parameters."""
         for param_name, value in params.items():
             # Nested model parameters
-            if param_name == 'encoder_name':
+            if param_name == 'model_type':
+                config['model']['type'] = value
+            elif param_name == 'encoder_name':
                 config['model']['encoder_name'] = value
             elif param_name == 'encoder_depth':
                 config['model']['encoder_depth'] = value
@@ -321,34 +326,23 @@ class OptunaOptimizer:
     def visualize(self, study: 'optuna.Study', output_dir: str = "optuna_plots"):
         """
         Generate and save visualization plots as PNG images.
+
+        Produces three plots in output_dir (relative to root_path):
+        - optimization_history.png
+        - param_importances.png
+        - parallel_coordinate.png  (custom, readable version)
+
         Args:
             study: Completed Optuna study
             output_dir: Directory to save plots (relative to root_path)
         """
-        try:
-            import matplotlib
-            matplotlib.use('Agg')  # Non-interactive backend, no display needed
-            import matplotlib.pyplot as plt
-            from optuna.visualization.matplotlib import (
-                plot_optimization_history,
-                plot_param_importances,
-                plot_parallel_coordinate,
-            )
-        except ImportError:
-            logger.warning(
-                "Matplotlib not installed - skipping visualization. "
-                "Install with: pip install matplotlib"
-            )
-            return
-
         output_path = self.root_path / output_dir
         output_path.mkdir(exist_ok=True)
 
+        # Standard Optuna plots 
         plots = {
             "optimization_history": plot_optimization_history,
-            "param_importances": plot_param_importances,
-            "parallel_coordinate": plot_parallel_coordinate,
-        }
+            "param_importances": plot_param_importances}
 
         for name, plot_fn in plots.items():
             try:
@@ -360,4 +354,7 @@ class OptunaOptimizer:
             except Exception as e:
                 logger.warning(f"Could not generate {name} plot: {e}")
 
+        # Custom parallel coordinate plot (avoids label overlap and improves readability)
+        plot_parallel_coordinates(study, output_path / "parallel_coordinate.png")
+        logger.info("Saved parallel_coordinate.png")
         logger.info(f"Visualization plots saved to: {output_path}")

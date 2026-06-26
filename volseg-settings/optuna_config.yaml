@@ -13,11 +13,11 @@ visualize: true      # set true to generate HTML plots after optimization
 n_startup_trials: 5     # don't prune the first N trials
 n_warmup_steps: 3       # wait N epochs before pruning within a trial
 
-model:
-  type: "U_Net"
-
 # Search space
 search_space:
+  model_type:
+    type: "categorical"
+    choices: ["U_NET", "U_NET_PLUS_PLUS", "DEEPLABV3", "SEGFORMER"]
 
   starting_lr:
     type: "loguniform"
@@ -45,10 +45,9 @@ search_space:
     high: 10
     step: 1
 
-  # Uncomment to include these in the search:
-  # loss_criterion:
-  #   type: "categorical"
-  #   choices: ["CombinedCEDiceLoss", "DiceLoss", "GeneralizedDiceLoss"]
+  loss_criterion:
+    type: "categorical"
+    choices: ["CombinedCEDiceLoss", "DiceLoss", "GeneralizedDiceLoss"]
 
   # encoder_lr_multiplier:
   #   type: "uniform"
