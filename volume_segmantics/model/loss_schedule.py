@@ -98,10 +98,11 @@ def apply_schedule(
     if current_step >= ramp_steps:
         return float(end_weight)
 
+    # Both "linear_warmup" and "linear_decay" linearly interpolate
+    # start_weight -> end_weight across the ramp window; the schedule name is
+    # descriptive only (the caller picks the direction via the endpoints, e.g.
+    # start>end for a decay). The math is therefore identical for both.
     t = float(current_step) / float(ramp_steps)
-    if schedule == "linear_warmup":
-        return float(start_weight + t * (end_weight - start_weight))
-    # linear_decay
     return float(start_weight + t * (end_weight - start_weight))
 
 
