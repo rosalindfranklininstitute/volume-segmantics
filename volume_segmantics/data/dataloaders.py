@@ -13,6 +13,29 @@ from volume_segmantics.data.datasets import (get_2d_prediction_dataset,
                                              get_2d_image_dir_prediction_dataset)
 from volume_segmantics.data.pipeline_dataset import PipelineMultiTaskDataset
 from volume_segmantics.data.pipeline_loader import PipelineConfig
+from volume_segmantics.utilities.seeding import make_generator, seed_worker
+
+
+def _get_seed(settings: SimpleNamespace) -> Optional[int]:
+    """Return the configured reproducibility seed, or ``None`` if unset.
+
+    When ``None`` (the default), data loading keeps its existing
+    non-deterministic behaviour. When set, the train/val split, shuffle order,
+    and worker RNG are all made reproducible.
+    """
+    seed = getattr(settings, "random_seed", None)
+    return None if seed is None else int(seed)
+
+
+def _seeded_loader_kwargs(seed: Optional[int]) -> dict:
+    """DataLoader kwargs that make shuffling/workers reproducible when seeded.
+
+    Returns an empty dict when ``seed is None`` so the DataLoader is constructed
+    exactly as before (no behaviour change on the default path).
+    """
+    if seed is None:
+        return {}
+    return {"worker_init_fn": seed_worker, "generator": make_generator(seed)}
 
 
 try:
@@ -64,11 +87,12 @@ def get_2d_training_dataloaders(
     training_set_prop = settings.training_set_proportion
     batch_size = utils.get_batch_size(settings)
 
+    seed = _get_seed(settings)
     full_training_dset = get_2d_training_dataset(image_dir, label_dir, settings)
     full_validation_dset = get_2d_validation_dataset(image_dir, label_dir, settings)
     # split the dataset into train and test
     dset_length = len(full_training_dset)
-    indices = torch.randperm(dset_length).tolist()
+    indices = torch.randperm(dset_length, generator=make_generator(seed)).tolist()
     train_idx, validate_idx = np.split(indices, [int(dset_length * training_set_prop)])
     training_dataset = Subset(full_training_dset, train_idx)
     validation_dataset = Subset(full_validation_dset, validate_idx)
@@ -81,6 +105,7 @@ def get_2d_training_dataloaders(
         persistent_workers=cfg.PERSISTENT_WORKERS,
         pin_memory=cfg.PIN_CUDA_MEMORY,
         drop_last=True,
+        **_seeded_loader_kwargs(seed),
     )
     validation_dataloader = DataLoader(
         validation_dataset,
@@ -113,6 +138,7 @@ def get_monai_training_dataloaders(
 
     batch_size = utils.get_batch_size(settings)
 
+    seed = _get_seed(settings)
     training_dataset, validation_dataset = get_monai_training_and_validation_datasets(
         image_dir, label_dir, settings
     )
@@ -127,6 +153,7 @@ def get_monai_training_dataloaders(
         collate_fn=list_data_collate,
         pin_memory=cfg.PIN_CUDA_MEMORY,
         drop_last=True,
+        **_seeded_loader_kwargs(seed),
     )
     validation_dataloader = DataLoader(
         validation_dataset,
@@ -187,6 +214,7 @@ def get_semi_supervised_dataloaders(
     Returns:
         Tuple of (labeled_train_loader, unlabeled_train_loader, validation_loader)
     """
+    seed = _get_seed(settings)
     # Get labeled training and validation loaders (existing functionality)
     labeled_train_loader, validation_loader = get_2d_training_dataloaders(
         labeled_image_dir, labeled_label_dir, settings
@@ -240,6 +268,7 @@ def get_semi_supervised_dataloaders(
             collate_fn=list_data_collate,
             pin_memory=cfg.PIN_CUDA_MEMORY,
             drop_last=True,
+            **_seeded_loader_kwargs(seed),
         )
     else:
         # Non-MONAI unlabeled dataset
@@ -277,6 +306,7 @@ def get_semi_supervised_dataloaders(
             persistent_workers=cfg.PERSISTENT_WORKERS,
             pin_memory=cfg.PIN_CUDA_MEMORY,
             drop_last=True,
+            **_seeded_loader_kwargs(seed),
         )
 
     return labeled_train_loader, unlabeled_loader, validation_loader
@@ -342,8 +372,9 @@ def get_pipeline_training_dataloaders(
         num_2_5d_slices=num_2_5d_slices,
     )
 
+    seed = _get_seed(settings)
     n = len(train_dset)
-    indices = torch.randperm(n).tolist()
+    indices = torch.randperm(n, generator=make_generator(seed)).tolist()
     train_idx, val_idx = np.split(indices, [int(n * training_set_prop)])
     training_dataset = Subset(train_dset, train_idx)
     validation_dataset = Subset(val_dset, val_idx)
@@ -356,6 +387,7 @@ def get_pipeline_training_dataloaders(
         persistent_workers=cfg.PERSISTENT_WORKERS,
         pin_memory=cfg.PIN_CUDA_MEMORY,
         drop_last=True,
+        **_seeded_loader_kwargs(seed),
     )
     validation_dataloader = DataLoader(
         validation_dataset,

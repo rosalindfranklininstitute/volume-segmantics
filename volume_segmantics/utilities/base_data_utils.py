@@ -461,8 +461,14 @@ def clip_to_uint8(data: np.array, data_mean: float, st_dev_factor: float) -> np.
         data = data.astype(float)
     data = np.clip(data, lower_bound, upper_bound, out=data)
     data = np.subtract(data, lower_bound, out=data)
-    data = np.divide(data, (upper_bound - lower_bound), out=data)
-    # data = (data - lower_bound) / (upper_bound - lower_bound)
+    data_range = float(upper_bound - lower_bound)
+    if data_range > 0:
+        data = np.divide(data, data_range, out=data)
+    else:
+        # Constant (or near-constant) volume: std dev is ~0 so there is no
+        # intensity range to rescale. Guard the divide-by-zero, which would
+        # otherwise produce NaN and an undefined NaN->uint8 cast.
+        data[...] = 0.0
     data = np.clip(data, 0.0, 1.0, out=data)
     # data = exposure.rescale_intensity(data, in_range=(lower_bound, upper_bound))
     logging.info("Converting to uint8.")

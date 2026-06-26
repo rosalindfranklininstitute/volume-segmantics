@@ -56,6 +56,23 @@ class TestBaseDataManagerInit:
     def test_init_float_vol_array_exists(self, base_dm_float_vol):
         assert isinstance(base_dm_float_vol.data_vol, np.ndarray)
 
+    def test_constant_volume_minmax_norm_is_finite(self, training_settings):
+        """minmax_norm on a constant volume must not leak NaN/inf (Step 11)."""
+        from types import SimpleNamespace
+
+        settings = SimpleNamespace(**vars(training_settings))
+        settings.clip_data = False
+        settings.minmax_norm = True
+        const = np.full((8, 16, 16), 5.0, dtype=np.float32)
+        dm = BaseDataManager(const, settings)
+        assert np.isfinite(dm.data_vol).all()
+
+    def test_constant_volume_clip_data_is_finite(self, training_settings):
+        """clip_data path on a constant volume must not leak NaN/inf (Step 11)."""
+        const = np.full((8, 16, 16), 5.0, dtype=np.float32)
+        dm = BaseDataManager(const, training_settings)  # clip_data True by default
+        assert np.isfinite(dm.data_vol).all()
+
 
 class TestBaseDataManagerPreprocessData:
     def test_preprocess_downsampled(

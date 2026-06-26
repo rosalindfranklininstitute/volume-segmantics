@@ -82,3 +82,52 @@ def test_get_numpy_from_path_mrc(synthetic_mrc):
     assert data.shape == original.shape
     assert data.dtype == np.int16  # native dtype preserved
     assert chunking is True
+
+
+@pytest.mark.parametrize("max_label", [127, 128, 200, 255])
+def test_save_mrc_preserves_uint8_labels(tmp_path, max_label):
+    """Labels up to 255 must round-trip exactly (not wrap negative)."""
+    labels = np.array([[[0, 1, max_label]]], dtype=np.uint8)
+    path = tmp_path / "labels.mrc"
+    save_mrc(labels, path, voxel_size_angstrom=10.0)
+    data, _ = load_mrc(path)
+    np.testing.assert_array_equal(data.astype(np.int64), labels.astype(np.int64))
+    assert data.min() >= 0  # no negative wraparound
+
+
+def test_save_mrc_preserves_multiclass_labels_above_255(tmp_path):
+    """A >255-class label map must not be truncated/wrapped."""
+    labels = np.array([[[0, 300, 1000]]], dtype=np.int32)
+    path = tmp_path / "multiclass.mrc"
+    save_mrc(labels, path)
+    data, _ = load_mrc(path)
+    np.testing.assert_array_equal(data.astype(np.int64), labels.astype(np.int64))
+
+
+def test_save_mrc_preserves_float_maps(tmp_path):
+    """Probability/logit maps (float) must stay float, not be cast to int."""
+    probs = np.array([[[0.0, 0.25, 0.5, 0.9999]]], dtype=np.float32)
+    path = tmp_path / "probs.mrc"
+    save_mrc(probs, path)
+    data, _ = load_mrc(path)
+    assert np.issubdtype(data.dtype, np.floating)
+    np.testing.assert_allclose(data, probs, rtol=0, atol=1e-6)
+
+
+def test_save_mrc_rejects_unrepresentable_labels(tmp_path):
+    """Values outside any MRC integer mode must raise, not silently corrupt."""
+    labels = np.array([[[0, 100000]]], dtype=np.int32)  # > uint16 max
+    path = tmp_path / "toobig.mrc"
+    with pytest.raises((ValueError, OverflowError)):
+        save_mrc(labels, path)
+
+
+def test_save_mrc_preserves_per_axis_voxel_size(tmp_path):
+    """Per-axis voxel spacing (z, y, x) must survive a save/load round-trip."""
+    labels = np.zeros((2, 3, 4), dtype=np.uint8)
+    path = tmp_path / "aniso.mrc"
+    save_mrc(labels, path, voxel_size_angstrom=np.array([4.0, 2.0, 1.0]))
+    _, meta = load_mrc(path)
+    np.testing.assert_allclose(
+        meta["voxel_size_angstrom"], np.array([4.0, 2.0, 1.0]), rtol=1e-4
+    )

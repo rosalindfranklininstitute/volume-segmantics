@@ -135,3 +135,10 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# bot
+/.claude
+
+# extra  training data
+/training_data/v2_smoke_corpus_700
+/training_data/Villi_Instances*
