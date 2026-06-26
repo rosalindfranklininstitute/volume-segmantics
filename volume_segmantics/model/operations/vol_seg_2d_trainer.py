@@ -15,23 +15,14 @@ from torch.nn import DataParallel
 import volume_segmantics.utilities.base_data_utils as utils
 import volume_segmantics.utilities.config as cfg
 from tqdm import tqdm
+from volume_segmantics.data import pipeline_registry as _registry
 from volume_segmantics.data.dataloaders import get_2d_training_dataloaders
-from volume_segmantics.data.pytorch3dunet_losses import (
-    BCEDiceLoss,
-    DiceLoss,
-    GeneralizedDiceLoss,
-    BoundaryDoULoss,
-    BoundaryDoULossV2,
-    TverskyLoss,
-    BoundaryLoss,
-    BoundaryDoUDiceLoss
-)
+# Loss construction is delegated to the pipeline loss registry (see
+# ``_get_loss_criterion``); the loss classes are no longer imported here.
 from volume_segmantics.model.model_2d import create_model_from_file_full_weights
 from volume_segmantics.model.training.sam import SAM
 from volume_segmantics.model.operations.trainer_losses import (
     ConsistencyLoss,
-    ClassWeightedDiceLoss,
-    CombinedCEDiceLoss,
     get_rampup_ratio,
 )
 from volume_segmantics.model.operations.trainer_multitask import (
@@ -461,38 +452,29 @@ class VolSeg2dTrainer:
     def _get_loss_criterion(self):
         loss_name = self.settings.loss_criterion
 
-        loss_map = {
-            "BCEDiceLoss": lambda: BCEDiceLoss(self.settings.alpha, self.settings.beta),
-            "DiceLoss": lambda: DiceLoss(normalization="none"),
-            "BCELoss": lambda: nn.BCEWithLogitsLoss(),
-            "CrossEntropyLoss": lambda: nn.CrossEntropyLoss(),
-            "GeneralizedDiceLoss": lambda: GeneralizedDiceLoss(),
-            "TverskyLoss": lambda: TverskyLoss(self.label_no),
-            "BoundaryDoULoss": lambda: BoundaryDoULoss(),
-            "BoundaryDoUDiceLoss": lambda: BoundaryDoUDiceLoss(alpha=0.5, beta=0.5),
-            "BoundaryDoULossV2": lambda: BoundaryDoULossV2(),
-            "BoundaryLoss": lambda: BoundaryLoss(),
-            # New class-weighted Dice losses
-            "ClassWeightedDiceLoss": lambda: ClassWeightedDiceLoss(
-                num_classes=self.label_no,
-                weight_mode=getattr(self.settings, "dice_weight_mode", "inverse_sqrt_freq"),
-                exclude_background=getattr(self.settings, "exclude_background_from_dice", True),
-            ),
-            "CombinedCEDiceLoss": lambda: CombinedCEDiceLoss(
-                num_classes=self.label_no,
-                alpha=getattr(self.settings, "ce_weight", 0.5),
-                beta=getattr(self.settings, "dice_weight", 0.5),
-                dice_weight_mode=getattr(self.settings, "dice_weight_mode", "inverse_sqrt_freq"),
-                exclude_background=getattr(self.settings, "exclude_background_from_dice", True),
-            ),
-        }
+        # Single source of truth: the pipeline loss registry. The raw
+        # CamelCase factories there reproduce the legacy constructions
+        # exactly. We pass one superset kwargs dict; each factory consumes
+        # only the keys it needs and ignores the rest.
+        loss_kwargs = dict(
+            num_classes=self.label_no,
+            alpha=self.settings.alpha,
+            beta=self.settings.beta,
+            ce_weight=getattr(self.settings, "ce_weight", 0.5),
+            dice_weight=getattr(self.settings, "dice_weight", 0.5),
+            weight_mode=getattr(self.settings, "dice_weight_mode", "inverse_sqrt_freq"),
+            dice_weight_mode=getattr(self.settings, "dice_weight_mode", "inverse_sqrt_freq"),
+            exclude_background=getattr(self.settings, "exclude_background_from_dice", True),
+        )
 
-        if loss_name in loss_map:
-            logging.info(f"Using {loss_name}")
-            return loss_map[loss_name]()
-        else:
+        try:
+            criterion = _registry.build_loss(loss_name, **loss_kwargs)
+        except KeyError:
             logging.error(f"Unknown loss criterion: {loss_name}, exiting")
             sys.exit(1)
+
+        logging.info(f"Using {loss_name}")
+        return criterion
 
     def _ensure_tuple_output(self, output) -> tuple:
         """Ensure model output is a tuple for consistent handling."""

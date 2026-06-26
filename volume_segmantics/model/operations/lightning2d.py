@@ -147,7 +147,44 @@ class _SemanticDiceAccumulator:
         return out
 
 
-# LightningModule 
+class _BinaryDiceAccumulator:
+    """Single-class Dice for the boundary head's sigmoid output.
+
+    Boundary predictions arrive as ``(B, 1, H, W)`` raw logits; the
+    target is ``(B, 1, H, W)`` ``{0, 1}`` float. We binarise the
+    prediction with ``sigmoid > 0.5`` and accumulate TP / FP / FN over
+    the validation epoch. The mirrored API matches
+    :class:`_SemanticDiceAccumulator` so :meth:`on_validation_epoch_end`
+    can treat the two uniformly.
+    """
+
+    def __init__(self) -> None:
+        self.tp = 0
+        self.fp = 0
+        self.fn = 0
+
+    def reset(self) -> None:
+        self.tp = 0
+        self.fp = 0
+        self.fn = 0
+
+    def update(
+        self, pred_logits: torch.Tensor, target: torch.Tensor,
+    ) -> None:
+        pred_bin = (torch.sigmoid(pred_logits) > 0.5).reshape(-1)
+        target_bin = (target > 0.5).reshape(-1)
+        self.tp += int((pred_bin & target_bin).sum().item())
+        self.fp += int((pred_bin & ~target_bin).sum().item())
+        self.fn += int((~pred_bin & target_bin).sum().item())
+
+    def compute(self) -> Optional[float]:
+        denom = 2 * self.tp + self.fp + self.fn
+        if denom == 0:
+            return None
+        return 2 * self.tp / denom
+
+
+# LightningModule
 
 
 class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
@@ -190,6 +227,12 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             ) from _pl_import_error
 
         super().__init__()
+
+        # Tracks whether the encoder is currently frozen so that the
+        # overridden ``train()`` can re-apply ``encoder.eval()`` after
+        # Lightning calls ``self.train()`` at every epoch boundary.
+        # ``freeze_encoder`` / ``unfreeze_encoder`` flip this.
+        self._encoder_frozen: bool = False
 
         # SSL: wrap the student in MeanTeacherModel iff the
         # pipeline.yaml ema_teacher block is enabled. The Mean Teacher
@@ -247,6 +290,9 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         # on_validation_epoch_end; updated per batch in _step when
         # stage == "val". Mirrors legacy trainer's per-class breakdown.
         self._val_dice_accumulator = _SemanticDiceAccumulator(self.num_classes)
+        # Boundary-head Dice accumulator — only updates when the
+        # boundary head is enabled. 
+        self._val_boundary_dice_accumulator = _BinaryDiceAccumulator()
 
     #  Pipeline-config factory 
 
@@ -450,6 +496,14 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
                 self._val_dice_accumulator.update(
                     sem_pred.detach(), sem_target.long().detach(),
                 )
+            if "boundary" in head_names:
+                bnd_idx = head_names.index("boundary")
+                bnd_target = targets.get("boundary")
+                if bnd_target is not None:
+                    self._val_boundary_dice_accumulator.update(
+                        preds[bnd_idx].detach(),
+                        bnd_target.detach(),
+                    )
 
         return total_loss
 
@@ -493,7 +547,14 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
                     f"val_dice_class_{c}", float(val),
                     on_epoch=True, sync_dist=True,
                 )
+        boundary_dice = self._val_boundary_dice_accumulator.compute()
+        if not sanity and boundary_dice is not None:
+            self.log(
+                "val_boundary_dice", float(boundary_dice),
+                on_epoch=True, sync_dist=True,
+            )
         self._val_dice_accumulator.reset()
+        self._val_boundary_dice_accumulator.reset()
 
     #  Optimizer + scheduler 
 
@@ -567,6 +628,12 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             return
         for p in student.encoder.parameters():
             p.requires_grad = False
+        # Put the encoder in eval mode so BatchNorm running stats and
+        # Dropout are inactive during the frozen warmup phase. The
+        # overridden :meth:`train` re-applies this every time Lightning
+        # bounces the module back into train mode at an epoch boundary.
+        student.encoder.eval()
+        self._encoder_frozen = True
         logger.info("Encoder frozen.")
 
     def unfreeze_encoder(self) -> None:
@@ -575,7 +642,23 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             return
         for p in student.encoder.parameters():
             p.requires_grad = True
+        # Restore the encoder's mode to match the parent module.
+        if self.training:
+            student.encoder.train()
+        self._encoder_frozen = False
         logger.info("Encoder unfrozen.")
+
+    def train(self, mode: bool = True):  # type: ignore[override]
+        super().train(mode)
+        # Lightning calls ``self.train()`` at the start of every train
+        # epoch, which would otherwise re-enable BN running-stat
+        # updates and Dropout inside the frozen encoder. Re-pin the
+        # encoder to eval mode while it's still frozen.
+        if mode and self._encoder_frozen:
+            student = self._underlying_student
+            if hasattr(student, "encoder"):
+                student.encoder.eval()
+        return self
 
     #  Checkpoint helpers 
 
@@ -864,9 +947,472 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
         torch.save(model_dict, self.output_path)
 
 
+def _ensure_tuple_output(output: Any) -> Tuple[Any, ...]:
+    """Wrap a model output in a tuple if it isn't already one.
+
+    :class:`PipelineMultitaskUnet.forward` returns a tuple of head
+    outputs; v0.4's :class:`Multitask_Unet` also returns a tuple; bare
+    SMP models return a single tensor. The visualizer's
+    ``plot_predictions`` family treats element ``[0]`` as the semantic
+    output, so a single-tensor return needs wrapping.
+    """
+    if isinstance(output, tuple):
+        return output
+    return (output,)
+
+
+class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
+    """End-of-training diagnostic outputs (PNG + CSV).
+
+    +-------------------------+--------------------+
+    | Lightning              | Visualizer         |
+    +========================+====================+
+    | ``train_loss``         | ``train_total``    |
+    | ``val_loss``           | ``valid_total``    |
+    | ``train_semantic_loss``| ``train_seg``      |
+    | ``val_semantic_loss``  | ``valid_seg``      |
+    | ``train_boundary_loss``| ``train_boundary`` |
+    | ``val_boundary_loss``  | ``valid_boundary`` |
+    | ``train_distance_loss``| ``train_task3``    |
+    | ``val_distance_loss``  | ``valid_task3``    |
+    | ``val_seg_dice``       | ``seg_dice``       |
+    | ``val_dice_class_<c>`` | ``dice_class_<c>`` |
+    +-------------------------+--------------------+
+    """
+
+    _METRIC_RENAMES: Dict[str, str] = {
+        "train_loss": "train_total",
+        "val_loss": "valid_total",
+        "train_semantic_loss": "train_seg",
+        "val_semantic_loss": "valid_seg",
+        "train_boundary_loss": "train_boundary",
+        "val_boundary_loss": "valid_boundary",
+        # b3 has distance + sdm heads; the v0.4 visualizer only carves
+        # out a single "task3" lane. We route distance there first;
+        # if distance isn't enabled but sdm is, sdm fills the slot.
+        "train_distance_loss": "train_task3",
+        "val_distance_loss": "valid_task3",
+        "val_seg_dice": "seg_dice",
+        "val_boundary_dice": "boundary_dice",
+    }
+    _SDM_FALLBACK_RENAMES: Dict[str, str] = {
+        "train_sdm_loss": "train_task3",
+        "val_sdm_loss": "valid_task3",
+    }
+
+    def __init__(
+        self,
+        output_path: Path,
+        num_classes: int,
+        *,
+        label_codes: Optional[Mapping[int, str]] = None,
+        head_names: Optional[Tuple[str, ...]] = None,
+    ) -> None:
+        self.output_path = Path(output_path)
+        self.num_classes = int(num_classes)
+        self.label_codes: Dict[int, str] = dict(label_codes or {})
+        # Heads beyond the semantic primary -> multitask plot layout.
+        head_set = set(head_names or ())
+        self.use_multitask = len(head_set - {"semantic"}) > 0
+        self._head_set = head_set
+
+    def on_train_end(self, trainer: Any, pl_module: Any) -> None:
+        if trainer.global_rank != 0:
+            return
+        if getattr(trainer, "sanity_checking", False):
+            return
+        history = getattr(pl_module, "epoch_history", None) or []
+        if not history:
+            logger.info(
+                "VolSegDiagnosticsCallback: epoch_history is empty; "
+                "skipping diagnostic outputs."
+            )
+            return
+        legacy_history = self._transpose_history(history)
+        if not legacy_history.get("train_total") or not legacy_history.get(
+            "valid_total"
+        ):
+            logger.info(
+                "VolSegDiagnosticsCallback: train/val loss columns "
+                "missing from epoch_history; skipping diagnostic outputs."
+            )
+            return
+
+        # Local import — :mod:`trainer_visualization` pulls in
+        # matplotlib at import time, which we want to keep off the
+        # default :mod:`lightning_2d` import chain.
+        from volume_segmantics.model.operations.trainer_visualization import (
+            TrainingVisualizer,
+        )
+
+        viz = TrainingVisualizer(
+            num_classes=self.num_classes,
+            label_codes=self.label_codes,
+            use_multitask=self.use_multitask,
+        )
+        # Save the CSV first — independent of the matplotlib path,
+        # so a missing column on the plot side doesn't lose the
+        # tabular log. plot_loss_history would otherwise also write
+        # the CSV (line ~273 in trainer_visualization) but only on
+        # the success path.
+        try:
+            viz.save_training_stats_csv(
+                legacy_history,
+                output_dir=self.output_path.parent,
+                model_name=self.output_path.stem,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "VolSegDiagnosticsCallback: save_training_stats_csv "
+                "failed: %s", exc,
+            )
+        try:
+            viz.plot_loss_history(legacy_history, self.output_path)
+        except Exception as exc:  # noqa: BLE001 — never break training over a plot
+            logger.warning(
+                "VolSegDiagnosticsCallback: plot_loss_history failed: %s", exc,
+            )
+
+        val_loader = self._resolve_validation_loader(trainer)
+        if val_loader is not None:
+            try:
+                device_num = self._resolve_device_num(pl_module)
+                viz.plot_predictions(
+                    pl_module._underlying_student,
+                    val_loader,
+                    device_num,
+                    self.output_path,
+                    _ensure_tuple_output,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "VolSegDiagnosticsCallback: plot_predictions failed: %s",
+                    exc,
+                )
+
+    @staticmethod
+    def _resolve_device_num(pl_module: Any) -> Any:
+        try:
+            device = next(pl_module.parameters()).device
+        except StopIteration:
+            return "cpu"
+        if device.type == "cuda":
+            return device.index if device.index is not None else 0
+        return "cpu"
+
+    def _transpose_history(
+        self, history: List[Dict[str, float]],
+    ) -> Dict[str, List[float]]:
+        out: Dict[str, List[float]] = {}
+        # Detect whether the run logged a distance head; if not but
+        # sdm was logged, route sdm into the task3 lane.
+        has_distance = any("train_distance_loss" in row for row in history)
+        renames = dict(self._METRIC_RENAMES)
+        if not has_distance:
+            renames.update(self._SDM_FALLBACK_RENAMES)
+
+        for row in history:
+            for src_key, value in row.items():
+                if src_key == "epoch":
+                    continue
+                dst_key = renames.get(src_key, src_key)
+                out.setdefault(dst_key, []).append(float(value))
+
+        # Pad shorter columns with zeros so the visualizer's parallel-
+        # list indexing doesn't IndexError when a metric started being
+        # logged mid-training (e.g. unfreeze-phase-only).
+        max_len = max((len(v) for v in out.values()), default=0)
+        for key, values in out.items():
+            if len(values) < max_len:
+                values.extend([0.0] * (max_len - len(values)))
+
+        # The visualizer's multitask path indexes a fixed set of keys
+        # unconditionally (``boundary_dice``, ``train_task3``, etc.) and
+        # KeyErrors when one is absent. b3 doesn't currently emit
+        # per-boundary Dice; default any expected-but-missing column
+        # to zero-filled. The plot's ``any(...)`` guards still skip
+        # over the empty series — they just need the key to exist.
+        expected_keys = {"train_total", "valid_total", "seg_dice"}
+        if self.use_multitask:
+            expected_keys.update({
+                "train_seg", "valid_seg",
+                "train_boundary", "valid_boundary",
+                "train_task3", "valid_task3",
+                "boundary_dice",
+            })
+        for key in expected_keys:
+            out.setdefault(key, [0.0] * max_len)
+        return out
+
+    @staticmethod
+    def _resolve_validation_loader(trainer: Any) -> Any:
+        for attr in ("val_dataloaders", "validation_dataloaders"):
+            cand = getattr(trainer, attr, None)
+            if cand is None:
+                continue
+            if isinstance(cand, (list, tuple)) and cand:
+                return cand[0]
+            return cand
+        datamodule = getattr(trainer, "datamodule", None)
+        if datamodule is not None and hasattr(datamodule, "val_dataloader"):
+            try:
+                return datamodule.val_dataloader()
+            except Exception:  # noqa: BLE001
+                return None
+        return None
+
+
+class VolSegSSLVizCallback(pl.Callback if pl is not None else object):
+    """Per-epoch SSL diagnostic PNGs (mean-teacher + pseudo-labelling).
+
+    Mirrors v0.4's two ``visualizer.plot_*`` calls in
+    ``vol_seg_2d_trainer.py``:
+
+    * ``{stem}_mean_teacher_epoch_{N}.png`` — side-by-side student
+      vs teacher predictions on a validation batch. Emitted when SSL
+      is on (i.e. ``MeanTeacherModel`` wraps the student) and the
+      current epoch is divisible by ``mean_teacher_vis_epoch_interval``.
+    * ``{stem}_pseudo_labeling_epoch_{N}.png`` — input + pseudo-
+      labels + confidence + accepted-mask on an unlabeled batch.
+      Emitted when ``settings.use_pseudo_labeling`` is truthy and a
+      ``settings.unlabeled_data_dir`` is configured. The callback
+      builds a transient :class:`PseudoLabelGenerator` and a v0.4-
+      compatible :class:`UnlabeledDataset` loader the first time it
+      runs; both are cached on the instance.
+
+    Intervals come from ``settings``:
+
+    * ``mean_teacher_vis_epoch_interval`` — default 5.
+    * ``pseudo_labeling_vis_epoch_interval`` — default 5.
+
+    Set either to ``0`` / ``None`` to disable that viz lane entirely.
+    Rank-0 only; skipped during Lightning's sanity-check phase.
+    """
+
+    def __init__(
+        self,
+        output_path: Path,
+        settings: SimpleNamespace,
+        num_classes: int,
+    ) -> None:
+        self.output_path = Path(output_path)
+        self.settings = settings
+        self.num_classes = int(num_classes)
+        self.mean_teacher_interval = int(
+            getattr(settings, "mean_teacher_vis_epoch_interval", 5) or 0
+        )
+        self.pseudo_label_interval = int(
+            getattr(settings, "pseudo_labeling_vis_epoch_interval", 5) or 0
+        )
+        # Lazy-built on first use.
+        self._pseudo_label_generator: Any = None
+        self._unlabeled_loader: Any = None
+        self._unlabeled_loader_init_failed: bool = False
+
+    def on_validation_epoch_end(self, trainer: Any, pl_module: Any) -> None:
+        if trainer.global_rank != 0:
+            return
+        if getattr(trainer, "sanity_checking", False):
+            return
+        epoch = int(trainer.current_epoch) + 1  # human-friendly 1-indexed
+        if epoch <= 0:
+            return
+
+        # Local import — :mod:`trainer_visualization` pulls in
+        # matplotlib at import time, which we keep off the default
+        # :mod:`lightning_2d` import chain.
+        from volume_segmantics.model.operations.trainer_visualization import (
+            TrainingVisualizer,
+        )
+        viz = TrainingVisualizer(
+            num_classes=self.num_classes,
+            label_codes={},
+            use_multitask=False,
+        )
+
+        # Mean-teacher viz: only when SSL is wired up.
+        ssl_on = bool(getattr(pl_module, "_ssl_enabled", False)) and isinstance(
+            pl_module.model, MeanTeacherModel,
+        )
+        if (
+            ssl_on
+            and self.mean_teacher_interval > 0
+            and epoch % self.mean_teacher_interval == 0
+        ):
+            val_loader = _resolve_validation_loader_from_trainer(trainer)
+            if val_loader is not None:
+                try:
+                    device_num = _resolve_device_num_from_module(pl_module)
+                    # plot_mean_teacher_predictions takes the
+                    # ``MeanTeacherModel`` wrapper directly and pulls
+                    # student / teacher via its accessors internally.
+                    viz.plot_mean_teacher_predictions(
+                        pl_module.model,
+                        val_loader,
+                        device_num,
+                        self.output_path,
+                        epoch,
+                        _ensure_tuple_output,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "VolSegSSLVizCallback: plot_mean_teacher_"
+                        "predictions failed at epoch %d: %s", epoch, exc,
+                    )
+
+        # Pseudo-labelling viz: needs an unlabeled dataloader + a
+        # PseudoLabelGenerator. b3's Lightning training doesn't
+        # currently plumb either, so we build both here on demand
+        # (cached on first success). Skip the whole branch silently
+        # when the user hasn't asked for pseudo-labelling.
+        if (
+            getattr(self.settings, "use_pseudo_labeling", False)
+            and self.pseudo_label_interval > 0
+            and epoch % self.pseudo_label_interval == 0
+        ):
+            unlabeled_loader = self._get_unlabeled_loader()
+            if unlabeled_loader is None:
+                return
+            generator = self._get_pseudo_label_generator()
+            try:
+                device_num = _resolve_device_num_from_module(pl_module)
+                viz.plot_pseudo_labeling_visualization(
+                    pl_module.model,  # may be MeanTeacherModel or bare
+                    unlabeled_loader,
+                    device_num,
+                    self.output_path,
+                    epoch,
+                    generator,
+                    _ensure_tuple_output,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "VolSegSSLVizCallback: plot_pseudo_labeling_"
+                    "visualization failed at epoch %d: %s", epoch, exc,
+                )
+
+    def _get_pseudo_label_generator(self) -> Any:
+        if self._pseudo_label_generator is not None:
+            return self._pseudo_label_generator
+        from volume_segmantics.model.training.pseudo_labeling import (
+            PseudoLabelGenerator,
+        )
+        self._pseudo_label_generator = PseudoLabelGenerator(
+            confidence_threshold=float(
+                getattr(self.settings, "pseudo_label_confidence_threshold", 0.95)
+            ),
+            confidence_method=str(
+                getattr(self.settings, "pseudo_label_confidence_method", "max_prob")
+            ),
+            min_pixels_per_class=int(
+                getattr(self.settings, "pseudo_label_min_pixels_per_class", 10)
+            ),
+            use_teacher_for_labels=bool(
+                getattr(self.settings, "pseudo_label_use_teacher", True)
+            ),
+        )
+        return self._pseudo_label_generator
+
+    def _get_unlabeled_loader(self) -> Any:
+        if self._unlabeled_loader is not None:
+            return self._unlabeled_loader
+        if self._unlabeled_loader_init_failed:
+            return None
+        unl_dir_raw = getattr(self.settings, "unlabeled_data_dir", None)
+        if not unl_dir_raw:
+            self._unlabeled_loader_init_failed = True
+            return None
+        unl_dir = Path(str(unl_dir_raw))
+        if not unl_dir.is_dir():
+            logger.warning(
+                "VolSegSSLVizCallback: unlabeled_data_dir %s does not "
+                "exist or is not a directory; pseudo-labelling viz "
+                "disabled for this run.", unl_dir,
+            )
+            self._unlabeled_loader_init_failed = True
+            return None
+        try:
+            from torch.utils.data import DataLoader
+            from volume_segmantics.data.datasets import (
+                UnlabeledDataset,
+                get_augmentation_module,
+            )
+            aug_module = get_augmentation_module(self.settings)
+            img_size = int(getattr(self.settings, "image_size", 256))
+            ds = UnlabeledDataset(
+                images_dir=unl_dir,
+                preprocessing=(
+                    aug_module.get_train_preprocess_augs(img_size)
+                    if hasattr(aug_module, "get_train_preprocess_augs")
+                    else None
+                ),
+                augmentation=None,
+                imagenet_norm=bool(
+                    getattr(self.settings, "use_imagenet_norm", True)
+                ),
+                postprocessing=(
+                    aug_module.get_postprocess_augs()
+                    if hasattr(aug_module, "get_postprocess_augs")
+                    else None
+                ),
+                use_2_5d_slicing=bool(
+                    getattr(self.settings, "use_2_5d_slicing", False)
+                ),
+            )
+            if len(ds.images_fps) == 0:
+                logger.warning(
+                    "VolSegSSLVizCallback: unlabeled_data_dir %s "
+                    "contains no PNG/TIFF images; pseudo-labelling "
+                    "viz disabled for this run.", unl_dir,
+                )
+                self._unlabeled_loader_init_failed = True
+                return None
+            self._unlabeled_loader = DataLoader(
+                ds, batch_size=2, shuffle=False, num_workers=0,
+            )
+            return self._unlabeled_loader
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "VolSegSSLVizCallback: failed to build unlabeled "
+                "loader from %s: %s. Pseudo-labelling viz disabled "
+                "for this run.", unl_dir, exc,
+            )
+            self._unlabeled_loader_init_failed = True
+            return None
+
+
+def _resolve_validation_loader_from_trainer(trainer: Any) -> Any:
+    for attr in ("val_dataloaders", "validation_dataloaders"):
+        cand = getattr(trainer, attr, None)
+        if cand is None:
+            continue
+        if isinstance(cand, (list, tuple)) and cand:
+            return cand[0]
+        return cand
+    datamodule = getattr(trainer, "datamodule", None)
+    if datamodule is not None and hasattr(datamodule, "val_dataloader"):
+        try:
+            return datamodule.val_dataloader()
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def _resolve_device_num_from_module(pl_module: Any) -> Any:
+    try:
+        device = next(pl_module.parameters()).device
+    except StopIteration:
+        return "cpu"
+    if device.type == "cuda":
+        return device.index if device.index is not None else 0
+    return "cpu"
+
+
 __all__ = [
     "EpochHistoryCallback",
     "UnfreezeEncoderCallback",
     "VolSeg2dLightningModule",
     "VolSegCheckpointCallback",
+    "VolSegDiagnosticsCallback",
+    "VolSegSSLVizCallback",
 ]

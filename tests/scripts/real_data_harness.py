@@ -257,6 +257,20 @@ def _run_train_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
     print(f"{status} Registered model '{model_key}' -> {model_path}")
 
+    # Train-step diagnostic-output assertions: confirm the Lightning
+    # trainer wrote the loss plot / train stats CSV / prediction PNG
+    # (and SSL PNGs when applicable). The harness used to police these
+    # only on predict steps; b3 emits the artifacts at end of training.
+    assert_cfg = step_cfg.get("assert_outputs", {})
+    if assert_cfg:
+        _assert_globs(
+            run_dir=run_dir,
+            should_exist=assert_cfg.get("should_exist_globs", []),
+            should_not_exist=assert_cfg.get("should_not_exist_globs", []),
+            dry_run=ctx.dry_run,
+        )
+        print(f"{status} Train-step assertions passed for '{name}'")
+
 
 def _run_predict_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     name = str(step_cfg["name"])

@@ -1,23 +1,10 @@
-# B3.H.2 — Multi-head (semantic + boundary + distance + sdm) smoke
-#
-# Confirms the head-registry path trains end-to-end via the Lightning
-# trainer with all four geometric heads enabled. Asserts the saved
-# checkpoint actually trained.
-#
-# Run:
-#   python tests/scripts/run_smoke.py b3_multihead
-#   python tests/scripts/run_smoke.py b3_multihead --dry-run
-
 paths:
   image: training_data/vessels_256cube_DATA.h5
   label: training_data/vessels_256cube_LABELS.h5
-
 settings_templates:
   train: volseg-settings/2d_model_train_settings.yaml
   predict: volseg-settings/2d_model_predict_settings.yaml
-
 output_root: tmp/b3_multihead_smoke
-
 global_overrides:
   train:
     image_size: 64
@@ -27,7 +14,7 @@ global_overrides:
     starting_lr: 0.0001
     end_lr: 0.0005
     plot_lr_graph: false
-    use_multitask: false  # b3 — multi-head lives in pipeline.yaml.
+    use_multitask: false
     use_semi_supervised: false
     use_pseudo_labeling: false
     model:
@@ -66,30 +53,29 @@ global_overrides:
         distance_transform: edt
       sdm:
         distance_transform: edt
-
 tests:
-  # 1. Train multi-head via Lightning.
-  - name: train_b3_multihead
-    type: train
-    model_key: b3_multihead_model
-    overrides:
-      train:
-        model_output_fn: b3_multihead_smoke
-
-  # 2. v0.5-Bug-2 guard: BN stats trained.
-  - name: assert_bn_trained
-    type: b3_assert
-    subcommand: checkpoint-trained
-    args:
-      - "${model:b3_multihead_model}"
-
-  # 3. Legacy single-file predict produces a vol_pred for sanity.
-  - name: predict_b3_multihead_low
-    type: predict
-    model_key: b3_multihead_model
-    overrides:
-      predict:
-        quality: low
-    assert_outputs:
-      should_exist_globs:
-        - "*_vol_pred.*"
+- name: train_b3_multihead
+  type: train
+  model_key: b3_multihead_model
+  overrides:
+    train:
+      model_output_fn: b3_multihead_smoke
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained
+  type: b3_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:b3_multihead_model}
+- name: predict_b3_multihead_low
+  type: predict
+  model_key: b3_multihead_model
+  overrides:
+    predict:
+      quality: low
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'

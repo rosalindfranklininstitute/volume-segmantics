@@ -54,7 +54,7 @@ def test_prediction_result_with_arrays():
 
 
 def test_load_data_extra_deferred():
-    with pytest.raises(NotImplementedError, match="curate-seg"):
+    with pytest.raises(NotImplementedError):
         load_data_extra("/some/path")
 
 

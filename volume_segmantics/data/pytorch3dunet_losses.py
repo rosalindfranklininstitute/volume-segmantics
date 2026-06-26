@@ -6,8 +6,6 @@
 import torch
 import torch.nn.functional as F
 from torch import nn as nn
-from torch.autograd import Variable
-from torch.nn import MSELoss, SmoothL1Loss, L1Loss
 import numpy as np
 
 from volume_segmantics.utilities.pytorch3dunet_utils import expand_as_one_hot
@@ -206,21 +204,33 @@ class BoundaryLoss(nn.Module):
         for b in range(out_shape[0]):
             for c in range(0, out_shape[1]):
                 posmask = img_gt[b][c].astype(bool)
-                if posmask.any():
-                    negmask = ~posmask
-                    posdis = distance(posmask)
-                    negdis = distance(negmask)
-                    boundary = skimage_seg.find_boundaries(
-                        posmask, mode="inner"
-                    ).astype(np.uint8)
-                    #plt.figure()
-                    #plt.imshow(boundary)
-                    #plt.savefig('boundary_t1.png')
-                    sdf = (negdis - np.min(negdis)) / (
-                        np.max(negdis) - np.min(negdis)
-                    ) - (posdis - np.min(posdis)) / (np.max(posdis) - np.min(posdis))
-                    sdf[boundary == 1] = 0
-                    normalized_sdf[b][c] = sdf
+                # Skip empty masks (no foreground) and full masks (no
+                # background): both leave one distance transform constant,
+                # which would make the min-max normalisation divide by zero.
+                if not posmask.any() or posmask.all():
+                    continue
+                negmask = ~posmask
+                posdis = distance(posmask)
+                negdis = distance(negmask)
+                boundary = skimage_seg.find_boundaries(
+                    posmask, mode="inner"
+                ).astype(np.uint8)
+
+                # Guard each min-max normalisation against a zero range
+                # (e.g. a structure that is uniformly one pixel thick).
+                neg_range = np.ptp(negdis)
+                pos_range = np.ptp(posdis)
+                neg_norm = (
+                    (negdis - negdis.min()) / neg_range
+                    if neg_range > 0 else np.zeros_like(negdis)
+                )
+                pos_norm = (
+                    (posdis - posdis.min()) / pos_range
+                    if pos_range > 0 else np.zeros_like(posdis)
+                )
+                sdf = neg_norm - pos_norm
+                sdf[boundary == 1] = 0
+                normalized_sdf[b][c] = sdf
 
         return normalized_sdf
 
@@ -241,9 +251,31 @@ class BoundaryLoss(nn.Module):
 
 
 class BoundaryDoULoss(nn.Module):
+    """Boundary Difference-over-Union loss (2D, binary one-hot targets).
+
+    ``inputs`` and ``target`` must share shape ``(B, n_classes, H, W)``.
+    ``inputs`` are raw logits (a sigmoid is applied internally) and
+    ``target`` must be a **binary** one-hot mask. The adaptive ``alpha``
+    weighting is derived from a 4-connected boundary count, so it is only
+    meaningful for 2D spatial data with strictly ``{0, 1}`` targets.
+    """
+
     def __init__(self, n_classes=1):
         super(BoundaryDoULoss, self).__init__()
         self.n_classes = n_classes
+
+        # 4-connected "plus" structuring element. Registered as a buffer so
+        # it is built once and follows the module across devices, instead of
+        # being re-allocated on every forward pass.
+        kernel = torch.tensor(
+            [[0., 1., 0.], [1., 1., 1.], [0., 1., 0.]],
+            dtype=torch.float32,
+        )
+        self.register_buffer("boundary_kernel", kernel.reshape(1, 1, 3, 3))
+        # A foreground pixel whose entire 4-neighbourhood is also foreground
+        # convolves to this value (== the number of ones in the kernel, i.e.
+        # 5 for the plus kernel). Such pixels are interior, not boundary.
+        self._interior_value = float(kernel.sum())
 
     def _one_hot_encoder(self, input_tensor):
         tensor_list = []
@@ -254,26 +286,23 @@ class BoundaryDoULoss(nn.Module):
         return output_tensor.float()
 
     def _adaptive_size(self, score, target):
-        device = target.device
-        kernel = torch.tensor(
-            [[0., 1., 0.], [1., 1., 1.], [0., 1., 0.]],
-            dtype=torch.float32,
-            device=device,
-        )
+        kernel = self.boundary_kernel.to(score.device)
 
-        # Batched conv2d: (B, 1, H, W) -> (B, 1, H, W) -> (B, H, W)
-        Y = F.conv2d(
-            target.unsqueeze(1).float(),
-            kernel.unsqueeze(0).unsqueeze(0),
-            padding=1,
-        ).squeeze(1)
+        # Batched conv2d: (B, 1, H, W) -> (B, 1, H, W) -> (B, H, W).
+        # Each pixel becomes (centre + #foreground 4-neighbours).
+        Y = F.conv2d(target.unsqueeze(1).float(), kernel, padding=1).squeeze(1)
 
+        # Keep only foreground pixels, then drop interior ones (those whose
+        # whole neighbourhood is foreground); what remains are boundary
+        # pixels. ``C`` = boundary count, ``S`` = total foreground count.
         Y = Y * target
-        Y[Y == 5] = 0
+        Y[Y == self._interior_value] = 0
         C = torch.count_nonzero(Y)
         S = torch.count_nonzero(target)
         smooth = 1e-5
         alpha = 1 - (C + smooth) / (S + smooth)
+        # Upper-capped at 0.8 per the Boundary-DoU formulation. ``alpha`` may
+        # be negative for thin structures; the DoU denominator handles that.
         alpha = min(float(2 * alpha - 1), 0.8)
 
         intersect = torch.sum(score * target)
@@ -285,9 +314,7 @@ class BoundaryDoULoss(nn.Module):
         return loss
 
     def forward(self, inputs, target):
-        # inputs = torch.softmax(inputs, dim=1)
         inputs = inputs.sigmoid()
-        # target = self._one_hot_encoder(target)
 
         assert (
             inputs.size() == target.size()
@@ -295,58 +322,26 @@ class BoundaryDoULoss(nn.Module):
             inputs.size(), target.size()
         )
 
-        # return self._adaptive_size(inputs, target)
         loss = 0.0
         for i in range(0, self.n_classes):
             loss += self._adaptive_size(inputs[:, i], target[:, i])
         return loss / self.n_classes
 
 
-class BoundaryDoULossV2(nn.Module):
+class BoundaryDoULossV2(BoundaryDoULoss):
+    """:class:`BoundaryDoULoss` plus a hard-negative outlier-suppression term.
+
+    Adds a focal-style penalty on confident false positives in background
+    regions (channel 0 only). The worst ``allowed_outlier_fraction`` of
+    pixels are discarded before reduction so that a small fraction of
+    mislabelled / outlier background pixels does not dominate the gradient.
+    Inherits the boundary kernel, one-hot encoder and ``_adaptive_size``
+    from the base class.
+    """
+
     def __init__(self, n_classes=1, allowed_outlier_fraction=0.25):
-        super(BoundaryDoULossV2, self).__init__()
-        self.n_classes = n_classes
+        super().__init__(n_classes=n_classes)
         self.allowed_outlier_fraction = allowed_outlier_fraction
-
-    def _one_hot_encoder(self, input_tensor):
-        tensor_list = []
-        for i in range(self.n_classes):
-            temp_prob = input_tensor == i
-            tensor_list.append(temp_prob.unsqueeze(1))
-        output_tensor = torch.cat(tensor_list, dim=1)
-        return output_tensor.float()
-
-    def _adaptive_size(self, score, target):
-        # Replace per-sample loop with a single batched F.conv2d call
-        device = target.device
-        kernel = torch.tensor(
-            [[0., 1., 0.], [1., 1., 1.], [0., 1., 0.]],
-            dtype=torch.float32,
-            device=device,
-        )
-
-        # Batched conv2d: (B, 1, H, W) -> (B, 1, H, W) -> (B, H, W)
-        Y = F.conv2d(
-            target.unsqueeze(1).float(),
-            kernel.unsqueeze(0).unsqueeze(0),
-            padding=1,
-        ).squeeze(1)
-
-        Y = Y * target
-        Y[Y == 5] = 0
-        C = torch.count_nonzero(Y)
-        S = torch.count_nonzero(target)
-        smooth = 1e-5
-        alpha = 1 - (C + smooth) / (S + smooth)
-        alpha = min(float(2 * alpha - 1), 0.8)
-
-        intersect = torch.sum(score * target)
-        y_sum = torch.sum(target * target)
-        z_sum = torch.sum(score * score)
-        loss = (z_sum + y_sum - 2 * intersect + smooth) / (
-            z_sum + y_sum - (1 + alpha) * intersect + smooth
-        )
-        return loss
 
     def forward(self, inputs, target):
         inputs = inputs.sigmoid()
@@ -376,6 +371,10 @@ class BoundaryDoULossV2(nn.Module):
             neg_loss = neg_loss.flatten()
             M = neg_loss.numel()
             num_elements_to_keep = int(M * (1 - self.allowed_outlier_fraction))
+            # ``largest=False`` keeps the *smallest* losses, i.e. it discards
+            # the hardest ``allowed_outlier_fraction`` of negatives as tolerated
+            # outliers / label noise. This is deliberate (robustness), and is
+            # the opposite of online hard-example mining -- do not flip.
             neg_loss, _ = torch.topk(
                 neg_loss, k=num_elements_to_keep, largest=False, sorted=False
             )
@@ -637,7 +636,9 @@ class WeightedCrossEntropyLoss(nn.Module):
         flattened = flatten(input)
         nominator = (1. - flattened).sum(-1)
         denominator = flattened.sum(-1)
-        class_weights = Variable(nominator / denominator, requires_grad=False)
+        # Class weights are derived from the input but must not carry gradient
+        # (the deprecated ``Variable(..., requires_grad=False)`` did this).
+        class_weights = (nominator / denominator).detach()
         return class_weights
 
 
@@ -711,75 +712,7 @@ def flatten(tensor):
     return transposed.contiguous().view(C, -1)
 
 
-def get_loss_criterion(config):
-    """
-    Returns the loss function based on provided configuration
-    :param config: (dict) a top level configuration object containing the 'loss' key
-    :return: an instance of the loss function
-    """
-    assert 'loss' in config, 'Could not find loss function configuration'
-    loss_config = config['loss']
-    name = loss_config.pop('name')
-
-    ignore_index = loss_config.pop('ignore_index', None)
-    skip_last_target = loss_config.pop('skip_last_target', False)
-    weight = loss_config.pop('weight', None)
-
-    if weight is not None:
-        # convert to cuda tensor if necessary
-        weight = torch.tensor(weight).to(config['device'])
-
-    pos_weight = loss_config.pop('pos_weight', None)
-    if pos_weight is not None:
-        # convert to cuda tensor if necessary
-        pos_weight = torch.tensor(pos_weight).to(config['device'])
-
-    loss = _create_loss(name, loss_config, weight, ignore_index, pos_weight)
-
-    if not (ignore_index is None or name in ['CrossEntropyLoss', 'WeightedCrossEntropyLoss']):
-        # use MaskingLossWrapper only for non-cross-entropy losses, since CE losses allow specifying 'ignore_index' directly
-        loss = _MaskingLossWrapper(loss, ignore_index)
-
-    if skip_last_target:
-        loss = SkipLastTargetChannelWrapper(loss, loss_config.get('squeeze_channel', False))
-
-    return loss
-
-
-#######################################################################################################################
-
-def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
-    if name == 'BCEWithLogitsLoss':
-        return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    elif name == 'BCEDiceLoss':
-        alpha = loss_config.get('alpha', 1.)
-        beta = loss_config.get('beta', 1.)
-        return BCEDiceLoss(alpha, beta)
-    elif name == 'CrossEntropyLoss':
-        if ignore_index is None:
-            ignore_index = -100  # use the default 'ignore_index' as defined in the CrossEntropyLoss
-        return nn.CrossEntropyLoss(weight=weight, ignore_index=ignore_index)
-    elif name == 'WeightedCrossEntropyLoss':
-        if ignore_index is None:
-            ignore_index = -100  # use the default 'ignore_index' as defined in the CrossEntropyLoss
-        return WeightedCrossEntropyLoss(ignore_index=ignore_index)
-    elif name == 'PixelWiseCrossEntropyLoss':
-        return PixelWiseCrossEntropyLoss(class_weights=weight, ignore_index=ignore_index)
-    elif name == 'GeneralizedDiceLoss':
-        normalization = loss_config.get('normalization', 'sigmoid')
-        return GeneralizedDiceLoss(normalization=normalization)
-    elif name == 'DiceLoss':
-        normalization = loss_config.get('normalization', 'sigmoid')
-        return DiceLoss(weight=weight, normalization=normalization)
-    elif name == 'MSELoss':
-        return MSELoss()
-    elif name == 'SmoothL1Loss':
-        return SmoothL1Loss()
-    elif name == 'L1Loss':
-        return L1Loss()
-    elif name == 'WeightedSmoothL1Loss':
-        return WeightedSmoothL1Loss(threshold=loss_config['threshold'],
-                                    initial_weight=loss_config['initial_weight'],
-                                    apply_below_threshold=loss_config.get('apply_below_threshold', True))
-    else:
-        raise RuntimeError(f"Unsupported loss function: '{name}'")
+# NOTE: This module defines the loss *classes* only. Loss *construction* is
+# unified in ``volume_segmantics.model.loss_registry``, which registers every
+# loss (head-aware snake_case names and raw CamelCase legacy names) into
+# ``volume_segmantics.data.pipeline_registry``.

@@ -25,6 +25,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
+# Heads whose output is a continuous map (not a class label / probability).
+# The per-slice predictor branches on this set: for these heads the
+# raw float32 output is written to the ``labels`` slot verbatim, with
+# no sigmoid + threshold step.
+_REGRESSION_HEAD_NAMES: frozenset = frozenset({"distance", "sdm"})
+
+
 class VolSeg2dPredictor:
     """Class that performs U-Net prediction operations with optional sliding window inference."""
 
@@ -61,43 +68,54 @@ class VolSeg2dPredictor:
         """
         return getattr(self, '_last_additional_tasks', None)
 
+    def _resolve_head_names(self):
+        """Return the model's canonical head_names tuple, or ``None``.
+
+        """
+        model = self.model
+        # DataParallel unwraps via ``.module``.
+        if hasattr(model, "module"):
+            inner = model.module
+            if hasattr(inner, "head_names"):
+                return tuple(inner.head_names)
+        if hasattr(model, "head_names"):
+            return tuple(model.head_names)
+        return None
+
     def _get_task_suffix(self, task_name):
         """
         Map task name to file suffix.
 
-        Args:
-            task_name: Task name like 'task1', 'task2', etc.
-
-        Returns:
-            str: Suffix like '_BND', '_DIST', etc.
         """
-        # Map task indices to suffixes
-        # Primary segmentation is saved without suffix
         task_suffix_map = {
-            'task1': '_BND',  # Boundary
-            'task2': '_DIST',  # Distance map
+            "boundary": "_BND",
+            "distance": "_DIST",
+            "sdm": "_SDM",
+            "task1": "_BND",
+            "task2": "_DIST",
         }
-        return task_suffix_map.get(task_name, f'_{task_name.upper()}')
+        return task_suffix_map.get(task_name, f"_{task_name.upper()}")
 
     def _should_use_multi_axis_for_task(self, task_name):
         """
         Determine if multi-axis prediction makes sense for a given task.
 
-        Args:
-            task_name: Task name like 'task1', 'task2', etc.
-
-        Returns:
-            bool: True if multi-axis prediction is appropriate, False otherwise
+        Multi-axis merging takes the per-voxel max-prob across axis
+        rotations; this is only meaningful for label / probability
+        outputs (semantic, boundary). For continuous regression heads
+        (distance, sdm) it's not, so we skip multi-axis for those.
         """
-        # Segmentation and boundary (label images) can use multi-axis
-        if task_name == 'task1':  # Segmentation
-            return True
-        elif task_name == 'task2':  # Boundary (label image)
-            return True
-        elif task_name == 'task3':  # Distance map (directional, no multi-axis)
+        if task_name in _REGRESSION_HEAD_NAMES:
             return False
-        else:
+        # Legacy positional names: task1 (boundary) is multi-axis OK;
+        # task2 (distance) is regression -> skip; task3 is unknown legacy
+        # additional task -> skip to be safe.
+        if task_name == "task1":
+            return True
+        if task_name in ("task2", "task3"):
             return False
+        # b3 head names: semantic + boundary are label-like.
+        return task_name in ("semantic", "boundary")
 
     def _is_multitask_model(self):
         """Check if the model is a multi-task model."""
@@ -113,20 +131,23 @@ class VolSeg2dPredictor:
         """
         Extract outputs from model, handling both single-task and multi-task models.
 
-        Args:
-            model_output: Output from model forward pass
-
-        Returns:
-            tuple: (primary_output, additional_outputs_dict)
-                - primary_output: The first output (segmentation) for backward compatibility
-                - additional_outputs_dict: Dict with keys like 'task1', 'task2', etc. for additional tasks
+        Returns ``(primary_output, additional_outputs_dict)``. The
+        primary output is ``model_output[0]``. The
+        additional-outputs dict is keyed by canonical head names
+        (``boundary``, ``distance``, ``sdm``, ...) when the model
+        exposes :attr:`head_names`; otherwise by legacy positional
+        ``task1``/``task2``/... keys for v0.4 ``Multitask_Unet`` 
         """
         if isinstance(model_output, (list, tuple)) and len(model_output) > 1:
-            # Multi-task model - return all outputs
             primary_output = model_output[0]
+            head_names = self._resolve_head_names()
             additional_outputs = {}
             for idx, output in enumerate(model_output[1:], start=1):
-                additional_outputs[f'task{idx}'] = output
+                if head_names is not None and idx < len(head_names):
+                    key = head_names[idx]
+                else:
+                    key = f"task{idx}"
+                additional_outputs[key] = output
             return primary_output, additional_outputs
         elif isinstance(model_output, (list, tuple)):
             # Single output in tuple/list
@@ -223,6 +244,22 @@ class VolSeg2dPredictor:
         additional_task_outputs = {}
         if is_multitask and additional_outputs:
             for task_name, task_output in additional_outputs.items():
+                if task_name in _REGRESSION_HEAD_NAMES:
+                    # Continuous-map heads (distance / sdm): the head
+                    # output IS the result. No sigmoid / threshold —
+                    # store the raw float32 in the ``labels`` slot so
+                    # downstream writers persist the continuous map.
+                    task_raw_np = utils.crop_tensor_to_array(
+                        task_output.squeeze(1) if task_output.shape[1] == 1
+                        else task_output,
+                        yx_dims,
+                    ).astype(np.float32)
+                    additional_task_outputs[task_name] = {
+                        "labels": task_raw_np,
+                        "probs": None,
+                        "logits": task_raw_np,
+                    }
+                    continue
                 # For binary tasks (boundary, etc.), apply sigmoid
                 if task_output.shape[1] == 1:
                     task_probs = torch.sigmoid(task_output)
@@ -297,8 +334,14 @@ class VolSeg2dPredictor:
                                 additional_task_logits[task_name] = []
                         additional_task_vols[task_name].append(task_data['labels'])
                         if output_probs:
-                            additional_task_probs[task_name].append(task_data['probs'])
-                            additional_task_logits[task_name].append(task_data['logits'])
+                            # Regression heads emit no probability
+                            # (labels IS the raw float); skip the
+                            # probs/logits accumulators for them so
+                            # the downstream concat doesn't see None.
+                            if task_data['probs'] is not None:
+                                additional_task_probs[task_name].append(task_data['probs'])
+                            if task_data['logits'] is not None:
+                                additional_task_logits[task_name].append(task_data['logits'])
                 else:
                     labels, probs, logits = result
 
@@ -333,7 +376,10 @@ class VolSeg2dPredictor:
 
                 task_probs = None
                 task_logits = None
-                if output_probs and task_name in additional_task_probs:
+                # Regression heads don't accumulate a probs list (the
+                # per-slice path appends None for them). Guard against
+                # the empty-list np.concatenate failure mode.
+                if output_probs and additional_task_probs.get(task_name):
                     task_probs = np.concatenate(additional_task_probs[task_name])
                     task_probs = self._crop_2_5d_output(task_probs, pad_width)
                     if task_probs.ndim == 4:
@@ -341,6 +387,7 @@ class VolSeg2dPredictor:
                     else:
                         task_probs = utils.rotate_array_to_axis(task_probs, axis)
 
+                if output_probs and additional_task_logits.get(task_name):
                     task_logits = np.concatenate(additional_task_logits[task_name])
                     task_logits = self._crop_2_5d_output(task_logits, pad_width)
                     if task_logits.ndim == 4:
@@ -785,23 +832,29 @@ class VolSeg2dImageDirPredictor:
             return self.model.module.num_heads > 1
         return False
 
+    def _resolve_head_names(self):
+        """See :meth:`VolSeg2dPredictor._resolve_head_names`."""
+        model = self.model
+        if hasattr(model, "module"):
+            inner = model.module
+            if hasattr(inner, "head_names"):
+                return tuple(inner.head_names)
+        if hasattr(model, "head_names"):
+            return tuple(model.head_names)
+        return None
+
     def _get_model_outputs(self, model_output):
-        """
-        Extract outputs from model, handling both single-task and multi-task models.
-
-        Args:
-            model_output: Output from model forward pass
-
-        Returns:
-            tuple: (primary_output, additional_outputs_dict)
-                - primary_output: The first output (segmentation) for backward compatibility
-                - additional_outputs_dict: Dict with keys like 'task1', 'task2', etc. for additional tasks
-        """
+        """See :meth:`VolSeg2dPredictor._get_model_outputs`."""
         if isinstance(model_output, (list, tuple)) and len(model_output) > 1:
             primary_output = model_output[0]
+            head_names = self._resolve_head_names()
             additional_outputs = {}
             for idx, output in enumerate(model_output[1:], start=1):
-                additional_outputs[f'task{idx}'] = output
+                if head_names is not None and idx < len(head_names):
+                    key = head_names[idx]
+                else:
+                    key = f"task{idx}"
+                additional_outputs[key] = output
             return primary_output, additional_outputs
         elif isinstance(model_output, (list, tuple)):
             # Single output in tuple/list
@@ -860,6 +913,20 @@ class VolSeg2dImageDirPredictor:
                             additional_task_vols[task_name] = []
                             if output_probs:
                                 additional_task_probs[task_name] = []
+
+                        if task_name in _REGRESSION_HEAD_NAMES:
+                            # Regression head: write raw float32, no
+                            # threshold. ``probs`` is meaningless for
+                            # continuous maps so we record None
+                            # downstream by omitting the append.
+                            task_raw_np = utils.crop_tensor_to_array(
+                                task_output.squeeze(1)
+                                if task_output.shape[1] == 1
+                                else task_output,
+                                yx_dims,
+                            ).astype(np.float32)
+                            additional_task_vols[task_name].append(task_raw_np)
+                            continue
 
                         if task_output.shape[1] == 1:
                             task_probs = torch.sigmoid(task_output)

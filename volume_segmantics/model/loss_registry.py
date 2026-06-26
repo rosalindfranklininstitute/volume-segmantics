@@ -11,8 +11,10 @@ import torch.nn.functional as F
 
 from volume_segmantics.data import pipeline_registry as _registry
 from volume_segmantics.data.pytorch3dunet_losses import (
+    BCEDiceLoss,
     BoundaryDoULoss,
     BoundaryDoUDiceLoss,
+    BoundaryDoULossV2,
     BoundaryLoss,
     DiceLoss,
     GeneralizedDiceLoss,
@@ -322,11 +324,49 @@ def _make_tversky(
     )
 
 
+class _BCEForSemantic(nn.Module):
+    """``BCEWithLogitsLoss`` with semantic-target shape coercion.
+
+    Mirrors :class:`_BCEForBoundary` but one-hots the class-index
+    target to ``(B, num_classes, H, W) float`` so BCE can be applied
+    per channel against the semantic head's ``(B, num_classes, H, W)``
+    logits. The result is the per-class BCE averaged — the natural
+    multi-class extension and what the v0.4 raw trainer effectively
+    computed when its dataset emitted one-hot targets.
+    """
+
+    def __init__(
+        self,
+        num_classes: int,
+        pos_weight: Optional[float] = None,
+    ):
+        super().__init__()
+        self.num_classes = int(num_classes)
+        if pos_weight is not None:
+            self.inner = nn.BCEWithLogitsLoss(
+                pos_weight=torch.tensor(float(pos_weight)),
+            )
+        else:
+            self.inner = nn.BCEWithLogitsLoss()
+
+    def forward(
+        self, pred: torch.Tensor, target: torch.Tensor,
+    ) -> torch.Tensor:
+        target_oh = _semantic_target_to_one_hot(target, self.num_classes)
+        return self.inner(pred, target_oh)
+
+
 def _make_bce(
     *,
+    head_name: str = "semantic",
+    num_classes: int = 2,
     pos_weight: Optional[float] = None,
     **_extra: Any,
 ) -> nn.Module:
+    if head_name == "semantic":
+        return _BCEForSemantic(
+            num_classes=int(num_classes), pos_weight=pos_weight,
+        )
     return _BCEForBoundary(pos_weight=pos_weight)
 
 
@@ -346,11 +386,72 @@ def _make_boundary_bce_dice(
     )
 
 
-def _make_boundary_loss(**_extra: Any) -> nn.Module:
+class _BoundaryLossForSemantic(nn.Module):
+    """:class:`BoundaryLoss` with semantic-target shape coercion.
+
+    The inner loss' ``compute_sdf1_1`` indexes the target as
+    ``img_gt[b][c]``; without coercion a ``(B, H, W) long`` semantic
+    target silently aliases the H dimension to the per-class loop and
+    produces a meaningless value. One-hot encoding the target to
+    ``(B, num_classes, H, W) float`` puts the channel axis where the
+    SDF computation expects it and runs the boundary loss per class.
+    """
+
+    def __init__(self, num_classes: int):
+        super().__init__()
+        self.num_classes = int(num_classes)
+        self.inner = BoundaryLoss(classes=self.num_classes)
+
+    def forward(
+        self, pred: torch.Tensor, target: torch.Tensor,
+    ) -> torch.Tensor:
+        target_oh = _semantic_target_to_one_hot(target, self.num_classes)
+        return self.inner(pred, target_oh)
+
+
+def _make_boundary_loss(
+    *,
+    head_name: str = "semantic",
+    num_classes: int = 2,
+    **_extra: Any,
+) -> nn.Module:
+    if head_name == "semantic":
+        return _BoundaryLossForSemantic(num_classes=int(num_classes))
     return BoundaryLoss()
 
 
-def _make_boundary_dou(**_extra: Any) -> nn.Module:
+class _BoundaryDoUForSemantic(nn.Module):
+    """:class:`BoundaryDoULoss` with semantic-target shape coercion.
+
+    The inner loss applies ``inputs.sigmoid()`` then asserts shape
+    equality and loops over its ``n_classes`` channels. The semantic
+    head emits ``(B, num_classes, H, W)`` raw logits and the
+    pipeline dataset's semantic target is ``(B, H, W) long`` class
+    indices, so we one-hot the target to ``(B, num_classes, H, W)``
+    binary and configure the inner with ``n_classes=num_classes`` for
+    a one-vs-rest DoU per channel, averaged.
+    """
+
+    def __init__(self, num_classes: int):
+        super().__init__()
+        self.num_classes = int(num_classes)
+        self.inner = BoundaryDoULoss(n_classes=self.num_classes)
+
+    def forward(
+        self, pred: torch.Tensor, target: torch.Tensor,
+    ) -> torch.Tensor:
+        target_oh = _semantic_target_to_one_hot(target, self.num_classes)
+        return self.inner(pred, target_oh)
+
+
+def _make_boundary_dou(
+    *,
+    head_name: str = "semantic",
+    num_classes: int = 2,
+    **_extra: Any,
+) -> nn.Module:
+    if head_name == "semantic":
+        return _BoundaryDoUForSemantic(num_classes=int(num_classes))
     return BoundaryDoULoss()
 
 
@@ -362,7 +463,73 @@ def _make_mse(**_extra: Any) -> nn.Module:
     return _RegressionLoss(kind="mse")
 
 
-#  Import-time registration 
+#  Raw / legacy factories (raw 2D trainer)
+#
+
+
+
+def _make_raw_bce_dice(
+    *, alpha: float = 1.0, beta: float = 1.0, **_extra: Any,
+) -> nn.Module:
+    return BCEDiceLoss(float(alpha), float(beta))
+
+
+def _make_raw_dice(**_extra: Any) -> nn.Module:
+    return DiceLoss(normalization="none")
+
+
+def _make_raw_bce(**_extra: Any) -> nn.Module:
+    return nn.BCEWithLogitsLoss()
+
+
+def _make_raw_cross_entropy(**_extra: Any) -> nn.Module:
+    return nn.CrossEntropyLoss()
+
+
+def _make_raw_generalized_dice(**_extra: Any) -> nn.Module:
+    return GeneralizedDiceLoss()
+
+
+def _make_raw_tversky(*, num_classes: int = 2, **_extra: Any) -> nn.Module:
+    return TverskyLoss(int(num_classes))
+
+
+def _make_raw_boundary_dou(**_extra: Any) -> nn.Module:
+    return BoundaryDoULoss()
+
+
+def _make_raw_boundary_dou_dice(**_extra: Any) -> nn.Module:
+    # The legacy trainer fixed these weights regardless of settings.
+    return BoundaryDoUDiceLoss(alpha=0.5, beta=0.5)
+
+
+def _make_raw_boundary_dou_v2(**_extra: Any) -> nn.Module:
+    return BoundaryDoULossV2()
+
+
+def _make_raw_boundary_loss(**_extra: Any) -> nn.Module:
+    return BoundaryLoss()
+
+
+def _make_raw_combined_ce_dice(
+    *,
+    num_classes: int = 2,
+    ce_weight: float = 0.5,
+    dice_weight: float = 0.5,
+    dice_weight_mode: str = "inverse_sqrt_freq",
+    exclude_background: bool = True,
+    **_extra: Any,
+) -> nn.Module:
+    return CombinedCEDiceLoss(
+        num_classes=int(num_classes),
+        alpha=float(ce_weight),
+        beta=float(dice_weight),
+        dice_weight_mode=dice_weight_mode,
+        exclude_background=bool(exclude_background),
+    )
+
+
+#  Import-time registration
 
 
 _REGISTRATIONS = (
@@ -386,6 +553,21 @@ _REGISTRATIONS = (
     ("distance_mse",        _make_mse),
     ("sdm_l1",              _make_l1),
     ("sdm_mse",             _make_mse),
+    # Raw / legacy 2D-trainer names (CamelCase == settings.loss_criterion).
+    # These are the uncoerced modules; do not confuse with the head-aware
+    # snake_case factories above.
+    ("BCEDiceLoss",          _make_raw_bce_dice),
+    ("DiceLoss",             _make_raw_dice),
+    ("BCELoss",              _make_raw_bce),
+    ("CrossEntropyLoss",     _make_raw_cross_entropy),
+    ("GeneralizedDiceLoss",  _make_raw_generalized_dice),
+    ("TverskyLoss",          _make_raw_tversky),
+    ("BoundaryDoULoss",      _make_raw_boundary_dou),
+    ("BoundaryDoUDiceLoss",  _make_raw_boundary_dou_dice),
+    ("BoundaryDoULossV2",    _make_raw_boundary_dou_v2),
+    ("BoundaryLoss",         _make_raw_boundary_loss),
+    ("ClassWeightedDiceLoss", _make_class_weighted_dice),
+    ("CombinedCEDiceLoss",   _make_raw_combined_ce_dice),
 )
 
 for _name, _factory in _REGISTRATIONS:

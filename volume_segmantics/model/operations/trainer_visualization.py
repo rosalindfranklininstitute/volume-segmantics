@@ -375,14 +375,25 @@ class TrainingVisualizer:
             probs = s_max(seg_output)
             seg_preds = torch.argmax(probs, dim=1)
             
+            # Discover the underlying model's canonical head names if
+            # available.
+            head_names = getattr(model, "head_names", None)
+            if head_names is None and hasattr(model, "module"):
+                head_names = getattr(model.module, "head_names", None)
+            head_names = tuple(head_names) if head_names is not None else ()
+
             if isinstance(targets, dict):
-                seg_target = targets.get("seg", None)
+                seg_target = targets.get("semantic", targets.get("seg", None))
                 boundary_target = targets.get("boundary", None)
-                task3_target = targets.get("task3", None)
+                task3_target = targets.get(
+                    "distance", targets.get("task3", None),
+                )
+                sdm_target = targets.get("sdm", None)
             else:
                 seg_target = targets
                 boundary_target = None
                 task3_target = None
+                sdm_target = None
 
             # Convert MONAI MetaTensors to plain tensors to avoid
             # metadata collation errors during indexing/slicing
@@ -394,11 +405,21 @@ class TrainingVisualizer:
             seg_target = _to_tensor(seg_target)
             boundary_target = _to_tensor(boundary_target)
             task3_target = _to_tensor(task3_target)
-            
+            sdm_target = _to_tensor(sdm_target)
+
             seg_gt = None
             if seg_target is not None:
-                seg_gt = torch.argmax(seg_target, dim=1)
-            
+                # b3 emits class indices ``(B, H, W) long``; v0.4
+                # MONAI may emit one-hot ``(B, C, H, W)`` or squeezed
+                # ``(B, 1, H, W)``. Reduce to ``(B, H, W)`` indices.
+                if seg_target.dim() == 3:
+                    seg_gt = seg_target
+                elif seg_target.dim() == 4:
+                    if seg_target.shape[1] == 1:
+                        seg_gt = seg_target[:, 0, ...]
+                    else:
+                        seg_gt = torch.argmax(seg_target, dim=1)
+
             boundary_preds = None
             has_boundary_output = len(outputs) > 1
             if has_boundary_output:
@@ -410,9 +431,11 @@ class TrainingVisualizer:
                     if boundary_output.shape[1] > 1:
                         boundary_output = boundary_output[:, 0:1, :, :]
                 boundary_preds = (torch.sigmoid(boundary_output) > 0.5).float()
-            
+
             task3_preds = None
             has_task3_output = len(outputs) > 2
+            task3_is_regression = False
+            task3_head_name = "Task3"
             if has_task3_output:
                 task3_output = outputs[2]
                 if task3_target is not None:
@@ -421,25 +444,55 @@ class TrainingVisualizer:
                 else:
                     if task3_output.shape[1] > 1:
                         task3_output = task3_output[:, 0:1, :, :]
-                # Detect regression targets: SDF/EDT are continuous floats,
-                # not binary {0,1}. Check if target has >2 unique values or negatives.
-                is_regression = False
-                if task3_target is not None:
+                # Detect regression task
+                if len(head_names) > 2 and head_names[2] in ("distance", "sdm"):
+                    task3_is_regression = True
+                    task3_head_name = head_names[2].capitalize()
+                elif task3_target is not None:
                     t_flat = task3_target.detach().flatten()
-                    is_regression = (t_flat.min() < -0.01) or (len(torch.unique(t_flat[:1000])) > 10)
-                if is_regression:
+                    task3_is_regression = (
+                        t_flat.min() < -0.01
+                        or len(torch.unique(t_flat[:1000])) > 10
+                    )
+                else:
+                    o_flat = task3_output.detach().flatten()
+                    task3_is_regression = (
+                        o_flat.min() < -0.01
+                        or o_flat.max() > 1.5
+                    )
+                if task3_is_regression:
                     task3_preds = task3_output  # Raw regression output
                 else:
                     task3_preds = (torch.sigmoid(task3_output) > 0.5).float()
+
+            # Optional 4th head — only when the model has all four
+            # b3 heads enabled (semantic + boundary + distance + sdm).
+            sdm_preds = None
+            sdm_is_regression = False
+            has_sdm_output = (
+                len(outputs) > 3
+                and len(head_names) > 3
+                and head_names[3] == "sdm"
+            )
+            if has_sdm_output:
+                sdm_output = outputs[3]
+                if sdm_target is not None and sdm_output.shape[1] != sdm_target.shape[1]:
+                    sdm_output = sdm_output[:, :sdm_target.shape[1], :, :]
+                elif sdm_target is None and sdm_output.shape[1] > 1:
+                    sdm_output = sdm_output[:, 0:1, :, :]
+                sdm_preds = sdm_output  # SDM is tanh-bounded regression.
+                sdm_is_regression = True
         
         bs = min(validation_loader.batch_size, 4)
         num_cols = 3
-        
+
         if has_boundary_output:
             num_cols += 2
         if has_task3_output:
             num_cols += 2
-        
+        if has_sdm_output:
+            num_cols += 2
+
         fig, axes = plt.subplots(bs, num_cols, figsize=(4 * num_cols, 4 * bs))
         if bs == 1:
             axes = axes.reshape(1, -1)
@@ -503,25 +556,49 @@ class TrainingVisualizer:
                 col_idx += 1
             
             if has_task3_output:
+                # Regression heads (distance / sdm) use a perceptual
+                # continuous colormap; binary boundary-style task3
+                # uses gray.
+                t3_cmap = "viridis" if task3_is_regression else "gray"
                 if task3_target is not None:
                     t3_gt = task3_target[i, 0].cpu() if task3_target.dim() == 4 else task3_target[i].cpu()
-                    axes[i, col_idx].imshow(t3_gt, cmap="gray")
+                    axes[i, col_idx].imshow(t3_gt, cmap=t3_cmap)
                     if i == 0:
-                        axes[i, col_idx].set_title("Task3 GT")
+                        axes[i, col_idx].set_title(f"{task3_head_name} GT")
                 else:
                     axes[i, col_idx].text(0.5, 0.5, "N/A", ha="center", va="center")
                     if i == 0:
-                        axes[i, col_idx].set_title("Task3 GT")
+                        axes[i, col_idx].set_title(f"{task3_head_name} GT")
                 axes[i, col_idx].axis("off")
                 col_idx += 1
-                
+
                 t3_pred = task3_preds[i, 0].cpu() if task3_preds.dim() == 4 else task3_preds[i].cpu()
-                axes[i, col_idx].imshow(t3_pred, cmap="gray")
+                axes[i, col_idx].imshow(t3_pred, cmap=t3_cmap)
                 if i == 0:
-                    axes[i, col_idx].set_title("Task3 Pred")
+                    axes[i, col_idx].set_title(f"{task3_head_name} Pred")
                 axes[i, col_idx].axis("off")
                 col_idx += 1
-        
+
+            if has_sdm_output:
+                if sdm_target is not None:
+                    s_gt = sdm_target[i, 0].cpu() if sdm_target.dim() == 4 else sdm_target[i].cpu()
+                    axes[i, col_idx].imshow(s_gt, cmap="coolwarm", vmin=-1.0, vmax=1.0)
+                    if i == 0:
+                        axes[i, col_idx].set_title("SDM GT")
+                else:
+                    axes[i, col_idx].text(0.5, 0.5, "N/A", ha="center", va="center")
+                    if i == 0:
+                        axes[i, col_idx].set_title("SDM GT")
+                axes[i, col_idx].axis("off")
+                col_idx += 1
+
+                s_pred = sdm_preds[i, 0].cpu() if sdm_preds.dim() == 4 else sdm_preds[i].cpu()
+                axes[i, col_idx].imshow(s_pred, cmap="coolwarm", vmin=-1.0, vmax=1.0)
+                if i == 0:
+                    axes[i, col_idx].set_title("SDM Pred")
+                axes[i, col_idx].axis("off")
+                col_idx += 1
+
         plt.suptitle(f"Predictions: {model_path.name}", fontsize=14)
         plt.tight_layout()
         
@@ -588,15 +665,21 @@ class TrainingVisualizer:
             # Compute consistency (difference between student and teacher)
             consistency_diff = torch.abs(student_probs - teacher_probs).mean(dim=1)
             
-            # Get ground truth if available
             if isinstance(targets, dict):
-                seg_target = targets.get("seg", None)
+                seg_target = targets.get("semantic", targets.get("seg", None))
             else:
                 seg_target = targets
-            
+            if seg_target is not None and hasattr(seg_target, "as_tensor"):
+                seg_target = seg_target.as_tensor()
             seg_gt = None
             if seg_target is not None:
-                seg_gt = torch.argmax(seg_target, dim=1)
+                if seg_target.dim() == 3:
+                    seg_gt = seg_target
+                elif seg_target.dim() == 4:
+                    if seg_target.shape[1] == 1:
+                        seg_gt = seg_target[:, 0, ...]
+                    else:
+                        seg_gt = torch.argmax(seg_target, dim=1)
         
         bs = min(getattr(validation_loader, 'batch_size', len(inputs)), len(inputs), 4)
         num_cols = 5  # Input, GT, Student, Teacher, Consistency

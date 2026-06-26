@@ -150,9 +150,13 @@ class PredictionZarrWriter:
         )
 
         # Pre-create the output directory and root group. zarr 2.x
-        # opens with ``DirectoryStore`` for filesystem layout.
-        self._store = zarr.DirectoryStore(str(self.output_path))
-        self._root = zarr.group(self._store, overwrite=overwrite)
+        # opens with ``DirectoryStore`` for filesystem layout; zarr 3.x
+        # replaced it with ``zarr.storage.LocalStore``.
+        if hasattr(zarr, "DirectoryStore"):
+            self._store = zarr.DirectoryStore(str(self.output_path))
+        else:
+            self._store = zarr.storage.LocalStore(str(self.output_path))
+        self._root = zarr.group(store=self._store, overwrite=overwrite)
         self._created_at = _iso_utc_now()
         self._finalized = False
 
@@ -360,17 +364,17 @@ class PredictionZarrWriter:
                     f"per_axis_instances/{axis_name}: expected 3D array; "
                     f"got shape {arr_data.shape}"
                 )
-            self._per_axis_group.array(
+            arr = self._per_axis_group.create_dataset(
                 axis_name,
-                arr_data.astype(np.uint32, copy=False),
+                shape=arr_data.shape,
+                dtype=np.uint32,
                 chunks=tuple(min(c, s) for c, s in zip(
                     self.chunks, arr_data.shape,
                 )),
                 overwrite=False,
             )
-            self._arrays[f"per_axis_instances/{axis_name}"] = (
-                self._per_axis_group[axis_name]
-            )
+            arr[:] = arr_data.astype(np.uint32, copy=False)
+            self._arrays[f"per_axis_instances/{axis_name}"] = arr
 
     def write_instance_labels(
         self, data: np.ndarray, region: Optional[Region3D] = None,

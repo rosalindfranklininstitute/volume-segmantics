@@ -221,6 +221,7 @@ def predict(
             arrays["semantic_logits"] = np.transpose(
                 logits, (3, 0, 1, 2),
             ).astype(np.float32)
+        _stash_per_head_maps(predictor, arrays)
 
     elif inference_mode == "multi_axis":
         labels, probs = predictor._predict_3_ways_max_probs(
@@ -331,6 +332,10 @@ def predict(
 def _stash_per_head_maps(predictor: Any, arrays: Dict[str, Any]) -> None:
     """Read multi-head outputs from the predictor and write them into ``arrays``.
 
+    Maps each enabled additional head's output to the
+    ``{head_name}_map`` key in ``arrays`` so the zarr writer's
+    head-aware ``write_boundary_map`` / ``write_distance_map`` /
+    ``write_sdm_map`` paths pick them up.
     """
     if not predictor._is_multitask_model():
         return
@@ -340,30 +345,43 @@ def _stash_per_head_maps(predictor: Any, arrays: Dict[str, Any]) -> None:
     underlying = predictor.model
     if hasattr(underlying, "module"):
         underlying = underlying.module
-    head_names = list(getattr(underlying, "head_names", ()))
-    if len(head_names) < 2:
-        return
-    # task1-> head_names[1], task2-> head_names[2], … (head 0 = semantic).
-    sorted_keys = sorted(
-        task_outputs,
-        key=lambda k: int(k.replace("task", "")) if k.startswith("task") else 0,
-    )
+    head_names = tuple(getattr(underlying, "head_names", ()))
+
+    # Head 0 is the semantic primary; never overwrite it via this path.
+    primary_head = head_names[0] if head_names else None
     sigmoid_heads = {"boundary"}
-    for task_idx, task_key in enumerate(sorted_keys, start=1):
-        if task_idx >= len(head_names):
-            break
-        head_name = head_names[task_idx]
-        task_data = task_outputs[task_key]
+    regression_heads = {"distance", "sdm"}
+
+    for task_key, task_data in task_outputs.items():
+        # Resolve canonical head name.
+        if task_key in head_names:
+            head_name = task_key
+        elif task_key.startswith("task") and head_names:
+            try:
+                idx = int(task_key[len("task"):])
+            except ValueError:
+                continue
+            if idx >= len(head_names):
+                continue
+            head_name = head_names[idx]
+        else:
+            continue
+        if head_name == primary_head:
+            continue
+
         # Source-field preference:
-        # - boundary: post-sigmoid 'probs' (matches PredictionBundle's
-        #   "sigmoid probs" contract for boundary_map).
-        # - distance / sdm: prefer raw 'logits', but the predictor's
-        #   multi-axis merge (_predict_12_ways_max_probs) only retains
-        #   'labels' + 'probs' on the merged result — fall back to
-        #   'probs' (sigmoid-distorted but still a smooth signal that
-        #   watershed can find peaks in).
+        # - boundary: post-sigmoid 'probs' matches PredictionBundle's
+        #   "sigmoid probs" contract for boundary_map.
+        # - distance / sdm: 'logits' is the raw float written by the
+        #   regression-head branch; fall back to 'probs' / 'labels'
+        #   if 'logits' is absent (e.g. after a multi-axis merge that
+        #   dropped the per-slice logits buffer).
         if head_name in sigmoid_heads:
             raw = task_data.get("probs")
+        elif head_name in regression_heads:
+            raw = task_data.get("logits")
+            if raw is None:
+                raw = task_data.get("labels")
         else:
             raw = task_data.get("logits")
             if raw is None:

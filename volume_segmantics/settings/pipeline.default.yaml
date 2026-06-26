@@ -2,7 +2,7 @@
 
 schema_version: pipeline_v1
 
-#  Heads 
+# Heads 
 # Semantic is on by default. All geometric heads are off.
 heads:
   semantic:
@@ -29,7 +29,7 @@ heads:
     loss: sdm_l1                    # sdm_l1 | sdm_mse
     loss_weight: 0.5
 
-#  Target generators 
+# Target generators 
 # Targets are computed on-the-fly per dataloader worker. Caching is
 # deferred to a future b4+ release.
 targets:
@@ -66,7 +66,7 @@ ema_teacher:
     distance: 0.3
     sdm:      0.3
 
-#  Per-head loss scheduling 
+# Per-head loss scheduling 
 # linear_warmup: start_weight -> end_weight over the first
 # warmup_fraction of training. linear_decay: opposite. constant: flat.
 loss_schedule:
@@ -108,7 +108,7 @@ prediction:
       # shared
       foreground_class_ids: []      # [] = any non-zero class
 
-#  Instance assembly 
+# Instance assembly 
 # null -> no instance assembly (semantic-only output).
 # usegment3d -> DanuserLab u-Segment3D orthoview consensus over the
 # per-axis 2D instance maps. Requires the optional [usegment3d] extra:

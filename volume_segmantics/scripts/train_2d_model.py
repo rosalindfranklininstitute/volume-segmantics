@@ -16,6 +16,7 @@ from volume_segmantics.data.pipeline_loader import (
 )
 from volume_segmantics.model import VolSeg2dTrainer
 from volume_segmantics.utilities import get_2d_training_parser
+from volume_segmantics.utilities.seeding import set_seed
 
 import torch
 import warnings
@@ -63,24 +64,23 @@ def main():
     else:
         print("Trainer: PyTorch Lightning (v0.4.0b3 default)")
 
-    #  task2/task3 are deprecated in favour of pipeline.yaml
-    # geometric heads. Fail loud rather than silently routing to the
-    # old MULTITASK_UNET path.
-    if task2_dir is not None or task3_dir is not None:
-        logging.error(
-            "the geometric heads (boundary, distance, sdm) live behind "
-            "pipeline.yaml's heads: block. Drop a pipeline.yaml into "
-            "<project>/volseg-settings/ and enable the heads under "
-            "heads:."
-        )
-        sys.exit(1)
-
     # Check if slicing unlabeled data (mode=slicer and no labels provided)
     is_unlabeled_slicing = (mode == 'slicer' and label_vols is None)
 
     # Create the settings object
     settings_path = Path(root_path, cfg.SETTINGS_DIR, cfg.TRAIN_SETTINGS_FN)
     settings = get_settings_data(settings_path)
+
+    # Reproducibility: seed all RNGs before any model/datamodule construction.
+    # No-op (preserves non-deterministic behaviour) unless ``random_seed`` is
+    # set in the settings file. ``deterministic`` flags use warn_only so GPU
+    # ops without deterministic kernels degrade gracefully.
+    applied_seed = set_seed(
+        getattr(settings, "random_seed", None),
+        deterministic=bool(getattr(settings, "deterministic", False)),
+    )
+    if applied_seed is not None:
+        logging.info("Reproducibility: seeded all RNGs with %d", applied_seed)
 
     # Override unlabeled_data_dir from command line if provided
     if unlabeled_data_dir is not None:
@@ -94,6 +94,39 @@ def main():
     settings.use_legacy_trainer = use_legacy_trainer
     settings.lightning_strategy = lightning_strategy
     settings.lightning_devices = lightning_devices
+
+    if (task2_dir is not None or task3_dir is not None) and not use_legacy_trainer:
+        pipeline_yaml_path = root_path / cfg.SETTINGS_DIR / "pipeline.yaml"
+        if pipeline_yaml_path.exists():
+            logging.info(
+                "pipeline.yaml present at %s; honouring its heads: block. "
+                "--task2/--task3 label volumes are ignored under the "
+                "Lightning trainer.", pipeline_yaml_path,
+            )
+        else:
+            from volume_segmantics.data.pipeline_loader import HeadConfig
+            if task2_dir is not None:
+                settings.pipeline_config.heads["boundary"] = HeadConfig(
+                    enabled=True, loss="boundary_bce_dice", loss_weight=1.0,
+                )
+                logging.info(
+                    "Auto-enabling 'boundary' head from --task2. b3 derives "
+                    "boundary targets from the semantic label on-the-fly; "
+                    "the pre-computed labels at %s are ignored under the "
+                    "Lightning path. Use a pipeline.yaml to override the "
+                    "boundary loss or width.", task2_dir,
+                )
+            if task3_dir is not None:
+                settings.pipeline_config.heads["distance"] = HeadConfig(
+                    enabled=True, loss="distance_l1", loss_weight=1.0,
+                )
+                logging.info(
+                    "Auto-enabling 'distance' head from --task3. b3 derives "
+                    "distance targets from the semantic label on-the-fly; "
+                    "the pre-computed labels at %s are ignored under the "
+                    "Lightning path. Use a pipeline.yaml to override the "
+                    "distance loss or distance_transform.", task3_dir,
+                )
 
     task2_im_out_dir = root_path / "task2"  # dir for task2 imgs
     task3_im_out_dir = root_path / "task3"  # dir for task3 imgs
@@ -146,8 +179,43 @@ def main():
             sys.exit(1)
         slicer, max_label_no = run_slicer(data_vols, label_vols, data_im_out_dir, seg_im_out_dir, settings, task2_vols, task3_vols, task2_im_out_dir, task3_im_out_dir)
         run_trainer(data_im_out_dir, seg_im_out_dir, max_label_no, settings, root_path)
-        # Clean up all the saved slices
-        slicer.clean_up_slices()
+        # Clean up all the saved slices. Under DDP each rank runs
+        # this script independently — if a non-zero rank reaches the
+        # cleanup while rank 0 is still inside its end-of-training
+        # diagnostic callback (which reads validation slices for the
+        # prediction-image PNG), the cleanup would race and rank 0
+        # would crash trying to load already-deleted files. So:
+        # only rank 0 deletes, and we synchronise with a barrier
+        # first so rank 0's callback has definitely finished.
+        _rank0_cleanup_slices(slicer)
+
+
+def _rank0_cleanup_slices(slicer) -> None:
+    """Delete the per-run slice PNGs exactly once, on rank 0 only.
+
+    DDP-safe: barriers in so rank 0's :class:`VolSegDiagnosticsCallback`
+    has finished reading the validation slices before any rank
+    attempts to delete them. Non-distributed runs short-circuit.
+    """
+    try:
+        import torch.distributed as dist
+    except ImportError:
+        dist = None  # type: ignore[assignment]
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    is_distributed = bool(
+        dist is not None and dist.is_available() and dist.is_initialized()
+    )
+    if is_distributed:
+        try:
+            dist.barrier()
+        except Exception as exc:  # noqa: BLE001
+            logging.warning(
+                "Distributed barrier before slice cleanup failed: %s. "
+                "Proceeding without sync.", exc,
+            )
+    if local_rank != 0:
+        return
+    slicer.clean_up_slices()
 
 def run_unlabeled_slicer(data_vols, unlabeled_output_dir: Path, settings):
     """
@@ -361,6 +429,8 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         UnfreezeEncoderCallback,
         VolSeg2dLightningModule,
         VolSegCheckpointCallback,
+        VolSegDiagnosticsCallback,
+        VolSegSSLVizCallback,
     )
 
     pipeline_config = settings.pipeline_config
@@ -445,7 +515,26 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
             model_struc_dict=model_struc_dict,
             label_codes={},
         ),
+        VolSegDiagnosticsCallback(
+            output_path=model_out,
+            num_classes=int(max_label_no),
+            head_names=tuple(pl_module.head_names),
+        ),
     ]
+    # SSL / pseudo-label diagnostic PNGs (per-epoch interval). Only
+    # wires up if the user asked for either SSL or pseudo-labelling;
+    # otherwise the callback is silently skipped on every epoch.
+    if (
+        getattr(settings, "use_semi_supervised", False)
+        or getattr(settings, "use_pseudo_labeling", False)
+    ):
+        callbacks.append(
+            VolSegSSLVizCallback(
+                output_path=model_out,
+                settings=settings,
+                num_classes=int(max_label_no),
+            ),
+        )
     patience = int(getattr(settings, "patience", 4) or 4)
     if patience > 0:
         callbacks.append(
@@ -464,6 +553,25 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
             devices = devices_arg
 
     accelerator = "gpu" if torch.cuda.is_available() else "cpu"
+
+    # Multi-GPU defaults to DDP under Lightning's "auto" strategy. The
+    # frozen-encoder phase plus the multi-head model surface means
+    # there are tracked params that don't always receive gradients on
+    # every step, which DDP rejects in its default strict mode. Switch
+    # the default to ``ddp_find_unused_parameters_true`` when DDP
+    # would be auto-selected. An explicit ``--strategy`` override
+    # still wins.
+    if (
+        strategy == "auto"
+        and accelerator == "gpu"
+        and torch.cuda.device_count() > 1
+    ):
+        strategy = "ddp_find_unused_parameters_true"
+        logging.info(
+            "Multi-GPU detected (%d devices); defaulting strategy to "
+            "'ddp_find_unused_parameters_true'. Override with --strategy.",
+            torch.cuda.device_count(),
+        )
 
     tb_logger = TensorBoardLogger(
         save_dir=str(root_path), name="lightning_logs",

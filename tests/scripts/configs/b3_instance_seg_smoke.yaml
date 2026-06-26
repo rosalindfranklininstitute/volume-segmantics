@@ -1,26 +1,10 @@
-# Multi-head + uSegment3D end-to-end (CRITICAL GATE)
-#
-# Trains the four-head model, predicts via api.predict with
-# inference_mode=multi_axis + instance_assembly.backend=usegment3d.
-# Runs twice: producer=distance_watershed and producer=semantic_cc.
-# Both must produce a prediction.zarr with instance_labels populated
-# and a plausible instance count (count > 1 + within an order of
-# magnitude of the fixture's connected-component count).
-#
-# Run:
-#   python tests/scripts/run_smoke.py b3_instance_seg
-#   python tests/scripts/run_smoke.py b3_instance_seg --dry-run
-
 paths:
   image: training_data/vessels_256cube_DATA.h5
   label: training_data/vessels_256cube_LABELS.h5
-
 settings_templates:
   train: volseg-settings/2d_model_train_settings.yaml
   predict: volseg-settings/2d_model_predict_settings.yaml
-
 output_root: tmp/b3_instance_seg_smoke
-
 global_overrides:
   train:
     image_size: 64
@@ -62,103 +46,102 @@ global_overrides:
         loss_weight: 0.25
         variant: binary
     targets:
-      boundary: {width: 2}
-      distance: {distance_transform: edt}
-      sdm: {distance_transform: edt}
+      boundary:
+        width: 2
+      distance:
+        distance_transform: edt
+      sdm:
+        distance_transform: edt
     prediction:
       inference_mode: multi_axis
       per_axis_instances:
         enabled: true
-        producer: null   # auto-select per step override.
-        axes: [xy, xz, yz]
+        producer: null
+        axes:
+        - xy
+        - xz
+        - yz
     instance_assembly:
       backend: usegment3d
       params:
         params_overrides:
           indirect_method:
             dtform_method: edt
-
 tests:
-  # 1. Train the four-head model.
-  - name: train_b3_instance_seg
-    type: train
-    model_key: b3_instance_seg_model
-    overrides:
-      train:
-        model_output_fn: b3_instance_seg_smoke
-
-  # 2. BN-trained guard.
-  - name: assert_bn_trained
-    type: b3_assert
-    subcommand: checkpoint-trained
-    args:
-      - "${model:b3_instance_seg_model}"
-
-  # 3. Predict + assemble with distance_watershed producer.
-  - name: predict_distance_watershed
-    type: b3_predict_zarr
-    model_key: b3_instance_seg_model
-    inference_mode: multi_axis
-    instance_assembly_backend: usegment3d
-    output_zarr: prediction.zarr
-    zarr_key: dw_zarr
-    overrides:
-      pipeline:
-        prediction:
-          per_axis_instances:
-            producer: distance_watershed
-
-  # 4. Assert dw zarr has instance_labels + plausible cardinality.
-  - name: assert_dw_zarr_keys
-    type: b3_assert
-    subcommand: zarr-keys
-    args:
-      - "${artifact:dw_zarr}"
-      - "--keys"
-      - teacher_argmax
-      - instance_labels
-      - per_axis_instances/xy
-      - per_axis_instances/xz
-      - per_axis_instances/yz
-  - name: assert_dw_instance_count
-    type: b3_assert
-    subcommand: instance-count-plausible
-    args:
-      - "${artifact:dw_zarr}"
-      - "--gt-label"
-      - "${path:label}"
-      - "--max-multiplier"
-      - "6000"
-
-  # 5. Predict + assemble with semantic_cc producer.
-  - name: predict_semantic_cc
-    type: b3_predict_zarr
-    model_key: b3_instance_seg_model
-    inference_mode: multi_axis
-    instance_assembly_backend: usegment3d
-    output_zarr: prediction.zarr
-    zarr_key: cc_zarr
-    overrides:
-      pipeline:
-        prediction:
-          per_axis_instances:
-            producer: semantic_cc
-
-  # 6. Assert cc zarr has instance_labels + plausible cardinality.
-  - name: assert_cc_zarr_keys
-    type: b3_assert
-    subcommand: zarr-keys
-    args:
-      - "${artifact:cc_zarr}"
-      - "--keys"
-      - teacher_argmax
-      - instance_labels
-  - name: assert_cc_instance_count
-    type: b3_assert
-    subcommand: instance-count-plausible
-    args:
-      - "${artifact:cc_zarr}"
-      - "--gt-label"
-      - "${path:label}"
-      - "--max-multiplier"
-      - "6000"
+- name: train_b3_instance_seg
+  type: train
+  model_key: b3_instance_seg_model
+  overrides:
+    train:
+      model_output_fn: b3_instance_seg_smoke
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained
+  type: b3_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:b3_instance_seg_model}
+- name: predict_distance_watershed
+  type: b3_predict_zarr
+  model_key: b3_instance_seg_model
+  inference_mode: multi_axis
+  instance_assembly_backend: usegment3d
+  output_zarr: prediction.zarr
+  zarr_key: dw_zarr
+  overrides:
+    pipeline:
+      prediction:
+        per_axis_instances:
+          producer: distance_watershed
+- name: assert_dw_zarr_keys
+  type: b3_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:dw_zarr}
+  - --keys
+  - teacher_argmax
+  - instance_labels
+  - per_axis_instances/xy
+  - per_axis_instances/xz
+  - per_axis_instances/yz
+- name: assert_dw_instance_count
+  type: b3_assert
+  subcommand: instance-count-plausible
+  args:
+  - ${artifact:dw_zarr}
+  - --gt-label
+  - ${path:label}
+  - --max-multiplier
+  - '6000'
+- name: predict_semantic_cc
+  type: b3_predict_zarr
+  model_key: b3_instance_seg_model
+  inference_mode: multi_axis
+  instance_assembly_backend: usegment3d
+  output_zarr: prediction.zarr
+  zarr_key: cc_zarr
+  overrides:
+    pipeline:
+      prediction:
+        per_axis_instances:
+          producer: semantic_cc
+- name: assert_cc_zarr_keys
+  type: b3_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:cc_zarr}
+  - --keys
+  - teacher_argmax
+  - instance_labels
+- name: assert_cc_instance_count
+  type: b3_assert
+  subcommand: instance-count-plausible
+  args:
+  - ${artifact:cc_zarr}
+  - --gt-label
+  - ${path:label}
+  - --max-multiplier
+  - '6000'
