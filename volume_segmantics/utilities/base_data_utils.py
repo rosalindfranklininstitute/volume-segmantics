@@ -16,6 +16,7 @@ import torchvision.transforms.functional as F
 from skimage.measure import block_reduce
 
 import volume_segmantics.utilities.config as cfg
+from volume_segmantics.utilities.atomic_io import atomic_output_path
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -569,19 +570,23 @@ def axis_index_to_slice(vol, axis, index):
 
 def save_data_to_hdf5(data, file_path, internal_path="/data", chunking=True):
     logging.info(f"Saving data of shape {data.shape} to {file_path}.")
-    with h5.File(file_path, "w") as f:
-        f.create_dataset(
-            internal_path, data=data, chunks=chunking, compression=cfg.HDF5_COMPRESSION
-        )
+    # Atomic publish: a crash mid-write must not leave a partial output file.
+    with atomic_output_path(file_path) as tmp:
+        with h5.File(tmp, "w") as f:
+            f.create_dataset(
+                internal_path, data=data, chunks=chunking, compression=cfg.HDF5_COMPRESSION
+            )
 
 
 def save_data_to_tif(data, file_path, compress=True):
     logging.info(f"Saving data of shape {data.shape} to {file_path}.")
     compression = 'zlib' if compress else None
-    tifffile.imwrite(file_path, data, compression=compression)
+    with atomic_output_path(file_path) as tmp:
+        tifffile.imwrite(tmp, data, compression=compression)
 
 def save_data_to_mrc(data, file_path, voxel_size_angstrom=1.0):
     logging.info(f"Saving data of shape {data.shape} to {file_path}.")
     from volume_segmantics.data.mrc_utils import save_mrc
 
-    save_mrc(data, file_path, voxel_size_angstrom=voxel_size_angstrom)
+    with atomic_output_path(file_path) as tmp:
+        save_mrc(data, tmp, voxel_size_angstrom=voxel_size_angstrom)

@@ -38,6 +38,7 @@ from volume_segmantics.model.training.multitask_calculator import (
     MultiTaskLossOutput,
     PipelineMultiTaskLossCalculator,
 )
+from volume_segmantics.utilities.atomic_io import atomic_torch_save
 from volume_segmantics.utilities.base_data_utils import prepare_training_batch
 
 try:
@@ -291,7 +292,10 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         # stage == "val". Mirrors legacy trainer's per-class breakdown.
         self._val_dice_accumulator = _SemanticDiceAccumulator(self.num_classes)
         # Boundary-head Dice accumulator — only updates when the
-        # boundary head is enabled. 
+        # boundary head is enabled. Always allocated; the v0.4
+        # visualizer expects a ``boundary_dice`` column key, and the
+        # accumulator's ``compute()`` returns None when the head was
+        # never seen so we skip the log.
         self._val_boundary_dice_accumulator = _BinaryDiceAccumulator()
 
     #  Pipeline-config factory 
@@ -944,7 +948,7 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
             trainer, f"Saving vol-seg checkpoint to {self.output_path}"
         )
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(model_dict, self.output_path)
+        atomic_torch_save(model_dict, self.output_path)
 
 
 def _ensure_tuple_output(output: Any) -> Tuple[Any, ...]:
@@ -962,7 +966,29 @@ def _ensure_tuple_output(output: Any) -> Tuple[Any, ...]:
 
 
 class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
-    """End-of-training diagnostic outputs (PNG + CSV).
+    """End-of-training diagnostic outputs (PNG + CSV) for parity with v0.4.
+
+    The legacy raw trainer wrote three artifacts next to the saved
+    ``.pytorch`` checkpoint when training finished:
+
+    * ``{stem}_loss_plot.png`` — multi-panel loss + Dice curves.
+    * ``{stem}_train_stats.csv`` — per-epoch CSV with the same metrics.
+    * ``{stem}_prediction_image.png`` — sample predictions on the
+      validation set.
+
+    Lightning's logger writes TensorBoard scalars but not these files,
+    and :class:`EpochHistoryCallback` collects metrics in a list-of-
+    dicts shape that doesn't match :class:`TrainingVisualizer`'s
+    dict-of-lists contract. This callback bridges the two on
+    ``on_train_end``: it transposes the history (renaming the
+    Lightning metric keys to the v0.4 names the visualizer expects),
+    instantiates a :class:`TrainingVisualizer`, and emits all three
+    files alongside ``output_path``. Missing metrics fall through
+    silently — single-task runs skip the multitask-only panels;
+    multi-head runs without one of boundary/distance get a partial
+    plot.
+
+    Lightning metric -> v0.4 visualizer key mapping:
 
     +-------------------------+--------------------+
     | Lightning              | Visualizer         |

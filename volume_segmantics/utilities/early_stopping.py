@@ -3,6 +3,8 @@ import logging
 import numpy as np
 import torch
 
+from volume_segmantics.utilities.atomic_io import atomic_torch_save
+
 
 class EarlyStopping:
     """Early stops the training if validation loss doesn't improve after a given patience."""
@@ -72,5 +74,5 @@ class EarlyStopping:
         if glob_it is not None:
             model_dict["glob_it"] = glob_it
         
-        torch.save(model_dict, self.path)
+        atomic_torch_save(model_dict, self.path)
         self.val_loss_min = val_loss
