@@ -846,6 +846,49 @@ def _adapt_first_conv_from_imagenet_avg(model: torch.nn.Module, model_type, stru
             return
 
 
+def _load_state_dict_checked(module, state_dict, *, context=""):
+    """``load_state_dict(strict=False)`` that refuses to load a random model.
+
+    ``strict=False`` silently tolerates *any* key mismatch, so a checkpoint that
+    does not match the architecture (after the known MeanTeacher / ``module.``
+    normalisations) would load a partially- or fully-random model with no error.
+
+    This wrapper inspects the returned missing/unexpected keys:
+
+    * if **no** model parameter was loaded (every model key is missing), the
+      checkpoint is fundamentally incompatible and a ``RuntimeError`` is raised
+      rather than returning a fully-random model;
+    * otherwise any missing/unexpected keys are logged as a warning (with a
+      sample) so partial loads are visible instead of silent.
+    """
+    where = f" ({context})" if context else ""
+    total_model_keys = len(module.state_dict())
+    incompatible = module.load_state_dict(state_dict, strict=False)
+    missing = list(incompatible.missing_keys)
+    unexpected = list(incompatible.unexpected_keys)
+    matched = total_model_keys - len(missing)
+
+    if total_model_keys > 0 and matched == 0:
+        raise RuntimeError(
+            f"Checkpoint does not match the model architecture{where}: none of "
+            f"the model's {total_model_keys} parameters were found in the "
+            f"checkpoint ({len(unexpected)} unexpected key(s) present). Refusing "
+            f"to return a randomly-initialised model. Unexpected (sample): "
+            f"{unexpected[:5]}"
+        )
+    if missing or unexpected:
+        logging.warning(
+            "Checkpoint%s loaded with mismatches: %d/%d model parameters matched, "
+            "%d missing, %d unexpected. Missing (sample): %s; unexpected (sample): %s",
+            where, matched, total_model_keys, len(missing), len(unexpected),
+            missing[:5], unexpected[:5],
+        )
+    else:
+        logging.info("All %d checkpoint keys matched the model%s.",
+                     total_model_keys, where)
+    return incompatible
+
+
 def create_model_from_file(
     weights_fn: Path, gpu: bool = True, device_num: int = 0, settings=None,
 ) -> Tuple[torch.nn.Module, int, dict]:
@@ -895,11 +938,11 @@ def create_model_from_file(
     if isinstance(model, DataParallel):
         if state_dict and next(iter(state_dict.keys())).startswith("module."):
             state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
-        model.module.load_state_dict(state_dict, strict=False)
+        _load_state_dict_checked(model.module, state_dict, context=str(weights_fn))
     else:
         if state_dict and next(iter(state_dict.keys())).startswith("module."):
             state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
-        model.load_state_dict(state_dict, strict=False)
+        _load_state_dict_checked(model, state_dict, context=str(weights_fn))
 
     # Adapt first conv layer if input channels changed
     if requested_in_channels != saved_in_channels:
@@ -937,7 +980,7 @@ def create_model_from_file_full_weights(
     model_dict = torch.load(weights_fn, map_location=map_location, weights_only=False)
 
     logging.info("Loading in the saved weights.")
-    model.load_state_dict(model_dict, strict=False)
+    _load_state_dict_checked(model, model_dict, context=str(weights_fn))
     model.to(device=map_location)
     num_classes = 2 #not used
     return model, num_classes, None

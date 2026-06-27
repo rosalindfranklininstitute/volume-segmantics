@@ -63,7 +63,12 @@ class TrainingDataSlicer(BaseDataManager):
             logging.info(f"2.5D slicing mode enabled - creating {self.num_slices}-channel images from adjacent slices")
             logging.info(f"Using {self.slice_file_format.upper()} format for multi-channel storage")
             if self.skip_border_slices:
-                logging.info("Border slices will be skipped in 2.5D mode")
+                # NOTE: not yet implemented.
+                logging.warning(
+                    "skip_border_slices=True is not implemented and has no "
+                    "effect; 2.5D border slices are still emitted (edge slices "
+                    "are clamped). This setting is currently a no-op."
+                )
 
         # Handle labels (optional for unlabeled data)
         if label_vol is not None:
@@ -268,6 +273,10 @@ class TrainingDataSlicer(BaseDataManager):
             return
 
         if label and not self.multilabel:
+            # `data` is typically a view into the source label volume
+            # (axis_index_to_slice returns a view); copy before the in-place
+            # binarisation so we don't mutate the caller's array.
+            data = data.copy()
             data[data > 1] = 1
 
         if is_multi_channel:

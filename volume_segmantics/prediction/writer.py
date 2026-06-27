@@ -181,6 +181,18 @@ class PredictionZarrWriter:
             raise TypeError(
                 f"teacher_argmax data must be integer; got {data.dtype}"
             )
+        # teacher_argmax is stored as uint8 (the prediction_v1 format). A blind
+        # astype(uint8) would silently wrap any label outside 0-255 (e.g. class
+        # 300 -> 44), corrupting the labels. Reject out-of-range values instead.
+        if data.size:
+            dmin, dmax = int(data.min()), int(data.max())
+            if dmin < 0 or dmax > 255:
+                raise ValueError(
+                    f"teacher_argmax stores uint8 (0-255) but data has values in "
+                    f"[{dmin}, {dmax}]. The prediction_v1 zarr format supports at "
+                    f"most 256 classes; relabel or use a format that stores wider "
+                    f"integer labels."
+                )
         arr = self._get_or_create(
             "teacher_argmax", self.volume_shape, np.uint8, self.chunks,
         )

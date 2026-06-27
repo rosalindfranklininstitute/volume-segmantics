@@ -89,6 +89,41 @@ def test_minimal_finalize_with_only_teacher_argmax(tmp_path):
     assert g.attrs["schema_version"] == "prediction_v1"
 
 
+def _argmax_writer(tmp_path):
+    return PredictionZarrWriter(
+        output_path=tmp_path / "p.zarr", volume_shape=(2, 4, 4),
+        inference_mode="multi_axis", class_metadata={},
+    )
+
+
+def test_teacher_argmax_accepts_max_uint8_label(tmp_path):
+    """Label 255 is the boundary case and must round-trip exactly."""
+    w = _argmax_writer(tmp_path)
+    data = np.full((2, 4, 4), 255, dtype=np.int32)  # wide input dtype, in range
+    w.write_teacher_argmax(data)
+    w.finalize()
+    g = zarr.open(str(tmp_path / "p.zarr"))
+    assert int(np.asarray(g["teacher_argmax"]).max()) == 255
+
+
+@pytest.mark.parametrize("bad_label", [256, 300, 1000])
+def test_teacher_argmax_rejects_labels_above_255(tmp_path, bad_label):
+    """Labels > 255 must raise, not silently wrap (e.g. 300 -> 44)."""
+    w = _argmax_writer(tmp_path)
+    data = np.zeros((2, 4, 4), dtype=np.int32)
+    data[0, 0, 0] = bad_label
+    with pytest.raises(ValueError, match="at most 256 classes"):
+        w.write_teacher_argmax(data)
+
+
+def test_teacher_argmax_rejects_negative_labels(tmp_path):
+    w = _argmax_writer(tmp_path)
+    data = np.zeros((2, 4, 4), dtype=np.int32)
+    data[0, 0, 0] = -1
+    with pytest.raises(ValueError, match=r"\[-1, 0\]"):
+        w.write_teacher_argmax(data)
+
+
 def test_finalize_locks_further_writes(tmp_path):
     out = tmp_path / "p.zarr"
     w = PredictionZarrWriter(

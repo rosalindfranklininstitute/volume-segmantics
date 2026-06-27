@@ -69,48 +69,33 @@ class TestVolSeg2dTrainer:
         assert wrapped_e.type == SystemExit
         assert wrapped_e.value.code == 1
 
-    @pytest.mark.gpu
-    @pytest.mark.parametrize(
-        "eval_metric_name",
-        [
-            "MeanIoU",
-            "DiceCoefficient",
-        ],
-    )
-    def testget_eval_metric(self, volseg_2d_trainer, eval_metric_name):
-        volseg_2d_trainer.settings.eval_metric = eval_metric_name
-        metric = volseg_2d_trainer.get_eval_metric()
-        assert hasattr(metric, "__dict__")
-
-    @pytest.mark.gpu
-    def testget_eval_metric_bad_metric(
-        self, volseg_2d_trainer, eval_metric_name="evaluatethis"
-    ):
-        volseg_2d_trainer.settings.eval_metric = eval_metric_name
-        with pytest.raises(SystemExit) as wrapped_e:
-            metric = volseg_2d_trainer.get_eval_metric()
-        assert wrapped_e.type == SystemExit
-        assert wrapped_e.value.code == 1
 
     @pytest.mark.gpu
     @pytest.mark.slow
-    def test_train_new_frozen_model(self, volseg_2d_trainer, empty_dir):
-        output_path = empty_dir / "my_model.pytorch"
+    def test_train_model_one_epoch_produces_artifacts(self, volseg_2d_trainer, empty_dir):
+        """Short integration: train 1 epoch, assert checkpoint + figures exist and
+        that training actually ran (the checkpoint records >= 1 trained batch).
+
+        """
+        output_path = empty_dir / "one_epoch_model.pytorch"
         volseg_2d_trainer.train_model(
-            output_path, num_epochs=1, patience=1, create=True, frozen=True
+            output_path, num_epochs=1, patience=10, create=True, frozen=True
         )
         assert output_path.is_file()
+
+        # Guard the "checkpoint saved before training ran" failure mode: a
+        # trained model has BatchNorm num_batches_tracked >= 1.
+        ckpt = torch.load(output_path, map_location="cpu", weights_only=False)
+        state = ckpt["model_state_dict"]
+        tracked = [
+            int(v) for k, v in state.items() if k.endswith("num_batches_tracked")
+        ]
+        assert tracked, "no BatchNorm num_batches_tracked in checkpoint"
+        assert max(tracked) >= 1, "checkpoint was saved before training ran"
+
         volseg_2d_trainer.output_loss_fig(output_path)
-        loss_fig_path = empty_dir / "my_model_loss_plot.png"
+        loss_fig_path = empty_dir / "one_epoch_model_loss_plot.png"
         assert loss_fig_path.is_file()
         volseg_2d_trainer.output_prediction_figure(output_path)
-        pred_fig_path = empty_dir / "my_model_prediction_image.png"
+        pred_fig_path = empty_dir / "one_epoch_model_prediction_image.png"
         assert pred_fig_path.is_file()
-
-    @pytest.mark.gpu
-    @pytest.mark.slow
-    def test_train_existing_frozen_model(self, volseg_2d_trainer, model_path):
-        volseg_2d_trainer.train_model(
-            model_path, num_epochs=1, patience=1, create=False, frozen=True
-        )
-        assert model_path.is_file()

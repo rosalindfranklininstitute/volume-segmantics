@@ -328,16 +328,33 @@ def numpy_from_tiff(path):
     return imageio.volread(path)
 
 def numpy_from_zarr(path):
-    """Returns a numpy array when given a path to a zarr file (folder).
+    """Returns a numpy array when given a path to a zarr store (folder).
+
+    Handles both supported layouts:
+
+    * a **plain zarr array** store -- the whole array is returned;
+    * a **group** (e.g. OME-Zarr multiscale) -- the full-resolution array is
+      returned (member ``"0"`` if present, otherwise the first array member).
+
+    The previous implementation did ``zarr.open(path)[0]`` unconditionally,
+    which returned only the first *slice* of a plain array (silent data
+    corruption) and, under zarr 3.x, raised ``TypeError`` on a group because
+    members are keyed by string, not integer.
 
     Args:
-        path(pathlib.Path): The path to the Zarr file.
+        path(pathlib.Path): The path to the Zarr store.
 
     Returns:
-        numpy.array: A numpy array object for the data stored in the Zarr file.
+        numpy.array: A numpy array object for the data stored in the Zarr store.
     """
-
-    return np.array(zarr.open(path)[0])
+    opened = zarr.open(path, mode="r")
+    if isinstance(opened, zarr.Group):
+        names = list(opened.array_keys())
+        if not names:
+            raise ValueError(f"Zarr group at {path} contains no arrays.")
+        member = "0" if "0" in names else sorted(names)[0]
+        opened = opened[member]
+    return np.array(opened)
 
 
 def numpy_from_mrc(path):
@@ -370,25 +387,30 @@ def numpy_from_hdf5(path, hdf5_path="/data", nexus=False):
         for the data and a tuple with the chunking size.
     """
 
-    data_handle = h5.File(path, "r")
-    if nexus:
-        try:
-            dataset = data_handle["processed/result/data"]
-        except KeyError:
-            logging.error(
-                "NXS file: Couldn't find data at 'processed/result/data' trying another path."
-            )
+    # Use a context manager so the file handle is always released, even when a
+    # lookup fails (the previous code leaked the handle on every call and, on
+    # the nexus error path, called sys.exit(1) -- killing the whole process from
+    # inside a library function).
+    with h5.File(path, "r") as data_handle:
+        if nexus:
             try:
-                dataset = data_handle["entry/final_result_tomo/data"]
+                dataset = data_handle["processed/result/data"]
             except KeyError:
                 logging.error(
-                    "NXS file: Could not find entry at entry/final_result_tomo/data, exiting!"
+                    "NXS file: Couldn't find data at 'processed/result/data' trying another path."
                 )
-                sys.exit(1)
-    else:
-        dataset = data_handle[hdf5_path]
-    input_data_chunking = dataset.chunks
-    return dataset[()], input_data_chunking
+                try:
+                    dataset = data_handle["entry/final_result_tomo/data"]
+                except KeyError as exc:
+                    raise KeyError(
+                        f"NXS file {path}: could not find data at "
+                        "'processed/result/data' or 'entry/final_result_tomo/data'."
+                    ) from exc
+        else:
+            dataset = data_handle[hdf5_path]
+        input_data_chunking = dataset.chunks
+        # Materialise the array before the file closes (dataset is a lazy view).
+        return dataset[()], input_data_chunking
 
 
 def get_numpy_from_path(
@@ -414,6 +436,14 @@ def get_numpy_from_path(
         return numpy_from_zarr(path), True
     elif path.suffix in cfg.MRC_SUFFIXES:
         return numpy_from_mrc(path), True
+    else:
+        supported = sorted(
+            cfg.TIFF_SUFFIXES | cfg.HDF5_SUFFIXES | cfg.ZARR_SUFFIXES | cfg.MRC_SUFFIXES
+        )
+        raise ValueError(
+            f"Cannot read {path!s}: unsupported file extension {path.suffix!r}. "
+            f"Supported extensions: {supported}."
+        )
 
 
 def sequential_labels(unique_labels: np.array) -> bool:

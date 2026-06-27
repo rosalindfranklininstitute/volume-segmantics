@@ -51,3 +51,17 @@ def test_clip_to_uint8_normal_volume_still_rescales():
     assert out.dtype == np.uint8
     assert out.min() == 0
     assert out.max() == 255
+
+
+def test_get_numpy_from_path_unknown_extension_raises_valueerror(tmp_path):
+    bogus = tmp_path / "volume.unknownext"
+    bogus.write_bytes(b"not a real volume")
+    with pytest.raises(ValueError, match="unsupported file extension"):
+        utils.get_numpy_from_path(bogus)
+
+
+def test_get_numpy_from_path_no_extension_raises_valueerror(tmp_path):
+    bogus = tmp_path / "volume_without_suffix"
+    bogus.write_bytes(b"x")
+    with pytest.raises(ValueError, match="unsupported file extension"):
+        utils.get_numpy_from_path(bogus)

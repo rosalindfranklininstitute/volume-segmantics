@@ -132,11 +132,12 @@ class VolSeg2dPredictor:
         Extract outputs from model, handling both single-task and multi-task models.
 
         Returns ``(primary_output, additional_outputs_dict)``. The
-        primary output is ``model_output[0]``. The
+        primary output is ``model_output[0]`` . The
         additional-outputs dict is keyed by canonical head names
         (``boundary``, ``distance``, ``sdm``, ...) when the model
         exposes :attr:`head_names`; otherwise by legacy positional
-        ``task1``/``task2``/... keys for v0.4 ``Multitask_Unet`` 
+        ``task1``/``task2``/... keys for v0.4 ``Multitask_Unet`` back-
+        compat.
         """
         if isinstance(model_output, (list, tuple)) and len(model_output) > 1:
             primary_output = model_output[0]
@@ -703,6 +704,27 @@ class VolSeg2dPredictor:
 
         return counts_matrix, label_sorted
 
+    @staticmethod
+    def _normalise_entropy_map(entropy_matrix, prediction_labels):
+        """Normalise an entropy map by the maximum possible entropy.
+
+        The maximum is the entropy of a uniform distribution over the number of
+        distinct predicted labels (``log(n)``). When only one label is predicted
+        the maximum entropy is ``0`` (no uncertainty is possible), so the
+        normalised map is set to ``0`` everywhere rather than dividing by zero,
+        which would otherwise leak ``inf``/``NaN`` into the written entropy map.
+        """
+        n_unique = len(np.unique(prediction_labels))
+        if n_unique > 1:
+            max_entropy = float(entropy(np.full((n_unique,), 1.0 / n_unique)))
+        else:
+            max_entropy = 0.0
+        if max_entropy > 0:
+            entropy_matrix = entropy_matrix / max_entropy
+        else:
+            entropy_matrix[...] = 0.0
+        return entropy_matrix
+
     def _prediction_estimate_entropy(self, data_vol):
         if (self.settings.quality not in ["medium", "high", "z_only"]):
             raise ValueError("Error in vol_seg_2d_predictor._prediction_estimate_entropy: Entropy calculation must be done with a minimum prediction quality of medium.")
@@ -787,8 +809,9 @@ class VolSeg2dPredictor:
         entropy_matrix = np.empty(data_vol.shape)
         for curr_slice in range(len(data_vol)):
             entropy_matrix[curr_slice] = entropy(counts_matrix_contig[:, curr_slice, ...], axis=0)
-        entropy_matrix /= entropy(np.full((len(np.unique(full_prediction_labels)),),
-                                          1/len(np.unique(full_prediction_labels))))
+        entropy_matrix = self._normalise_entropy_map(
+            entropy_matrix, full_prediction_labels
+        )
 
         # Cast labels to uint8 for consistency with other prediction paths
         full_prediction_labels = full_prediction_labels.astype(np.uint8)

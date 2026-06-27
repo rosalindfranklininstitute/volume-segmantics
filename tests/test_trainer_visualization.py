@@ -173,6 +173,44 @@ def test_plot_predictions_single_task_saves_png(monkeypatch, tmp_path):
     assert out_png.exists()
 
 
+def test_plot_predictions_partial_batch_smaller_than_batch_size(monkeypatch, tmp_path):
+    """plot_predictions must not IndexError when the (first) validation batch
+    has fewer samples than the configured batch_size.
+
+    A small validation set yields a partial first batch; bounding the row count
+    by batch_size instead of the actual sample count indexed past the end.
+    """
+    B, C, H, W = 3, 3, 8, 8  # only 3 samples available...
+    inputs, targets = _make_inputs_and_onehot_targets(B=B, C=C, H=H, W=W)
+    seg_logits = targets["seg"] * 10.0
+
+    def _fake_prepare_training_batch(batch, device_num, num_classes):
+        return inputs, targets
+
+    monkeypatch.setattr(tv.utils, "prepare_training_batch", _fake_prepare_training_batch)
+
+    class _Model(nn.Module):
+        def forward(self, x):
+            return seg_logits
+
+    class _Loader:
+        batch_size = 8  # ...but batch_size claims 8 (and 8 > 4 cap, > B)
+
+        def __iter__(self):
+            yield object()
+
+    vis = TrainingVisualizer(num_classes=C)
+    model_path = tmp_path / "partial.pytorch"
+    vis.plot_predictions(
+        model=_Model(),
+        validation_loader=_Loader(),
+        device_num="cpu",
+        model_path=model_path,
+        ensure_tuple_output_fn=lambda out: (out,) if not isinstance(out, tuple) else out,
+    )
+    assert (tmp_path / "partial_prediction_image.png").exists()
+
+
 def test_plot_predictions_boundary_and_task3_saves_png(monkeypatch, tmp_path):
     B, C, H, W = 2, 3, 8, 8
     inputs, targets = _make_inputs_and_onehot_targets(B=B, C=C, H=H, W=W)

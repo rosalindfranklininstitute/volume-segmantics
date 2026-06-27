@@ -395,13 +395,40 @@ class TestTrainingDataSlicer:
         assert not task2_dir.exists()
 
     def test_training_data_slicer_skip_border_slices_setting(
-        self, rand_int_volume, rand_label_volume, training_settings
+        self, rand_int_volume, rand_label_volume, training_settings, caplog
     ):
-        """Slicer accepts skip_border_slices=True without error (setting stored/logged)."""
+        """skip_border_slices=True is accepted but warns that it is a no-op.
+
+
+        """
+        import logging
+
         training_settings.use_2_5d_slicing = True
         training_settings.num_slices = 3
         training_settings.skip_border_slices = True
+        with caplog.at_level(logging.WARNING):
+            slicer = TrainingDataSlicer(
+                rand_int_volume, rand_label_volume, training_settings
+            )
+        assert getattr(slicer, "skip_border_slices", False) is True
+        assert any(
+            "not implemented" in rec.message and "no-op" in rec.message
+            for rec in caplog.records
+        )
+
+
+
+    def test_output_im_does_not_mutate_source(
+        self, rand_int_volume, rand_label_volume, training_settings, tmp_path
+    ):
+        """_output_im binarises a copy, not the (view into the) source volume.
+
+        """
         slicer = TrainingDataSlicer(
             rand_int_volume, rand_label_volume, training_settings
         )
-        assert getattr(slicer, "skip_border_slices", False) is True
+        slicer.multilabel = False  # force the binary-binarisation branch
+        original = np.array([[0, 2], [3, 0]], dtype=np.uint8)
+        data = original.copy()
+        slicer._output_im(data, tmp_path / "slice", label=True)
+        np.testing.assert_array_equal(data, original)  # input untouched

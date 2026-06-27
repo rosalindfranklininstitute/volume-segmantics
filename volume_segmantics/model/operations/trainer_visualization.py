@@ -376,13 +376,21 @@ class TrainingVisualizer:
             seg_preds = torch.argmax(probs, dim=1)
             
             # Discover the underlying model's canonical head names if
-            # available.
+            # available — b3's :class:`PipelineMultitaskUnet` exposes
+            # ``head_names``. Used below to identify regression heads
+            # (distance / sdm) and to extend the panel layout when an
+            # SDM head is also enabled.
             head_names = getattr(model, "head_names", None)
             if head_names is None and hasattr(model, "module"):
                 head_names = getattr(model.module, "head_names", None)
             head_names = tuple(head_names) if head_names is not None else ()
 
             if isinstance(targets, dict):
+                # b3 ``PipelineMultiTaskDataset`` keys: ``semantic``
+                # (B,H,W long), ``boundary`` / ``distance`` / ``sdm``
+                # (B,K,H,W float). v0.4 MONAI dict keys: ``seg`` /
+                # ``boundary`` / ``task3``. Both naming schemes are
+                # tolerated below.
                 seg_target = targets.get("semantic", targets.get("seg", None))
                 boundary_target = targets.get("boundary", None)
                 task3_target = targets.get(
@@ -444,7 +452,11 @@ class TrainingVisualizer:
                 else:
                     if task3_output.shape[1] > 1:
                         task3_output = task3_output[:, 0:1, :, :]
-                # Detect regression task
+                # Detect regression: prefer the head's canonical
+                # name (distance / sdm both regress to continuous
+                # floats); fall back to inspecting the target or the
+                # output range when the model doesn't expose
+                # ``head_names``.
                 if len(head_names) > 2 and head_names[2] in ("distance", "sdm"):
                     task3_is_regression = True
                     task3_head_name = head_names[2].capitalize()
@@ -483,7 +495,10 @@ class TrainingVisualizer:
                 sdm_preds = sdm_output  # SDM is tanh-bounded regression.
                 sdm_is_regression = True
         
-        bs = min(validation_loader.batch_size, 4)
+        # Bound by the ACTUAL number of samples in this (possibly partial first)
+        # batch, not the configured batch_size -- a small validation set yields
+        # fewer samples than batch_size and indexing inputs[i] would IndexError.
+        bs = min(getattr(validation_loader, "batch_size", len(inputs)), len(inputs), 4)
         num_cols = 3
 
         if has_boundary_output:
@@ -558,7 +573,8 @@ class TrainingVisualizer:
             if has_task3_output:
                 # Regression heads (distance / sdm) use a perceptual
                 # continuous colormap; binary boundary-style task3
-                # uses gray.
+                # uses gray. The title reflects the canonical head
+                # name when known.
                 t3_cmap = "viridis" if task3_is_regression else "gray"
                 if task3_target is not None:
                     t3_gt = task3_target[i, 0].cpu() if task3_target.dim() == 4 else task3_target[i].cpu()
@@ -665,6 +681,9 @@ class TrainingVisualizer:
             # Compute consistency (difference between student and teacher)
             consistency_diff = torch.abs(student_probs - teacher_probs).mean(dim=1)
             
+            # Get ground truth if available — tolerate both b3
+            # pipeline keys (``semantic``, ``(B, H, W) long``) and
+            # the v0.4 MONAI keys (``seg``, ``(B, C, H, W)`` one-hot).
             if isinstance(targets, dict):
                 seg_target = targets.get("semantic", targets.get("seg", None))
             else:
