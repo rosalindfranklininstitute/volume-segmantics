@@ -422,7 +422,7 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
     from pytorch_lightning.loggers import TensorBoardLogger
 
     from volume_segmantics.data.lightning_dataloaders import VolSeg2dDataModule
-    from volume_segmantics.model.operations.lightning_2d import (
+    from volume_segmantics.model.operations.lightning2d import (
         EpochHistoryCallback,
         LegacyEpochSummaryCallback,
         NoVNumProgressBar,
