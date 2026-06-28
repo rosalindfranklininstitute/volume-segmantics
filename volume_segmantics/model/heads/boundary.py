@@ -21,7 +21,7 @@ BOUNDARY_CHANNELS: int = 1  # binary boundary mask
 
 
 class BoundaryHead(nn.Module):
-    """Per §1.2. Binary boundary classifier; raw logits."""
+    """Binary boundary classifier; raw logits."""
 
     name: str = BOUNDARY_HEAD_NAME
     target_kind: TargetKind = TargetKind.BOUNDARY

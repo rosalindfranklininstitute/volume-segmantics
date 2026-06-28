@@ -37,8 +37,7 @@ class SemanticHead(nn.Module):
         if spatial_dims != 2:
             raise ValueError(
                 f"SemanticHead currently only supports 2D (spatial_dims=2); "
-                f"got {spatial_dims}. The 3D path is deferred — see "
-                f"docs/v0_4_b3_release_plan.md §0.3."
+                f"got {spatial_dims}. The 3D path is deferred."
             )
         if out_channels < 1:
             raise ValueError(

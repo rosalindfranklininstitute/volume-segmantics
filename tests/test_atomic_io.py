@@ -1,4 +1,4 @@
-"""Tests for atomic_torch_save (PLAN.md Step 38).
+"""Tests for atomic_torch_save.
 
 A direct torch.save truncates the target before writing, so an interrupted save
 corrupts the last good checkpoint. atomic_torch_save publishes via os.replace so

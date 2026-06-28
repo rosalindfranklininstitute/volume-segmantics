@@ -112,6 +112,14 @@ def setup_path_if_exists(input_param):
 
 def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
 
+    if not torch.cuda.is_available():
+        # CPU-only (e.g. CI runners): there is no GPU memory to probe, so skip
+        # the CUDA queries below and use the conservative small batch size.
+        logging.info(
+            f"No CUDA device available; using CPU batch size {cfg.SMALL_CUDA_BATCH}."
+        )
+        return cfg.SMALL_CUDA_BATCH
+
     cuda_device_num = settings.cuda_device
     total_gpu_mem = torch.cuda.get_device_properties(cuda_device_num).total_memory
     allocated_gpu_mem = torch.cuda.memory_allocated(cuda_device_num)

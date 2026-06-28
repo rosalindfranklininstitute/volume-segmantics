@@ -100,8 +100,7 @@ def build_head_modules(
     if dim != 2:
         raise ValueError(
             f"build_head_modules: only dim=2 is supported in v0.4.0b3; "
-            f"got dim={dim}. The 3D path is deferred — see "
-            f"docs/v0_4_b3_release_plan.md §0.3."
+            f"got dim={dim}. The 3D path is deferred."
         )
 
     out: List[PredictionHead] = []

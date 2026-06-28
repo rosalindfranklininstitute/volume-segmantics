@@ -35,7 +35,7 @@ def _fixed_batch_settings(training_settings, monkeypatch, **overrides):
 
 
 def test_seeded_split_is_reproducible(image_dir, label_dir, training_settings, monkeypatch):
-    """Same random_seed -> identical train/val split (PLAN.md Step 6)."""
+    """Same random_seed -> identical train/val split."""
     settings = _fixed_batch_settings(training_settings, monkeypatch, random_seed=123)
     tl1, vl1 = get_2d_training_dataloaders(image_dir, label_dir, settings)
     tl2, vl2 = get_2d_training_dataloaders(image_dir, label_dir, settings)

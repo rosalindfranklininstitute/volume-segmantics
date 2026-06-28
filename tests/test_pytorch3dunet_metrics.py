@@ -80,7 +80,6 @@ def test_mean_iou_one_channel():
     assert criterion(pred, target) == 1
 
 
-# --- get_evaluation_metric (PLAN.md Step 26) ---
 # Previously imported the undeclared `pytorch3dunet` package -> ModuleNotFoundError
 # on every call. It now resolves from this module's metric classes.
 

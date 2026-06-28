@@ -110,7 +110,7 @@ def test_sdm_binary_shape_and_range(labels_square):
 
 
 def test_sdm_positive_inside_foreground(labels_square):
-    """**The convention test** — §1.2 of the release plan.
+    """**The convention test**
 
     v0.4.0b3 SDM is positive-inside / negative-outside (matching v0.5).
     The :class:`SDMHead`'s tanh output and the loss (L1/MSE) only

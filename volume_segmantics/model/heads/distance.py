@@ -21,7 +21,7 @@ DISTANCE_CHANNELS: int = 1
 
 
 class DistanceHead(nn.Module):
-    """Per §1.2. Smooth distance field; identity output."""
+    """Smooth distance field; identity output."""
 
     name: str = DISTANCE_HEAD_NAME
     target_kind: TargetKind = TargetKind.DISTANCE

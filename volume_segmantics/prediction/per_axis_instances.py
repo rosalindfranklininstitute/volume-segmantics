@@ -364,8 +364,6 @@ def select_producer_name(
 ) -> str:
     """Resolve the producer name from the pipeline.yaml + enabled heads.
 
-    Per ``docs/v0_4_b3_release_plan.md`` §1.5 auto-selection rules:
-
     * ``requested`` set -> use it as-is (must be in :data:`_PRODUCERS`).
     * ``requested`` is ``None`` -> default to ``distance_watershed`` if
       the ``distance`` head is enabled, else ``semantic_cc``.

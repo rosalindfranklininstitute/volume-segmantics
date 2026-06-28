@@ -517,7 +517,7 @@ def _run_instance_assembly(
 
 def load_data_extra(path: Union[str, Path]) -> Any:
     raise NotImplementedError(
-        "volume_segmantics.api.load_data_extra is deferred"
+        "volume_segmantics.api.load_data_extra is deferred."
     )
 
 

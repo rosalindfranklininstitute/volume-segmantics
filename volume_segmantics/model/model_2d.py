@@ -901,9 +901,13 @@ def create_model_from_file(
         device_num: GPU device number
         settings: Optional settings object to override input channels for prediction
     """
-    if gpu:
+    if gpu and torch.cuda.is_available():
         map_location = f"cuda:{device_num}"
     else:
+        # No usable CUDA device: load and build on CPU regardless of the
+        # requested ``gpu``/``device_num`` so checkpoints saved on GPU still
+        # deserialize on CPU-only machines (e.g. CI runners).
+        gpu = False
         map_location = "cpu"
     weights_fn = weights_fn.resolve()
     logging.info("Loading model dictionary from file.")
@@ -968,9 +972,11 @@ def create_model_from_file_full_weights(
 ) -> Tuple[torch.nn.Module, int, dict]:
     """Creates and returns a model and the number of segmentation labels
     that are predicted by the model."""
-    if gpu:
+    if gpu and torch.cuda.is_available():
         map_location = f"cuda:{device_num}"
     else:
+        # No usable CUDA device: fall back to CPU (see create_model_from_file).
+        device_num = "cpu"
         map_location = "cpu"
     weights_fn = weights_fn.resolve()
     logging.info("Loading model dictionary from file.")

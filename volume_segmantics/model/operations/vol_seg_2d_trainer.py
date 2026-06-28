@@ -77,7 +77,7 @@ class VolSeg2dTrainer:
                 "of v0.4.0b3 and scheduled for removal in v0.5. The "
                 "PyTorch Lightning trainer is now the default — pass "
                 "--legacy-trainer to model-train-2d to keep using this "
-                "class. See docs/v0_4_b3_release_plan.md §4.2.",
+                "class.",
                 DeprecationWarning,
                 stacklevel=2,
             )

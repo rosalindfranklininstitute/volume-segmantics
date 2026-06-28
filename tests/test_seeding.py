@@ -1,4 +1,4 @@
-"""Tests for the reproducibility helpers (PLAN.md Phase 1, Step 6).
+"""Tests for the reproducibility helpers.
 
 """
 

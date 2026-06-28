@@ -1,4 +1,4 @@
-"""Tests for per-head loss-weight scheduling (PLAN.md Step 27).
+"""Tests for per-head loss-weight scheduling.
 
 Pins the semantics of ``apply_schedule``: both ``linear_warmup`` and
 ``linear_decay`` linearly interpolate ``start_weight -> end_weight`` over the

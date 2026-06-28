@@ -38,7 +38,9 @@ class VolSeg2dPredictor:
     def __init__(self, model_file_path: str, settings: SimpleNamespace) -> None:
         self.model_file_path = Path(model_file_path)
         self.settings = settings
-        self.model_device_num = int(settings.cuda_device)
+        self.model_device_num = (
+            int(settings.cuda_device) if torch.cuda.is_available() else "cpu"
+        )
         model_tuple = create_model_from_file(
             self.model_file_path, device_num=self.model_device_num, settings=settings
         )
@@ -825,7 +827,9 @@ class VolSeg2dImageDirPredictor:
     def __init__(self, model_file_path: str, settings: SimpleNamespace) -> None:
         self.model_file_path = Path(model_file_path)
         self.settings = settings
-        self.model_device_num = int(settings.cuda_device)
+        self.model_device_num = (
+            int(settings.cuda_device) if torch.cuda.is_available() else "cpu"
+        )
         model_tuple = create_model_from_file(
             self.model_file_path, device_num=self.model_device_num, settings=settings
         )

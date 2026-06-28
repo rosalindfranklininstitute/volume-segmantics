@@ -62,7 +62,7 @@ def derive_sdm_target_2d(
     label_slice
         ``(H, W)`` integer label array. Background = 0.
     variant
-        ``"binary"`` (default) or ``"per_class"``. Per §1.2.
+        ``"binary"`` (default) or ``"per_class"``. 
     d_clip
         Distance scale in pixels. Output values outside
         ``[-d_clip, d_clip]`` (in raw distance units) are clipped to
@@ -146,7 +146,7 @@ def make_sdm_target_generator(
 
     Pipeline mode reads ``variant`` from ``HeadConfig.extra`` and
     ``num_classes`` from the trainer's resolved class count;
-    ``d_clip`` reads from ``HeadConfig.extra`` as well (per §5 schema).
+    ``d_clip`` reads from ``HeadConfig.extra`` as well.
     """
     def _gen(label_slice: np.ndarray) -> np.ndarray:
         return derive_sdm_target_2d(
