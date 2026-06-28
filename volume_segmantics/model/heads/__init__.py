@@ -92,7 +92,7 @@ def build_head_modules(
     * Each head is instantiated via
       :func:`pipeline_registry.build_head` so the registry stays the
       single source of truth for head-name -> class.
-    * ``dim`` selects between 2D (default) and 3D head variants. b3
+    * ``dim`` selects between 2D (default) and 3D head variants. pipeline version
       raises on ``dim=3`` — the 3D path is deferred. The kwarg is
       preserved for forward-compat: when 3D heads land, callers won't
       need to change.

@@ -440,7 +440,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
         """
         Map task name to file suffix.
 
-        Recognises both b3 head names (``boundary`` -> ``_BND``,
+        Recognises both pipeline version head names (``boundary`` -> ``_BND``,
         ``distance`` -> ``_DIST``, ``sdm`` -> ``_SDM``) and legacy
         positional task names (``task1`` -> ``_BND``, ``task2`` ->
         ``_DIST``) for back-compat with v0.4 ``Multitask_Unet``

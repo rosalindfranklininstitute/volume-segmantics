@@ -136,7 +136,7 @@ class USegment3DAssembler:
     Consumes :attr:`PredictionBundle.per_axis_instances` and produces
     a 3D consensus instance volume via u-Segment3D's gradient-
     aggregation pipeline. The per-axis instances are typically
-    produced by the b3 :class:`DistanceWatershedSliceProducer` or
+    produced by the pipeline version :class:`DistanceWatershedSliceProducer` or
     :class:`SemanticCcSliceProducer`
 
     Parameters

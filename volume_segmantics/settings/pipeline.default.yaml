@@ -36,7 +36,7 @@ targets:
   boundary:
     width: 3                        # boundary structuring-element size
   distance:
-    distance_transform: edt         # only edt supported in b3
+    distance_transform: edt         # only edt supported in pipeline version
   sdm:
     distance_transform: edt
 

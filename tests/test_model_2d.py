@@ -124,7 +124,7 @@ def test_create_model_on_device_vanilla_unet(model_struc_vanilla_unet):
 
 
 def test_create_model_on_device_multitask_unet_deprecated(model_struc_multitask_unet):
-    """v0.4 ``MULTITASK_UNET`` raises ``DeprecationWarning`` in b3.
+    """v0.4 ``MULTITASK_UNET`` raises ``DeprecationWarning`` in pipeline version.
 
     The pipeline.yaml head registry (``PipelineMultitaskUnet`` +
     ``model/heads/``) is the supported replacement; see its own
@@ -230,7 +230,7 @@ def test_model_forward_output_shape(model_type, encoder_name):
 
 
 def test_multitask_unet_forward_deprecated(model_struc_multitask_unet):
-    """Forward path for v0.4 ``MULTITASK_UNET`` is unreachable in b3.
+    """Forward path for v0.4 ``MULTITASK_UNET`` is unreachable in pipeline version.
 
     Model construction raises before a forward pass is possible; the
     pipeline-multitask forward shape is covered by

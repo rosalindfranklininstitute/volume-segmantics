@@ -55,7 +55,7 @@ KNOWN_PER_AXIS_PRODUCERS: frozenset = frozenset({
     "distance_watershed", "semantic_cc",
 })
 
-#: Instance-assembly backends shipped in b3.
+#: Instance-assembly backends shipped in pipeline version.
 KNOWN_ASSEMBLY_BACKENDS: frozenset = frozenset({"usegment3d"})
 
 #: Per-axis names accepted by uSegment3D + the per-axis producers.
@@ -609,7 +609,7 @@ def _legacy_loss_name(loss_criterion: str) -> str:
 
 
 def _legacy_inference_mode(settings: SimpleNamespace) -> str:
-    """Map legacy ``quality`` + ``use_sliding_window`` to b3 modes."""
+    """Map legacy ``quality`` + ``use_sliding_window`` to pipeline version modes."""
     if getattr(settings, "use_sliding_window", False):
         return "sliding_window"
     quality = getattr(settings, "quality", "medium")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Testing prediction CLI — wraps :func:`volume_segmantics.api.predict`.
+"""Pipeline prediction CLI — wraps :func:`volume_segmantics.api.predict`.
 
 
 The CLI reads:
@@ -46,7 +46,7 @@ def main() -> None:
     )
     parser = argparse.ArgumentParser(
         description=(
-            "v0.4.0b3 prediction CLI: run api.predict with optional "
+            "Pipeline prediction CLI: run api.predict with optional "
             "instance-assembly + zarr output."
         ),
     )

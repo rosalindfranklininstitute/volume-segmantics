@@ -114,7 +114,7 @@ class VolSeg2dPredictor:
             return True
         if task_name in ("task2", "task3"):
             return False
-        # b3 head names: semantic + boundary are label-like.
+        # pipeline version head names: semantic + boundary are label-like.
         return task_name in ("semantic", "boundary")
 
     def _is_multitask_model(self):

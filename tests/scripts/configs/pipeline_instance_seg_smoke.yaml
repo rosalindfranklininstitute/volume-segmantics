@@ -4,7 +4,7 @@ paths:
 settings_templates:
   train: volseg-settings/2d_model_train_settings.yaml
   predict: volseg-settings/2d_model_predict_settings.yaml
-output_root: tmp/b3_instance_seg_smoke
+output_root: tmp/pipeline_instance_seg_smoke
 global_overrides:
   train:
     image_size: 64
@@ -68,25 +68,25 @@ global_overrides:
           indirect_method:
             dtform_method: edt
 tests:
-- name: train_b3_instance_seg
+- name: train_pipeline_instance_seg
   type: train
-  model_key: b3_instance_seg_model
+  model_key: pipeline_instance_seg_model
   overrides:
     train:
-      model_output_fn: b3_instance_seg_smoke
+      model_output_fn: pipeline_instance_seg_smoke
   assert_outputs:
     should_exist_globs:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
 - name: assert_bn_trained
-  type: b3_assert
+  type: pipeline_assert
   subcommand: checkpoint-trained
   args:
-  - ${model:b3_instance_seg_model}
+  - ${model:pipeline_instance_seg_model}
 - name: predict_distance_watershed
-  type: b3_predict_zarr
-  model_key: b3_instance_seg_model
+  type: pipeline_predict_zarr
+  model_key: pipeline_instance_seg_model
   inference_mode: multi_axis
   instance_assembly_backend: usegment3d
   output_zarr: prediction.zarr
@@ -97,7 +97,7 @@ tests:
         per_axis_instances:
           producer: distance_watershed
 - name: assert_dw_zarr_keys
-  type: b3_assert
+  type: pipeline_assert
   subcommand: zarr-keys
   args:
   - ${artifact:dw_zarr}
@@ -108,7 +108,7 @@ tests:
   - per_axis_instances/xz
   - per_axis_instances/yz
 - name: assert_dw_instance_count
-  type: b3_assert
+  type: pipeline_assert
   subcommand: instance-count-plausible
   args:
   - ${artifact:dw_zarr}
@@ -117,8 +117,8 @@ tests:
   - --max-multiplier
   - '6000'
 - name: predict_semantic_cc
-  type: b3_predict_zarr
-  model_key: b3_instance_seg_model
+  type: pipeline_predict_zarr
+  model_key: pipeline_instance_seg_model
   inference_mode: multi_axis
   instance_assembly_backend: usegment3d
   output_zarr: prediction.zarr
@@ -129,7 +129,7 @@ tests:
         per_axis_instances:
           producer: semantic_cc
 - name: assert_cc_zarr_keys
-  type: b3_assert
+  type: pipeline_assert
   subcommand: zarr-keys
   args:
   - ${artifact:cc_zarr}
@@ -137,7 +137,7 @@ tests:
   - teacher_argmax
   - instance_labels
 - name: assert_cc_instance_count
-  type: b3_assert
+  type: pipeline_assert
   subcommand: instance-count-plausible
   args:
   - ${artifact:cc_zarr}

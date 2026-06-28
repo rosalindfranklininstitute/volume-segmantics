@@ -4,7 +4,7 @@ paths:
 settings_templates:
   train: volseg-settings/2d_model_train_settings.yaml
   predict: volseg-settings/2d_model_predict_settings.yaml
-output_root: tmp/b3_trainer_parity_smoke
+output_root: tmp/pipeline_trainer_parity_smoke
 global_overrides:
   train:
     image_size: 64
@@ -56,17 +56,17 @@ tests:
     - '*_train_stats.csv'
     - '*_prediction_image.png'
 - name: assert_lightning_bn_trained
-  type: b3_assert
+  type: pipeline_assert
   subcommand: checkpoint-trained
   args:
   - ${model:lightning_model}
 - name: assert_legacy_bn_trained
-  type: b3_assert
+  type: pipeline_assert
   subcommand: checkpoint-trained
   args:
   - ${model:legacy_model}
 - name: assert_val_dice_within
-  type: b3_assert
+  type: pipeline_assert
   subcommand: val-dice-within
   args:
   - ${model:lightning_model}

@@ -132,7 +132,7 @@ def compute_pipeline_targets(
 def _spec_to_albumentations(spec: TransformSpec) -> A.BasicTransform:
     """Resolve a :class:`TransformSpec` to a concrete Albumentations object.
 
-    b3 takes a pragmatic stance: any name available as an attribute of
+    pipeline version takes a pragmatic stance: any name available as an attribute of
     :mod:`albumentations` is accepted, instantiated with the spec's
     ``params``. The Albumentations name space is large but stable;
     explicit registration would just duplicate it.

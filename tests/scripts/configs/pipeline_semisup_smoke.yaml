@@ -6,7 +6,7 @@ paths:
 settings_templates:
   train: volseg-settings/2d_model_train_settings.yaml
   predict: volseg-settings/2d_model_predict_settings.yaml
-output_root: tmp/b3_semisup_smoke
+output_root: tmp/pipeline_semisup_smoke
 global_overrides:
   train:
     image_size: 64
@@ -62,15 +62,15 @@ tests:
   type: unlabeled_slicer
   output_key: unlabeled_slices
   output_dir: unlabeled_pool
-- name: train_b3_ema_teacher
+- name: train_pipeline_ema_teacher
   type: train
-  model_key: b3_ema_model
+  model_key: pipeline_ema_model
   args:
   - --unlabeled_data_dir
   - ${artifact:unlabeled_slices}
   overrides:
     train:
-      model_output_fn: b3_semisup_smoke
+      model_output_fn: pipeline_semisup_smoke
       use_semi_supervised: true
       use_pseudo_labeling: false
       ema_decay: 0.99
@@ -84,13 +84,13 @@ tests:
     - '*_prediction_image.png'
     - '*_mean_teacher_epoch_*.png'
 - name: assert_bn_trained
-  type: b3_assert
+  type: pipeline_assert
   subcommand: checkpoint-trained
   args:
-  - ${model:b3_ema_model}
-- name: predict_b3_semisup_low
+  - ${model:pipeline_ema_model}
+- name: predict_pipeline_semisup_low
   type: predict
-  model_key: b3_ema_model
+  model_key: pipeline_ema_model
   overrides:
     predict:
       quality: low

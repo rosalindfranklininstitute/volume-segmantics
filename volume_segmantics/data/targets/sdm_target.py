@@ -4,7 +4,7 @@
 Sign convention
 ---------------
 Positive **inside** foreground; negative **outside**; zero on the
-boundary. The b3 :class:`SDMHead` emits ``tanh(...)`` so its output 
+boundary. The pipeline version :class:`SDMHead` emits ``tanh(...)`` so its output 
 is in ``[-1, 1]`` with positive-inside; this generator's output matches that convention so L1 / L2
 loss on raw values lines up with the head's tanh-bounded output.
 
@@ -33,7 +33,7 @@ Output shape
 
 Loss path
 ---------
-The b3 :class:`PipelineMultiTaskLossCalculator` always feeds head
+The pipeline version :class:`PipelineMultiTaskLossCalculator` always feeds head
 output and target with matching channel counts to the registered loss
 function. ``per_class`` SDM emits ``(C-1, H, W)`` targets that line up
 with the head's ``(C-1, H, W)`` channel-wise output 1:1.
@@ -71,7 +71,7 @@ def derive_sdm_target_2d(
         Required only when ``variant="per_class"``. Output channel
         count is ``num_classes - 1`` (background excluded).
     distance_transform
-        Only ``"edt"`` is supported in b3.
+        Only ``"edt"`` is supported in pipeline version.
 
     Returns
     -------

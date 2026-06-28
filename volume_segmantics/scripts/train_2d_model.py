@@ -110,7 +110,7 @@ def main():
                     enabled=True, loss="boundary_bce_dice", loss_weight=1.0,
                 )
                 logging.info(
-                    "Auto-enabling 'boundary' head from --task2. b3 derives "
+                    "Auto-enabling 'boundary' head from --task2. pipeline version derives "
                     "boundary targets from the semantic label on-the-fly; "
                     "the pre-computed labels at %s are ignored under the "
                     "Lightning path. Use a pipeline.yaml to override the "
@@ -121,7 +121,7 @@ def main():
                     enabled=True, loss="distance_l1", loss_weight=1.0,
                 )
                 logging.info(
-                    "Auto-enabling 'distance' head from --task3. b3 derives "
+                    "Auto-enabling 'distance' head from --task3. pipeline version derives "
                     "distance targets from the semantic label on-the-fly; "
                     "the pre-computed labels at %s are ignored under the "
                     "Lightning path. Use a pipeline.yaml to override the "
@@ -450,7 +450,7 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         sys.exit(1)
 
     # Output filename — pipeline-multitask-specific marker so users
-    # can distinguish b3 outputs from v0.4 single-head outputs.
+    # can distinguish pipeline version outputs from v0.4 single-head outputs.
     model_type_name = (
         "PIPELINE_MULTITASK_UNET" if len(enabled_heads) > 1
         or (len(enabled_heads) == 1 and enabled_heads[0] != "semantic")

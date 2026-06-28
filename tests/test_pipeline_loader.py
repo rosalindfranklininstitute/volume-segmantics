@@ -137,7 +137,7 @@ def test_per_axis_default():
 
 def test_per_axis_unknown_producer_raises():
     with pytest.raises(PipelineConfigError, match="not in"):
-        PerAxisInstancesConfig(producer="omnipose_flow")  # not shipped in b3
+        PerAxisInstancesConfig(producer="omnipose_flow")  # not shipped in pipeline version
 
 
 def test_per_axis_empty_axes_raises():
@@ -192,7 +192,7 @@ def test_instance_assembly_default_no_backend():
 
 def test_instance_assembly_unknown_backend_raises():
     with pytest.raises(PipelineConfigError, match="not in"):
-        InstanceAssemblyConfig(backend="mutex_watershed")  # deferred in b3
+        InstanceAssemblyConfig(backend="mutex_watershed")  # deferred in pipeline version
 
 
 def test_instance_assembly_usegment3d_accepted():

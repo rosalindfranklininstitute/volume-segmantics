@@ -92,7 +92,7 @@ def _write_settings_pair(
 
     When the harness config has a ``settings_templates.pipeline`` key
     (or the step provides ``pipeline_overrides``), also writes a
-    ``pipeline.yaml`` next to them so the b3 trainer + predictor pick
+    ``pipeline.yaml`` next to them so the pipeline version trainer + predictor pick
     it up from the per-run settings directory.
     """
     settings_dir = run_dir / "volseg-settings"
@@ -113,7 +113,7 @@ def _write_settings_pair(
     _save_yaml(train_settings, train_cfg)
     _save_yaml(pred_settings, pred_cfg)
 
-    # b3 — pipeline.yaml is layered on top of the legacy yamls.
+    # pipeline version — pipeline.yaml is layered on top of the legacy yamls.
     if ctx.pipeline_template is not None or pipeline_overrides or ctx.global_pipeline_overrides:
         pipeline_cfg: Dict[str, Any] = {}
         if ctx.pipeline_template is not None and ctx.pipeline_template.exists():
@@ -260,7 +260,7 @@ def _run_train_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     # Train-step diagnostic-output assertions: confirm the Lightning
     # trainer wrote the loss plot / train stats CSV / prediction PNG
     # (and SSL PNGs when applicable). The harness used to police these
-    # only on predict steps; b3 emits the artifacts at end of training.
+    # only on predict steps; pipeline version emits the artifacts at end of training.
     assert_cfg = step_cfg.get("assert_outputs", {})
     if assert_cfg:
         _assert_globs(
@@ -329,7 +329,7 @@ def _run_predict_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     print(f"{status} Assertions passed for '{name}'")
 
 
-def _run_b3_predict_zarr_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
+def _run_pipeline_predict_zarr_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     """Prediction step that writes a ``prediction_v1`` zarr.
 
     """
@@ -357,7 +357,7 @@ def _run_b3_predict_zarr_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> 
     cmd = [
         sys.executable,
         "-m",
-        "volume_segmantics.scripts.b3_predict",
+        "volume_segmantics.scripts.predict_pipeline",
         str(model_path),
         str(image_path),
         "--data_dir",
@@ -476,13 +476,13 @@ def _run_unlabeled_slicer_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) ->
     print(f"{status} Registered artifact '{output_key}' -> {merged_dir}")
 
 
-def _run_b3_assert_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
-    """Invoke a b3_assertions.py subcommand with token-resolved args.
+def _run_pipeline_assert_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
+    """Invoke a pipeline_assertions.py subcommand with token-resolved args.
 
     Config shape::
 
         - name: assert_zarr_layout
-          type: b3_assert
+          type: pipeline_assert
           subcommand: zarr-keys
           args:
             - "${artifact:semantic_pred_zarr}"
@@ -498,7 +498,7 @@ def _run_b3_assert_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     cmd = [
         sys.executable,
         "-m",
-        "tests.scripts.b3_assertions",
+        "tests.scripts.pipeline_assertions",
         subcommand,
     ]
     extra_args = step_cfg.get("args", [])
@@ -671,8 +671,8 @@ def _run_derive_distance_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> 
 STEP_DISPATCH = {
     "train": _run_train_step,
     "predict": _run_predict_step,
-    "b3_predict_zarr": _run_b3_predict_zarr_step,
-    "b3_assert": _run_b3_assert_step,
+    "pipeline_predict_zarr": _run_pipeline_predict_zarr_step,
+    "pipeline_assert": _run_pipeline_assert_step,
     "unlabeled_slicer": _run_unlabeled_slicer_step,
     "pytest": _run_pytest_step,
     "derive_boundary": _run_derive_boundary_step,

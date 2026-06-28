@@ -76,7 +76,7 @@ def test_consistency_loss_positive_when_different():
 def test_consistency_loss_gradient_flow():
     """Backward propagates gradients to the student only.
 
-    The teacher is detached inside the consistency loss in b3 (matches
+    The teacher is detached inside the consistency loss in pipeline version (matches
     ``seg_consistency_loss`` and the per-head variants), so its grad
     must be ``None`` even if the input tensor was created with
     ``requires_grad=True``.

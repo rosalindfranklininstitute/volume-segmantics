@@ -4,7 +4,7 @@ paths:
 settings_templates:
   train: volseg-settings/2d_model_train_settings.yaml
   predict: volseg-settings/2d_model_predict_settings.yaml
-output_root: tmp/b3_multihead_qa
+output_root: tmp/pipeline_multihead_qa
 global_overrides:
   train:
     image_size: 512
@@ -57,12 +57,12 @@ global_overrides:
       sdm:
         distance_transform: edt
 tests:
-- name: qa_b3_multihead
+- name: qa_pipeline_multihead
   type: train
-  model_key: qa_b3_multihead
+  model_key: qa_pipeline_multihead
   overrides:
     train:
-      model_output_fn: qa_b3_multihead
+      model_output_fn: qa_pipeline_multihead
       loss_criterion: CombinedCEDiceLoss
       ce_weight: 0.2
       dice_weight: 0.8
@@ -73,13 +73,13 @@ tests:
     - '*_train_stats.csv'
     - '*_prediction_image.png'
 - name: assert_bn_trained
-  type: b3_assert
+  type: pipeline_assert
   subcommand: checkpoint-trained
   args:
-  - ${model:qa_b3_multihead}
-- name: qa_predict_b3_multihead_medium
+  - ${model:qa_pipeline_multihead}
+- name: qa_predict_pipeline_multihead_medium
   type: predict
-  model_key: qa_b3_multihead
+  model_key: qa_pipeline_multihead
   overrides:
     predict:
       quality: medium
@@ -87,9 +87,9 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
-- name: qa_predict_b3_multihead_z_entropy
+- name: qa_predict_pipeline_multihead_z_entropy
   type: predict
-  model_key: qa_b3_multihead
+  model_key: qa_pipeline_multihead
   overrides:
     predict:
       quality: z_only

@@ -99,7 +99,7 @@ def predict(
     Parameters
     ----------
     model_path
-        Path to a ``.pytorch`` checkpoint (b3 or v0.4 format).
+        Path to a ``.pytorch`` checkpoint (pipeline version or v0.4 format).
     data_vol_path
         Path to the input volume (HDF5 / TIFF / MRC).
     settings
@@ -299,7 +299,7 @@ def predict(
     # Defer the legacy single-file path to the existing
     # `model-predict-2d` script. The api.predict caller can chain
     # this themselves via VolSeg2DPredictionManager if needed; the
-    # b3 path exists primarily for the zarr + return_arrays flow.
+    # pipeline version path exists primarily for the zarr + return_arrays flow.
 
     #  Manifest 
     heads_present = ["semantic"]

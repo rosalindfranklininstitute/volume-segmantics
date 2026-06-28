@@ -4,7 +4,7 @@ paths:
 settings_templates:
   train: volseg-settings/2d_model_train_settings.yaml
   predict: volseg-settings/2d_model_predict_settings.yaml
-output_root: tmp/b3_two5d_smoke
+output_root: tmp/pipeline_two5d_smoke
 global_overrides:
   train:
     image_size: 64
@@ -32,12 +32,12 @@ global_overrides:
         loss: dice_ce
         loss_weight: 1.0
 tests:
-- name: train_b3_2_5d_3slice
+- name: train_pipeline_2_5d_3slice
   type: train
-  model_key: b3_2_5d_3slice
+  model_key: pipeline_2_5d_3slice
   overrides:
     train:
-      model_output_fn: b3_two5d_3slice
+      model_output_fn: pipeline_two5d_3slice
       num_slices: 3
       slice_file_format: png
       skip_border_slices: false
@@ -47,13 +47,13 @@ tests:
     - '*_train_stats.csv'
     - '*_prediction_image.png'
 - name: assert_bn_trained_3slice
-  type: b3_assert
+  type: pipeline_assert
   subcommand: checkpoint-trained
   args:
-  - ${model:b3_2_5d_3slice}
-- name: predict_b3_2_5d_3slice_low
+  - ${model:pipeline_2_5d_3slice}
+- name: predict_pipeline_2_5d_3slice_low
   type: predict
-  model_key: b3_2_5d_3slice
+  model_key: pipeline_2_5d_3slice
   overrides:
     predict:
       use_2_5d_prediction: true
@@ -62,12 +62,12 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
-- name: train_b3_2_5d_5slice
+- name: train_pipeline_2_5d_5slice
   type: train
-  model_key: b3_2_5d_5slice
+  model_key: pipeline_2_5d_5slice
   overrides:
     train:
-      model_output_fn: b3_two5d_5slice
+      model_output_fn: pipeline_two5d_5slice
       num_slices: 5
       slice_file_format: tiff
       skip_border_slices: false
@@ -77,7 +77,7 @@ tests:
     - '*_train_stats.csv'
     - '*_prediction_image.png'
 - name: assert_bn_trained_5slice
-  type: b3_assert
+  type: pipeline_assert
   subcommand: checkpoint-trained
   args:
-  - ${model:b3_2_5d_5slice}
+  - ${model:pipeline_2_5d_5slice}

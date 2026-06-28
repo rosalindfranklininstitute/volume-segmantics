@@ -102,7 +102,7 @@ def test_model_decoder_shared_across_heads(four_head_modules):
         head_modules=four_head_modules,
         encoder_name="resnet34", encoder_weights=None,
     )
-    # Single shared decoder per b3 design.
+    # Single shared decoder per pipeline version design.
     assert len(model.decoders) == 1
     assert model.head_to_decoder == [0, 0, 0, 0]
 

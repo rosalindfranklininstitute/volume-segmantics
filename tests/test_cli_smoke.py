@@ -20,7 +20,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tests" / "scripts"))
-from b3_assertions import assert_checkpoint_trained  # noqa: E402
+from pipeline_assertions import assert_checkpoint_trained  # noqa: E402
 
 
 def _fast_train_settings():

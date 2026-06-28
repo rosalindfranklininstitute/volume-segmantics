@@ -86,10 +86,10 @@ class UncertaintyProvider(Protocol):
 
     Concrete implementations:
 
-    * b3: :class:`MultiAxisTTAProvider`.
+    * pipeline version: :class:`MultiAxisTTAProvider`.
     * b4+: kfold-ensemble, MC-dropout, basic-TTA. Adding a new
       provider is a registration call into
-      :func:`register_uncertainty_provider` — no b3 code needs to
+      :func:`register_uncertainty_provider` — no pipeline version code needs to
       change.
     """
 
@@ -267,7 +267,7 @@ class MultiAxisTTAProvider:
         return self.compute_from_stacks(*args, **kwargs)
 
 
-# Register the b3 provider at import time.
+# Register the pipeline version provider at import time.
 register_uncertainty_provider("tta_uncertainty", MultiAxisTTAProvider)
 
 

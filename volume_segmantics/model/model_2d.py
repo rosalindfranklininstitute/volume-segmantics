@@ -362,7 +362,7 @@ import volume_segmantics.utilities.config as cfg
 def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.Module:
     struct_dict_copy = model_struc_dict.copy()
     model_type = struct_dict_copy.pop("type")
-    # b3 trainer saves model_struc_dict["type"] as a string
+    # pipeline version trainer saves model_struc_dict["type"] as a string
     # ("PIPELINE_MULTITASK_UNET", "U_NET", ...); legacy v0.4 saves the
     # ``ModelType`` enum value itself. Coerce both to the enum so the
     # downstream ``==`` comparisons work for either format.

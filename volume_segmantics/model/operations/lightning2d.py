@@ -223,7 +223,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         if pl is None:  # pragma: no cover
             raise ImportError(
                 "pytorch-lightning is not installed. "
-                "Install via `pip install volume-segmantics` (b3 promotes "
+                "Install via `pip install volume-segmantics` (pipeline version promotes "
                 "Lightning to a required dep)."
             ) from _pl_import_error
 
@@ -314,7 +314,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         """Build a Lightning module directly from a parsed pipeline config.
 
         Resolves ``encoder_name`` / ``encoder_weights`` / ``encoder_depth``
-        from the legacy ``settings.model`` dict (v0.4 layout). The b3
+        from the legacy ``settings.model`` dict (v0.4 layout). The pipeline version
         head registry's :func:`build_head_modules` builds the head
         modules; :class:`PipelineMultitaskUnet` wraps an SMP / DINO
         backbone around a single shared decoder + the heads.
@@ -326,7 +326,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             encoder_weights = None
         encoder_depth = int(model_cfg.get("encoder_depth", 5) or 5)
 
-        # b3 default: single-channel (grayscale) input. 2.5D slicing is
+        # pipeline version default: single-channel (grayscale) input. 2.5D slicing is
         # honoured if the legacy YAML enables it.
         resolved_in_channels = cfg.get_model_input_channels(settings) or in_channels
 
@@ -1013,7 +1013,7 @@ class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
         "val_semantic_loss": "valid_seg",
         "train_boundary_loss": "train_boundary",
         "val_boundary_loss": "valid_boundary",
-        # b3 has distance + sdm heads; the v0.4 visualizer only carves
+        # pipeline version has distance + sdm heads; the v0.4 visualizer only carves
         # out a single "task3" lane. We route distance there first;
         # if distance isn't enabled but sdm is, sdm fills the slot.
         "train_distance_loss": "train_task3",
@@ -1154,7 +1154,7 @@ class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
 
         # The visualizer's multitask path indexes a fixed set of keys
         # unconditionally (``boundary_dice``, ``train_task3``, etc.) and
-        # KeyErrors when one is absent. b3 doesn't currently emit
+        # KeyErrors when one is absent. pipeline version doesn't currently emit
         # per-boundary Dice; default any expected-but-missing column
         # to zero-filled. The plot's ``any(...)`` guards still skip
         # over the empty series — they just need the key to exist.
@@ -1287,7 +1287,7 @@ class VolSegSSLVizCallback(pl.Callback if pl is not None else object):
                     )
 
         # Pseudo-labelling viz: needs an unlabeled dataloader + a
-        # PseudoLabelGenerator. b3's Lightning training doesn't
+        # PseudoLabelGenerator. pipeline version's Lightning training doesn't
         # currently plumb either, so we build both here on demand
         # (cached on first success). Skip the whole branch silently
         # when the user hasn't asked for pseudo-labelling.

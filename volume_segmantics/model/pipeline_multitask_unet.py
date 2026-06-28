@@ -56,7 +56,7 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
     decoder_attention_type
         SMP decoder attention. ``None`` or ``"scse"``.
     in_channels
-        Network input channel count. b3 default = 1 (grayscale).
+        Network input channel count. pipeline version default = 1 (grayscale).
     """
 
     requires_divisible_input_shape = False
@@ -140,7 +140,7 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
             head_upsampling = None
 
         #  Decoder 
-        # Single shared decoder. (b3 drops decoder_sharing: separate.)
+        # Single shared decoder. (pipeline version drops decoder_sharing: separate.)
         if decoder_use_batchnorm is True:
             use_norm: Union[bool, str] = "batchnorm"
         elif decoder_use_batchnorm is False:
@@ -166,7 +166,7 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
         # in_channels = decoder_channels[-1].
         decoder_out_channels = int(decoder_channels[-1])
         for i, head in enumerate(head_modules):
-            # Most b3 heads expose .conv.in_channels directly. If a
+            # Most pipeline version heads expose .conv.in_channels directly. If a
             # future head wraps multiple convs, this check is best-
             # effort; we don't make it a hard error.
             if hasattr(head, "conv") and hasattr(head.conv, "in_channels"):
@@ -182,7 +182,7 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
         # Single shared decoder: every head reads decoder index 0.
         self.head_to_decoder: List[int] = [0] * len(head_modules)
 
-        # No optional classification head in b3.
+        # No optional classification head in pipeline version.
         self.classification_head = None
 
         # Stash the canonical head names so callers can verify the

@@ -376,7 +376,7 @@ class TrainingVisualizer:
             seg_preds = torch.argmax(probs, dim=1)
             
             # Discover the underlying model's canonical head names if
-            # available — b3's :class:`PipelineMultitaskUnet` exposes
+            # available — pipeline version's :class:`PipelineMultitaskUnet` exposes
             # ``head_names``. Used below to identify regression heads
             # (distance / sdm) and to extend the panel layout when an
             # SDM head is also enabled.
@@ -386,7 +386,7 @@ class TrainingVisualizer:
             head_names = tuple(head_names) if head_names is not None else ()
 
             if isinstance(targets, dict):
-                # b3 ``PipelineMultiTaskDataset`` keys: ``semantic``
+                # pipeline version ``PipelineMultiTaskDataset`` keys: ``semantic``
                 # (B,H,W long), ``boundary`` / ``distance`` / ``sdm``
                 # (B,K,H,W float). v0.4 MONAI dict keys: ``seg`` /
                 # ``boundary`` / ``task3``. Both naming schemes are
@@ -417,7 +417,7 @@ class TrainingVisualizer:
 
             seg_gt = None
             if seg_target is not None:
-                # b3 emits class indices ``(B, H, W) long``; v0.4
+                # pipeline version emits class indices ``(B, H, W) long``; v0.4
                 # MONAI may emit one-hot ``(B, C, H, W)`` or squeezed
                 # ``(B, 1, H, W)``. Reduce to ``(B, H, W)`` indices.
                 if seg_target.dim() == 3:
@@ -478,7 +478,7 @@ class TrainingVisualizer:
                     task3_preds = (torch.sigmoid(task3_output) > 0.5).float()
 
             # Optional 4th head — only when the model has all four
-            # b3 heads enabled (semantic + boundary + distance + sdm).
+            # pipeline version heads enabled (semantic + boundary + distance + sdm).
             sdm_preds = None
             sdm_is_regression = False
             has_sdm_output = (
@@ -681,7 +681,7 @@ class TrainingVisualizer:
             # Compute consistency (difference between student and teacher)
             consistency_diff = torch.abs(student_probs - teacher_probs).mean(dim=1)
             
-            # Get ground truth if available — tolerate both b3
+            # Get ground truth if available — tolerate both pipeline version
             # pipeline keys (``semantic``, ``(B, H, W) long``) and
             # the v0.4 MONAI keys (``seg``, ``(B, C, H, W)`` one-hot).
             if isinstance(targets, dict):

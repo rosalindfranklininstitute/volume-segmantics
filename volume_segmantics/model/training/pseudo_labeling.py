@@ -312,7 +312,7 @@ class PseudoLabelGenerator:
               ``mask``: ``(B, 1, H, W) bool``.
             * ``distance.pseudo_target``: ``(B, 1, H, W) float``;
               ``mask``: ``(B, 1, H, W) bool`` (all-True — no natural
-              confidence for distance regression in b3).
+              confidence for distance regression in pipeline version).
             * ``sdm.pseudo_target``: ``(B, K, H, W) float``; ``mask``:
               same shape, all-True.
 
@@ -370,7 +370,7 @@ class PseudoLabelGenerator:
                     "mask": mask,
                 }
             elif name == "distance":
-                # Identity target; no natural confidence in b3.
+                # Identity target; no natural confidence in pipeline version.
                 target = raw.detach().float()
                 mask = torch.ones_like(target, dtype=torch.bool)
                 out[name] = {
@@ -388,7 +388,7 @@ class PseudoLabelGenerator:
             else:
                 raise ValueError(
                     f"generate_per_head_pseudo_labels: unknown head "
-                    f"{name!r}; b3 supports semantic / boundary / "
+                    f"{name!r}; pipeline version supports semantic / boundary / "
                     f"distance / sdm."
                 )
         return out

@@ -5,7 +5,7 @@ Wraps the morphological-gradient boundary derivation from
 single-slice case the dataset consumes per sample.
 
 Output: ``(H, W) float32`` binary boundary mask in ``{0.0, 1.0}``. The
-b3 :class:`BoundaryHead` is a 1-channel raw-logits head + the loss
+pipeline version :class:`BoundaryHead` is a 1-channel raw-logits head + the loss
 function applies sigmoid internally; this generator emits ``float32``
 in ``{0, 1}`` so loss computations don't repeat a uint8 -> float cast.
 """

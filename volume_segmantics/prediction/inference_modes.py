@@ -75,7 +75,7 @@ def list_inference_modes() -> List[str]:
     return sorted(_MODES)
 
 
-#  b3 ships four modes 
+#  pipeline version ships four modes 
 
 
 # Common keys every mode populates.

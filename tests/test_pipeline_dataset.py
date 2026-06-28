@@ -524,7 +524,7 @@ def test_get_pipeline_dataloaders_yields_dict_batch(
 
 
 def test_prepare_training_batch_routes_pipeline_dict():
-    """The b3 pipeline dict shape (`'image'` + head names) takes the new
+    """The pipeline version dict shape (`'image'` + head names) takes the new
     helper path. MONAI dict (`'img'` + `'seg'`) keeps the legacy path.
     """
     batch = {
