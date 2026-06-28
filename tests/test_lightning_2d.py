@@ -33,7 +33,7 @@ from volume_segmantics.data.pipeline_loader import (
     TransformSpec,
 )
 from volume_segmantics.model.heads import build_head_modules
-from volume_segmantics.model.operations.lightning_2d import (
+from volume_segmantics.model.operations.lightning2d import (
     EpochHistoryCallback,
     UnfreezeEncoderCallback,
     VolSeg2dLightningModule,
