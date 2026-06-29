@@ -101,7 +101,7 @@ viewer.add_labels(l_roi)
 
 Once you have your image-label layer ROI pair (250Cube), you can then train a Volume-Segmantics model using these crops and then utilise this model to predict the vessel components on the original 700Cube image; effectively remaking the original 700CUBE labels file using your own segmentation model. Creating your prediction will take 3 steps; 
 
-#### 1 Initialise a Volume-Segmantics Session:
+### 1 Initialise a Volume-Segmantics Session:
 
 To use Volume-Segmantics, you will need a terminal running a specific working environment with the correct packages installed. This environment has already been created for this tutorial, and the files connected to that environment can be viewed in the *'volume_segmantics'* directory that has been copied into your individual user space. Once the environment is activated, you will need to navigate to this directory in order to run its packages.
 
@@ -118,7 +118,7 @@ conda activate 'path_to_Volume-Segmantics-env'
 cd /ceph/users/'individual_user'/'path_to_volume-segmantics-directory'
 ```
 
-#### 2 Create Training Model:
+### 2 Create Training Model:
 
 To train your segmentation model, you will run the following command in the Volume-Segmantics terminal;
 
@@ -154,7 +154,7 @@ As the training is running, you will observe the data being sliced, a training e
 A good way to initially instect your model is to open both the model_prediction_image.png and model_loss-Plot.png; visually inspect the model screenshots and the graph where if the components seem to be correct and the 2 lines on the graph do not cross, the model will have been created as per its settings.
 ``*
 
-#### 3 Generate Model Prediction:
+### 3 Generate Model Prediction:
 
 You can now use your model (trained on 250CUBE) to predict the vessel components of the original 700CUBE image; to do this, you will run the following command in the *same* Volume-Segmantics terminal;
 

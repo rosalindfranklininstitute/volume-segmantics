@@ -51,7 +51,7 @@ Volume-segmantics supports 2.5D slicing, which creates multi-channel images from
 
 ### Tutorial using example data
 
-A tutorial is available [here](training_data/README.md) that provides a walk-through of how to segment blood vessels from synchrotron X-ray micro-CT data collected on a sample of human placental tissue.
+A tutorial is available [here](https://github.com/rosalindfranklininstitute/volume-segmantics/blob/main/training_data/README.md), that provides a walk-through of how to segment blood vessels from synchrotron X-ray micro-CT data collected on a sample of human placental tissue.
 
 ## Currently supported model architectures and encoders
 
