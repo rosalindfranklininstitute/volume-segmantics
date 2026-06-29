@@ -12,7 +12,7 @@ For the 13.11.25 'Segmentation with Volume Segmantics' seminar/tutorial, environ
 
 The dataset a set of files: a .tif image file containing a 700-slice cube of microCT scan data, and two .tif label files illustrating two biological components of the microCT scan data: the 'Villi' and 'Vessels'. The label-layer files are the best versions of the dataset currently available and referred to as GroundTruth Images. These files can be found in the 'COMPUTER-VISION_TUTORIAL_DATA directory that has also been added to your individual user space. The label files can be superimposed over the microCT image and viewed in 2D and 3D; the diagram below shows screenshot examples of the files viewed in Napari.  
 
-![width=80](_static/images/WINSdata-ViewFigure.png)
+<img src="_static/images/WINSdata-ViewFigure.png" width="80%">
 
 *``
 For this tutorial, we will only be using the GT-Vessel Data. 
