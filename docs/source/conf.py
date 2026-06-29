@@ -42,3 +42,4 @@ html_theme_options = {
     'collapse_navigation': False,  
     'sticky_navigation': True,
 }
+html_css_files = ['css/custom.css']

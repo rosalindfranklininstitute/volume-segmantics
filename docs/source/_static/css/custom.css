@@ -1,0 +1,16 @@
+/* Widen the RTD theme content area to use the full available width
+   instead of the default fixed/centered column. */
+
+.wy-nav-content {
+    max-width: none !important;
+    width: 100%;
+}
+
+.rst-content {
+    max-width: none !important;
+}
+
+/* Optional: tighten side padding a bit since the column is now wider */
+.wy-nav-content-wrap {
+    margin-left: 300px; /* matches default sidebar width, keeps alignment */
+}
