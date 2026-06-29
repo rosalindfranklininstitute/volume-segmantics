@@ -1,9 +1,9 @@
 name: Build-sphinx-docs
 on:
   push:
-    branches: [docs]
+    branches: [readthedocs]
   pull_request:
-    branches: [docs]
+    branches: [readthedocs]
   workflow_dispatch:
 
 permissions:
