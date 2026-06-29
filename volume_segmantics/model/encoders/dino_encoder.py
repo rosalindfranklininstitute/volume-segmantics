@@ -4,10 +4,7 @@ DINO Vision Transformer encoder for segmentation.
 This module provides DINO (v1, v2, v3) encoder wrappers that adapt Vision Transformer
 models to work with CNN-based decoders in segmentation_models_pytorch.
 
-Based on:
-- DINOv1: Caron et al., "Emerging Properties in Self-Supervised Vision Transformers", ICCV 2021
-- DINOv2: Oquab et al., "DINOv2: Learning Robust Visual Features without Supervision", 2023
-- DINOv3: Siméoni et al., "DINOv3", 2025 - arXiv:2508.10104
+
 """
 
 import logging
@@ -353,17 +350,10 @@ class DINOEncoder(nn.Module):
                 # For grayscale: average RGB channels
                 new_embed.weight.data = original_embed.weight.data.mean(dim=1, keepdim=True)
             elif in_channels > 3:
-                # For multi-channel (2.5D): replicate and average
-                # Repeat RGB weights and average
-                weight_repeated = original_embed.weight.data.repeat(1, (in_channels + 2) // 3, 1, 1)
-                new_embed.weight.data = weight_repeated[:, :in_channels, :, :].mean(dim=1, keepdim=False)
-                # Average across the channel dimension
-                if in_channels % 3 != 0:
-                    # Handle remainder channels by averaging
-                    for i in range(3, in_channels, 3):
-                        new_embed.weight.data[:, i:i+3, :, :] = (
-                            original_embed.weight.data.mean(dim=1, keepdim=True).repeat(1, 3, 1, 1)
-                        )
+                # For multi-channel (e.g. 2.5D): use the mean RGB kernel for every input channel.
+                # This keeps the weight shape consistent: (out_ch, in_channels, kH, kW)
+                rgb_mean = original_embed.weight.data.mean(dim=1, keepdim=True)  # (out_ch, 1, kH, kW)
+                new_embed.weight.data = rgb_mean.repeat(1, in_channels, 1, 1)
             else:
                 # For 2 channels: use first two RGB channels
                 new_embed.weight.data = original_embed.weight.data[:, :in_channels, :, :]

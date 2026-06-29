@@ -37,11 +37,12 @@ class BaseDataManager:
             self.data_vol = utils.clip_to_uint8(
                 self.data_vol, self.data_mean, self.st_dev_factor
             )
+
         if self.settings.minmax_norm:
             logging.info(f"Before normalisation, Min: {np.min(self.data_vol)}, Max: {np.max(self.data_vol)}")
             self.data_vol = self.data_vol - np.min(self.data_vol)
             self.data_vol = self.data_vol/ np.max(self.data_vol)
-            
+
         if np.isnan(self.data_vol).any():
             logging.info(f"Replacing NaN values.")
             self.data_vol = np.nan_to_num(self.data_vol, copy=False)

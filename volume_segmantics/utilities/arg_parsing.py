@@ -119,7 +119,7 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         help="Path to directory containing unlabeled image slices (required for semi-supervised learning or pseudo-labeling)",
     )
     return parser
-    
+
 
 
 

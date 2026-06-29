@@ -38,8 +38,8 @@ SMALL_CUDA_BATCH = 8 # Size of batch on small GPU
 NUM_WORKERS = 8 # Number of parallel workers for training/validation dataloaders
 PIN_CUDA_MEMORY = True # Whether to pin CUDA memory for faster data transfer
 IM_SIZE_DIVISOR = 32 # Image dimensions need to be a multiple of this value
-MODEL_INPUT_CHANNELS = 1 # Use 1 for grayscale input images, 3 for RGB (2.5D)
-USE_ALL_GPUS = False # Use all available GPUs (determined by CUDA_VISIBLE_DEVICES environment variable)
+MODEL_INPUT_CHANNELS = 3 # Use 1 for grayscale input images, 3 for RGB (2.5D)
+USE_ALL_GPUS = False
 
 DEFAULT_MIN_LR = 0.00075 # Learning rate to return if LR finder fails
 LR_DIVISOR = 3 # Divide the automatically calculated learning rate (min gradient) by this magic number
@@ -47,18 +47,21 @@ LR_DIVISOR = 3 # Divide the automatically calculated learning rate (min gradient
 IMAGENET_MEAN = 0.449 # Mean value for single channel imagnet normalisation
 IMAGENET_STD = 0.226 # Standard deviation for single channel imagenet normalisation
 
-IMAGENET_RGB_MEAN = [0.485, 0.456, 0.406] 
-IMAGENET_RGB_STD = [0.229, 0.224, 0.225] 
+IMAGENET_RGB_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_RGB_STD = [0.229, 0.224, 0.225]
 
 def get_model_input_channels(settings=None):
-    if settings and getattr(settings, 'use_2_5d_slicing', False):
-        return getattr(settings, 'num_slices', 3)  # Return number of slices for 2.5D
-    return MODEL_INPUT_CHANNELS  # Default to 1 channel for 2D slicing
+    """Return input channels: 2.5D (slicing or prediction) uses num_slices, else 1 for 2D."""
+    if settings and (
+        getattr(settings, 'use_2_5d_slicing', False)
+        or getattr(settings, 'use_2_5d_prediction', False)
+    ):
+        return getattr(settings, 'num_slices', 3)  # 2.5D: multiple channels
+    return 1  # 2D: single channel (do not use MODEL_INPUT_CHANNELS here)
 
 def get_imagenet_normalization(settings=None):
     if settings and getattr(settings, 'use_2_5d_slicing', False):
         num_channels = getattr(settings, 'num_slices', 3)
-        # For 2.5D, use single channel normalization repeated for all channels
+        # For 2.5D, single channel normalization repeated for all channels
         return [IMAGENET_MEAN] * num_channels, [IMAGENET_STD] * num_channels
     return IMAGENET_MEAN, IMAGENET_STD  # Single channel normalization for 2D
- 

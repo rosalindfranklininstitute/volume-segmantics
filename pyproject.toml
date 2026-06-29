@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "volume-segmantics"
-version = "0.3.2"
+version = "0.3.3"
 description = "A toolkit for semantic segmentation of volumetric data using pyTorch deep learning models"
 authors = ["Oliver King, Avery Pennington <avery.pennington@rfi.ac.uk>"]
 license = "Apache-2.0"
@@ -15,27 +15,34 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9"
+python = ">=3.10"
 albumentations = "^1.1.0"
 h5py = "^3.0.0"
 numpy = "^1.18.0"
 matplotlib = "^3.3.0"
-torch = ">=1.7.1"
+torch = ">=2.5.1"
+monai = ">=1.3.0"
 #segmentation-models-pytorch = "^0.2.1"
 segmentation-models-pytorch = "*"
 termplotlib = "^0.3.6"
 imagecodecs = "> 2022.2.22"
 torchseg = "*"
+imageio = "*"
+scikit-image = "*"
+torchmetrics = "*"
+termcolor = "*"
+sparse = "*"
+
 [tool.poetry.dev-dependencies]
 opencv-python-headless = "4.8.0.74"
-torch = "< 2.0.1"
 black = ">=22.1.0"
 pdoc = ">=10"
 pylint = ">=2.4.0"
 pytest = ">=6"
 pytest-cov = "*"
 zarr = "*"
-monai = ">=1.3.0"
+
+
 [tool.pytest.ini_options]
 addopts = "-v --cov=volume_segmantics --cov-report term-missing"
 testpaths = [
