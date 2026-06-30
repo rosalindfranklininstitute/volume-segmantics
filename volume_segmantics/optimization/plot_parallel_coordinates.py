@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -48,7 +49,8 @@ def plot_parallel_coordinates(study, save_path, params=None):
 
     for i, p in enumerate(params):
         raw = df[f"params_{p}"]
-        is_numeric = np.issubdtype(raw.dtype, np.number)
+        # is_numeric = np.issubdtype(raw.dtype, np.number)
+        is_numeric = pd.api.types.is_numeric_dtype(raw)
 
         if is_numeric:
             vmin, vmax = raw.min(), raw.max()
@@ -123,8 +125,7 @@ def plot_parallel_coordinates(study, save_path, params=None):
 
     host.set_title("Parallel Coordinate Plot", fontsize=14, pad=15)
 
-    # Reserve dedicated space on the right for the colorbar, rather than
-    # letting it overlap the last parameter axis.
+    # Reserve dedicated space on the right for the colorbar
     fig.subplots_adjust(left=0.06, right=0.88, top=0.9, bottom=0.22)
     cbar_ax = fig.add_axes([0.91, 0.22, 0.02, 0.68])  # [left, bottom, width, height]
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
