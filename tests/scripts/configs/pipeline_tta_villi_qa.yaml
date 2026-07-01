@@ -1,0 +1,115 @@
+# TTA-uncertainty QA on the 2-class VILLI data. Trains a real model so the
+# uncertainty/confidence maps are meaningful, then checks both that the model
+# segments (segmentation-dice on teacher_argmax) AND that the uncertainty maps
+# behave: bounded variance/entropy and a strong variance <-> low-max-prob
+# correlation (the defining property of a good confidence map).
+paths:
+  image: training_data/sample_123761_IMAGE.tiff
+  label: training_data/sample_123761_VILLI_LABELS.tiff
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_tta_villi_qa
+global_overrides:
+  train:
+    image_size: 256
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 4
+    patience: 4
+    starting_lr: 5.0e-05
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet
+  predict:
+    quality: medium
+    output_probs: true
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+    prediction:
+      inference_mode: tta_uncertainty
+      uncertainty_provider: tta_uncertainty
+tests:
+- name: train_tta_villi_qa
+  type: train
+  model_key: tta_villi_qa_model
+  overrides:
+    train:
+      model_output_fn: pipeline_tta_villi_qa
+      loss_criterion: CombinedCEDiceLoss
+      ce_weight: 0.2
+      dice_weight: 0.8
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:tta_villi_qa_model}
+- name: predict_tta_villi_qa
+  type: pipeline_predict_zarr
+  model_key: tta_villi_qa_model
+  inference_mode: tta_uncertainty
+  output_zarr: prediction.zarr
+  zarr_key: tta_zarr
+- name: assert_tta_zarr_keys
+  type: pipeline_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:tta_zarr}
+  - --keys
+  - teacher_argmax
+  - teacher_probs
+  - tta_variance_map
+  - tta_entropy_map
+- name: assert_segmentation_quality
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:tta_zarr}
+  - --pred-key
+  - teacher_argmax
+  - --gt-label
+  - training_data/sample_123761_VILLI_LABELS.tiff
+  - --min-dice
+  - '0.5'
+- name: assert_variance_nonneg
+  type: pipeline_assert
+  subcommand: zarr-array-range
+  args:
+  - ${artifact:tta_zarr}
+  - --key
+  - tta_variance_map
+  - --min
+  - '0.0'
+- name: assert_entropy_bounds
+  type: pipeline_assert
+  subcommand: zarr-array-range
+  args:
+  - ${artifact:tta_zarr}
+  - --key
+  - tta_entropy_map
+  - --min
+  - '0.0'
+  - --max
+  - '0.7'
+- name: assert_variance_low_max_prob
+  type: pipeline_assert
+  subcommand: variance-low-max-prob
+  args:
+  - ${artifact:tta_zarr}
+  - --min-spearman
+  - '0.3'

@@ -74,10 +74,17 @@ NAMED_CONFIGS = {
     "pipeline_instance_seg": "tests/scripts/configs/pipeline_instance_seg_smoke.yaml",
     "pipeline_semisup": "tests/scripts/configs/pipeline_semisup_smoke.yaml",
     "pipeline_tta_uncertainty": "tests/scripts/configs/pipeline_tta_uncertainty_smoke.yaml",
+    "pipeline_tta_villi": "tests/scripts/configs/pipeline_tta_villi_smoke.yaml",
     "pipeline_trainer_parity": "tests/scripts/configs/pipeline_trainer_parity_smoke.yaml",
     "pipeline_2.5d": "tests/scripts/configs/pipeline_two5d_smoke.yaml",
     "pipeline_dino": "tests/scripts/configs/pipeline_dino_smoke.yaml",
+    "pipeline_instance_cell": "tests/scripts/configs/pipeline_instance_cell_smoke.yaml",
     "qa_pipeline_multihead": "tests/scripts/configs/pipeline_multihead_qa.yaml",
+    "qa_pipeline_instance_cell": "tests/scripts/configs/pipeline_instance_cell_qa.yaml",
+    "qa_semantic_cell": "tests/scripts/configs/semantic_cell_qa.yaml",
+    "qa_pipeline_semantic_only": "tests/scripts/configs/pipeline_semantic_only_qa.yaml",
+    "qa_pipeline_tta_uncertainty": "tests/scripts/configs/pipeline_tta_uncertainty_qa.yaml",
+    "qa_pipeline_tta_villi": "tests/scripts/configs/pipeline_tta_villi_qa.yaml",
 }
 
 # Groups that expand to multiple configs run in sequence

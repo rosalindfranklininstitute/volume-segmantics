@@ -83,14 +83,39 @@ def test_distance_shape_and_dtype(labels_square):
     assert out.dtype == np.float32
 
 
-def test_distance_zero_on_foreground(labels_square):
+def test_distance_positive_on_foreground(labels_square):
+    # Foreground EDT: positive inside FG (peaking at object centres) so the
+    # distance_watershed producer has maxima to seed the watershed on.
     out = derive_distance_target_2d(labels_square)
-    assert float(out[labels_square > 0].max()) == 0.0
+    assert float(out[labels_square > 0].max()) > 0.0
 
 
-def test_distance_positive_on_background(labels_square):
+def test_distance_zero_on_background(labels_square):
     out = derive_distance_target_2d(labels_square)
-    assert float(out[labels_square == 0].min()) > 0.0
+    assert float(out[labels_square == 0].max()) == 0.0
+
+
+def test_distance_normalized_per_object(labels_square):
+    # Per-object normalisation: every object peaks at exactly 1.0 and the
+    # whole map is in [0, 1] (so the regression head has a learnable,
+    # one-peak-per-object target for watershed seeding).
+    out = derive_distance_target_2d(labels_square)
+    assert out.min() >= 0.0 and out.max() <= 1.0 + 1e-6
+    assert abs(float(out.max()) - 1.0) < 1e-6
+
+
+def test_distance_each_object_peaks_at_one(labels_square):
+    # Two separated objects -> each reaches 1.0 independently of its size.
+    import numpy as np
+    lab = np.zeros((40, 40), dtype=np.int32)
+    lab[5:9, 5:9] = 1          # small object
+    lab[15:35, 15:35] = 1      # large object
+    out = derive_distance_target_2d(lab)
+    from scipy.ndimage import label as _lbl
+    comps, n = _lbl(lab > 0)
+    assert n == 2
+    for c in (1, 2):
+        assert abs(float(out[comps == c].max()) - 1.0) < 1e-6
 
 
 def test_distance_rejects_non_edt(labels_square):

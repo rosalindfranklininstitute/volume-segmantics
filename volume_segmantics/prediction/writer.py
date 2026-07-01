@@ -27,13 +27,44 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union, TypeVar
 
 import numpy as np
 import zarr
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _retry_on_oserror(
+    fn: Callable[[], _T],
+    *,
+    what: str = "zarr write",
+    attempts: int = 10,
+    base_delay: float = 0.1,
+) -> _T:
+    """Run ``fn``; retry transient filesystem errors before giving up.
+
+    zarr's :class:`LocalStore` writes metadata atomically (write a ``.partial``
+    temp file, then ``os.replace`` it onto ``zarr.json``). On Windows/WSL mounts
+    that replace intermittently fails with ``PermissionError`` (WinError 5) when
+    an antivirus/search-indexer briefly holds a handle on the just-created file.
+    The lock is transient, so a short bounded retry succeeds. Re-raises the last
+    error after ``attempts`` so genuine failures still surface.
+    """
+    last: Optional[OSError] = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except OSError as exc:  # PermissionError is an OSError subclass
+            last = exc
+            time.sleep(base_delay * (i + 1))
+    logger.warning("%s still failing after %d retries; re-raising.", what, attempts)
+    assert last is not None
+    raise last
 
 
 PREDICTION_SCHEMA_VERSION: str = "prediction_v1"
@@ -362,8 +393,9 @@ class PredictionZarrWriter:
         if not per_axis:
             return
         if self._per_axis_group is None:
-            self._per_axis_group = self._root.create_group(
-                "per_axis_instances",
+            self._per_axis_group = _retry_on_oserror(
+                lambda: self._root.create_group("per_axis_instances"),
+                what="create per_axis_instances group",
             )
         for axis_name, arr_data in per_axis.items():
             if axis_name not in ("xy", "xz", "yz"):
@@ -376,14 +408,19 @@ class PredictionZarrWriter:
                     f"per_axis_instances/{axis_name}: expected 3D array; "
                     f"got shape {arr_data.shape}"
                 )
-            arr = self._per_axis_group.create_dataset(
-                axis_name,
-                shape=arr_data.shape,
-                dtype=np.uint32,
-                chunks=tuple(min(c, s) for c, s in zip(
-                    self.chunks, arr_data.shape,
-                )),
-                overwrite=False,
+            arr = _retry_on_oserror(
+                lambda axis_name=axis_name, arr_data=arr_data: (
+                    self._per_axis_group.create_dataset(
+                        axis_name,
+                        shape=arr_data.shape,
+                        dtype=np.uint32,
+                        chunks=tuple(min(c, s) for c, s in zip(
+                            self.chunks, arr_data.shape,
+                        )),
+                        overwrite=False,
+                    )
+                ),
+                what=f"create per_axis_instances/{axis_name}",
             )
             arr[:] = arr_data.astype(np.uint32, copy=False)
             self._arrays[f"per_axis_instances/{axis_name}"] = arr
@@ -477,10 +514,21 @@ class PredictionZarrWriter:
         if extra_attrs:
             manifest.update(dict(extra_attrs))
 
-        # Write the manifest to root .zattrs. zarr's default attrs
-        # serialise via JSON; our values are JSON-friendly.
-        for k, v in manifest.items():
-            self._root.attrs[k] = v
+        # Write the manifest to root attrs. Prefer a single batched metadata
+        # write (zarr 3 ``update_attributes``) over one-rewrite-per-key, and
+        # retry transient FS locks (Windows atomic-replace races). Setting the
+        # full manifest is idempotent, so retrying the whole block is safe.
+        if hasattr(self._root, "update_attributes"):
+            _retry_on_oserror(
+                lambda: self._root.update_attributes(dict(manifest)),
+                what="zarr root attrs",
+            )
+        else:
+            def _write_manifest() -> None:
+                for k, v in manifest.items():
+                    self._root.attrs[k] = v
+
+            _retry_on_oserror(_write_manifest, what="zarr root attrs")
 
         self._finalized = True
         logger.info(
@@ -525,12 +573,15 @@ class PredictionZarrWriter:
     ) -> zarr.Array:
         if name in self._arrays:
             return self._arrays[name]
-        arr = self._root.create_dataset(
-            name,
-            shape=tuple(shape),
-            dtype=dtype,
-            chunks=tuple(min(c, s) for c, s in zip(chunks, shape)),
-            overwrite=False,
+        arr = _retry_on_oserror(
+            lambda: self._root.create_dataset(
+                name,
+                shape=tuple(shape),
+                dtype=dtype,
+                chunks=tuple(min(c, s) for c, s in zip(chunks, shape)),
+                overwrite=False,
+            ),
+            what=f"create array {name!r}",
         )
         self._arrays[name] = arr
         return arr

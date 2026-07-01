@@ -75,7 +75,36 @@ class PredictionResult:
     output_zarr: Optional[Path] = None
 
 
-#  Predict 
+#  Predict
+
+
+def _preprocess_prediction_volume(
+    data_vol: np.ndarray, settings: SimpleNamespace
+) -> np.ndarray:
+    """Apply the same intensity preprocessing as ``BaseDataManager``.
+
+    The legacy predictor (``VolSeg2DPredictionManager`` -> ``BaseDataManager``)
+    clips/rescales the input volume to uint8 before prediction, and the slicer
+    rescales to uint8 (``img_as_ubyte``) when writing training slices. The
+    pipeline ``predict`` path loads the volume directly, so it must repeat that
+    preprocessing or a raw (e.g. uint16) volume reaches the model at the wrong
+    intensity scale. Mirrors ``BaseDataManager._preprocess_data``.
+    """
+    if getattr(settings, "downsample", False):
+        data_vol = utils.downsample_data(data_vol)
+    if getattr(settings, "clip_data", True):
+        data_mean = float(np.nanmean(data_vol))
+        data_vol = utils.clip_to_uint8(
+            data_vol, data_mean, getattr(settings, "st_dev_factor", 2.575)
+        )
+    if getattr(settings, "minmax_norm", False):
+        data_vol = data_vol - np.min(data_vol)
+        vol_max = np.max(data_vol)
+        if vol_max > 0:
+            data_vol = data_vol / vol_max
+    if np.isnan(data_vol).any():
+        data_vol = np.nan_to_num(data_vol, copy=False)
+    return data_vol
 
 
 def predict(
@@ -198,6 +227,14 @@ def predict(
         "Loaded volume %s shape=%s dtype=%s",
         data_vol_path, data_vol.shape, data_vol.dtype,
     )
+
+    # Match the intensity preprocessing that BaseDataManager applies on the
+    # legacy path (and that the slicer applies when writing training slices):
+    # clip + rescale to uint8 (and/or min-max normalise). Without this the
+    # pipeline predict path would feed a raw e.g. uint16 volume straight to the
+    # model at the wrong intensity scale -- a train/predict normalisation
+    # mismatch that collapses the semantic output to near-empty foreground.
+    data_vol = _preprocess_prediction_volume(data_vol, settings)
 
     predictor = VolSeg2dPredictor(str(model_path), settings)
 

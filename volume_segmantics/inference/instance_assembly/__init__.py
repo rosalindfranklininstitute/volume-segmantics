@@ -65,7 +65,19 @@ def list_backends() -> List[str]:
     return sorted(_BACKENDS)
 
 
-#  Lazy registration of the optional uSegment3D backend 
+#  Built-in dependency-free backends
+from volume_segmantics.inference.instance_assembly.slice_overlap import (
+    SliceOverlapAssembler,
+)
+from volume_segmantics.inference.instance_assembly.watershed_3d import (
+    Watershed3DAssembler,
+)
+
+register_backend("slice_overlap", SliceOverlapAssembler)
+register_backend("watershed_3d", Watershed3DAssembler)
+
+
+#  Lazy registration of the optional uSegment3D backend
 # Importing the adapter triggers an upstream ImportError when the
 # `[usegment3d]` extra isn't installed; we catch it so the registry
 # stays usable on systems without the extra.

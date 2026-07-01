@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import math
 import sys
 from pathlib import Path
@@ -180,10 +181,24 @@ def assert_instance_count_plausible(
     gt_label_path: Path,
     min_count: int = 2,
     max_multiplier: float = 100.0,
+    min_multiplier: float = 0.0,
+    gt_mode: str = "cc",
     instance_labels_key: str = "instance_labels",
 ) -> None:
-    """Predicted instance count vs the GT connected-component count.
+    """Predicted instance count vs a ground-truth reference count.
 
+    ``gt_mode`` selects how the reference is derived from ``gt_label_path``:
+
+    * ``"cc"`` (default) — connected components of the binarised foreground.
+      Right for binary/semantic GT where individual objects aren't labelled.
+    * ``"labels"`` — the number of distinct non-zero label values. Right when
+      the GT is already an instance label volume (each object a unique id);
+      ``"cc"`` would undercount touching objects.
+
+    The predicted count must lie in
+    ``[min_multiplier * gt_count, max_multiplier * gt_count]`` (and be at
+    least ``min_count``). ``min_multiplier=0`` (default) imposes no lower bound,
+    preserving the original behaviour.
     """
     g = _open_zarr(zarr_path)
     inst_arr = np.asarray(g[instance_labels_key][:])
@@ -194,25 +209,124 @@ def assert_instance_count_plausible(
             f"{min_count}); the assembler likely produced a degenerate "
             f"output."
         )
-    # Compare against GT cc count.
     gt_vol = _load_label_volume(gt_label_path)
-    gt_fg = (gt_vol > 0).astype(np.uint8)
-    from scipy import ndimage as ndi
-    _, gt_cc = ndi.label(gt_fg)
-    if gt_cc < 1:
-        gt_cc = 1
-    upper = int(max_multiplier * gt_cc)
+    if gt_mode == "labels":
+        gt_count = int((np.unique(gt_vol) != 0).sum())
+    elif gt_mode == "cc":
+        from scipy import ndimage as ndi
+        _, gt_count = ndi.label((gt_vol > 0).astype(np.uint8))
+    else:
+        raise ValueError(f"gt_mode must be 'cc' or 'labels'; got {gt_mode!r}")
+    gt_count = max(int(gt_count), 1)
+
+    upper = int(max_multiplier * gt_count)
     if pred_count > upper:
         raise AssertionError(
-            f"instance-count: zarr has {pred_count} instances; gt cc "
-            f"count={gt_cc}; ratio={pred_count / gt_cc:.1f}x exceeds "
-            f"max_multiplier={max_multiplier}. Likely 53k-noise pathology "
-            f"(v0.5 dev-history risk)."
+            f"instance-count: zarr has {pred_count} instances; gt "
+            f"count={gt_count} (mode={gt_mode}); ratio="
+            f"{pred_count / gt_count:.1f}x exceeds max_multiplier="
+            f"{max_multiplier}."
         )
+    if min_multiplier > 0:
+        lower = math.floor(min_multiplier * gt_count)
+        if pred_count < lower:
+            raise AssertionError(
+                f"instance-count: zarr has {pred_count} instances; gt "
+                f"count={gt_count} (mode={gt_mode}); ratio="
+                f"{pred_count / gt_count:.2f}x is below min_multiplier="
+                f"{min_multiplier} (need >= {lower}). The assembler is "
+                f"merging or dropping instances."
+            )
     print(
-        f"[OK] instance-count: pred={pred_count}, gt_cc={gt_cc}, "
-        f"ratio={pred_count / max(gt_cc, 1):.2f}x"
+        f"[OK] instance-count: pred={pred_count}, gt_count={gt_count} "
+        f"(mode={gt_mode}), ratio={pred_count / gt_count:.2f}x"
     )
+
+
+#  instance-detection (IoU / Hungarian matched object detection)
+
+
+def _instance_detection_scores(pred, gt, iou_threshold):
+    """Optimal (Hungarian) IoU matching between predicted and GT instances.
+
+    Returns ``(tp, fp, fn, precision, recall, f1, mean_matched_iou)``. This is
+    the honest instance-segmentation metric: counting components is *not* —
+    one giant blob + many specks can hit the right component count while
+    matching almost no real objects.
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    pred = pred.ravel().astype(np.int64)
+    gt = gt.ravel().astype(np.int64)
+    n_pred, n_gt = int(pred.max()), int(gt.max())
+    if n_pred == 0 or n_gt == 0:
+        return 0, n_pred, n_gt, 0.0, 0.0, 0.0, 0.0
+
+    # Pairwise intersections via a combined (pred, gt) key.
+    key = pred * (n_gt + 1) + gt
+    vals, counts = np.unique(key, return_counts=True)
+    area_pred = np.bincount(pred, minlength=n_pred + 1)
+    area_gt = np.bincount(gt, minlength=n_gt + 1)
+    iou = np.zeros((n_pred + 1, n_gt + 1), dtype=np.float64)
+    for k, inter in zip(vals, counts):
+        a, b = int(k // (n_gt + 1)), int(k % (n_gt + 1))
+        if a and b:
+            iou[a, b] = inter / (area_pred[a] + area_gt[b] - inter)
+
+    rows, cols = linear_sum_assignment(-iou[1:, 1:])
+    matched = [(r + 1, c + 1) for r, c in zip(rows, cols)
+               if iou[r + 1, c + 1] >= iou_threshold]
+    tp = len(matched)
+    fp, fn = n_pred - tp, n_gt - tp
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    mean_iou = float(np.mean([iou[p, q] for p, q in matched])) if matched else 0.0
+    return tp, fp, fn, precision, recall, f1, mean_iou
+
+
+def assert_instance_detection_f1(
+    zarr_path: Path,
+    *,
+    gt_label_path: Path,
+    iou_threshold: float = 0.5,
+    min_f1: float = 0.4,
+    min_tp: int = 0,
+    instance_labels_key: str = "instance_labels",
+) -> None:
+    """Object-detection F1 between predicted instances and GT instances.
+
+    Each predicted instance is optimally matched to a GT instance by IoU; a
+    match with ``IoU >= iou_threshold`` is a true positive. Asserts the F1 is
+    at least ``min_f1`` (and optionally at least ``min_tp`` true positives).
+    """
+    g = _open_zarr(zarr_path)
+    pred = np.squeeze(np.asarray(g[instance_labels_key][:]))
+    gt = np.squeeze(_load_label_volume(gt_label_path))
+    if pred.shape != gt.shape:
+        raise AssertionError(
+            f"instance-detection: shape mismatch pred {pred.shape} vs gt "
+            f"{gt.shape}"
+        )
+    tp, fp, fn, precision, recall, f1, mean_iou = _instance_detection_scores(
+        pred, gt, iou_threshold,
+    )
+    detail = (
+        f"TP={tp} FP={fp} FN={fn} | precision={precision:.3f} recall={recall:.3f} "
+        f"F1={f1:.3f} mean_IoU={mean_iou:.3f} (IoU>={iou_threshold}; "
+        f"gt={tp + fn}, pred_components={tp + fp})"
+    )
+    if f1 < min_f1:
+        raise AssertionError(
+            f"instance-detection: {detail}; F1 below min_f1={min_f1}. The "
+            f"assembler is not separating objects (e.g. one merged blob + "
+            f"specks counts components but matches no real objects)."
+        )
+    if tp < min_tp:
+        raise AssertionError(
+            f"instance-detection: {detail}; TP below min_tp={min_tp}."
+        )
+    print(f"[OK] instance-detection: {detail}")
 
 
 #  variance-low-max-prob 
@@ -352,6 +466,79 @@ def assert_val_dice_within(
 #  CLI 
 
 
+# segmentation-dice
+
+
+def _resolve_pred_path(pred_arg: str) -> Path:
+    """Resolve a predicted-volume path that may be a glob (newest match wins)."""
+    if any(ch in pred_arg for ch in "*?["):
+        matches = sorted(glob.glob(pred_arg), key=lambda p: Path(p).stat().st_mtime)
+        if not matches:
+            raise AssertionError(f"segmentation-dice: no file matches {pred_arg!r}")
+        return Path(matches[-1])
+    return Path(pred_arg)
+
+
+def assert_segmentation_dice(
+    pred_path: str,
+    *,
+    gt_label_path: Path,
+    min_dice: float = 0.7,
+    min_fg_fraction: Optional[float] = None,
+    max_fg_fraction: Optional[float] = None,
+    pred_key: Optional[str] = None,
+) -> None:
+    """Foreground/background Dice between a predicted volume and the GT mask.
+
+    Catches the "edge-detector" failure mode where the semantic head predicts a
+    thin rim of foreground (low Dice, tiny foreground fraction) instead of solid
+    cell bodies. ``pred_path`` may be a glob; the newest match is used. When
+    ``pred_key`` is given, ``pred_path`` is treated as a zarr store and the named
+    array (e.g. ``teacher_argmax``) is read -- this lets the same assertion check
+    the pipeline's semantic output, not just a legacy ``*_vol_pred`` tiff.
+    """
+    if pred_key is not None:
+        g = _open_zarr(_resolve_pred_path(pred_path))
+        pv = np.squeeze(np.asarray(g[pred_key][:]))
+        pred = Path(pred_path)
+    else:
+        pred = _resolve_pred_path(pred_path)
+        pv = np.squeeze(_load_label_volume(pred))
+    gv = np.squeeze(_load_label_volume(gt_label_path))
+    if pv.shape != gv.shape:
+        raise AssertionError(
+            f"segmentation-dice: shape mismatch pred {pv.shape} vs gt {gv.shape}"
+        )
+    p_fg = pv > 0
+    g_fg = gv > 0
+    intersection = int(np.logical_and(p_fg, g_fg).sum())
+    denom = int(p_fg.sum() + g_fg.sum())
+    dice = (2.0 * intersection / denom) if denom > 0 else 1.0
+    pred_frac = float(p_fg.mean())
+    gt_frac = float(g_fg.mean())
+
+    detail = (
+        f"dice={dice:.3f}, pred_fg={100 * pred_frac:.1f}%, gt_fg={100 * gt_frac:.1f}% "
+        f"(file={pred.name})"
+    )
+    if dice < min_dice:
+        raise AssertionError(
+            f"segmentation-dice: {detail}; below min_dice={min_dice}. The model is "
+            f"not producing a solid foreground segmentation."
+        )
+    if min_fg_fraction is not None and pred_frac < min_fg_fraction:
+        raise AssertionError(
+            f"segmentation-dice: {detail}; predicted foreground fraction below "
+            f"min_fg_fraction={min_fg_fraction} (edge-detector pathology)."
+        )
+    if max_fg_fraction is not None and pred_frac > max_fg_fraction:
+        raise AssertionError(
+            f"segmentation-dice: {detail}; predicted foreground fraction above "
+            f"max_fg_fraction={max_fg_fraction} (over-segmenting background)."
+        )
+    print(f"[OK] segmentation-dice: {detail} >= min_dice={min_dice}")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="pipeline version smoke-gate assertions.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -382,6 +569,16 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--gt-label", type=Path, required=True)
     sp.add_argument("--min-count", type=int, default=2)
     sp.add_argument("--max-multiplier", type=float, default=100.0)
+    sp.add_argument("--min-multiplier", type=float, default=0.0)
+    sp.add_argument("--gt-mode", choices=("cc", "labels"), default="cc")
+    sp.add_argument("--instance-key", default="instance_labels")
+
+    sp = sub.add_parser("instance-detection")
+    sp.add_argument("zarr", type=Path)
+    sp.add_argument("--gt-label", type=Path, required=True)
+    sp.add_argument("--iou-threshold", type=float, default=0.5)
+    sp.add_argument("--min-f1", type=float, default=0.4)
+    sp.add_argument("--min-tp", type=int, default=0)
     sp.add_argument("--instance-key", default="instance_labels")
 
     sp = sub.add_parser("variance-low-max-prob")
@@ -398,6 +595,18 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("ckpt_a", type=Path)
     sp.add_argument("ckpt_b", type=Path)
     sp.add_argument("--max-drift", type=float, default=0.03)
+
+    sp = sub.add_parser("segmentation-dice")
+    sp.add_argument("pred", help="Predicted volume path (may be a glob; newest wins).")
+    sp.add_argument("--gt-label", type=Path, required=True)
+    sp.add_argument("--min-dice", type=float, default=0.7)
+    sp.add_argument("--min-fg-fraction", type=float, default=None)
+    sp.add_argument("--max-fg-fraction", type=float, default=None)
+    sp.add_argument(
+        "--pred-key",
+        default=None,
+        help="If set, treat 'pred' as a zarr store and read this array (e.g. teacher_argmax).",
+    )
 
     return p
 
@@ -430,6 +639,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             gt_label_path=args.gt_label,
             min_count=args.min_count,
             max_multiplier=args.max_multiplier,
+            min_multiplier=args.min_multiplier,
+            gt_mode=args.gt_mode,
+            instance_labels_key=args.instance_key,
+        )
+    elif args.cmd == "instance-detection":
+        assert_instance_detection_f1(
+            args.zarr,
+            gt_label_path=args.gt_label,
+            iou_threshold=args.iou_threshold,
+            min_f1=args.min_f1,
+            min_tp=args.min_tp,
             instance_labels_key=args.instance_key,
         )
     elif args.cmd == "variance-low-max-prob":
@@ -447,6 +667,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     elif args.cmd == "val-dice-within":
         assert_val_dice_within(
             args.ckpt_a, args.ckpt_b, max_drift=args.max_drift,
+        )
+    elif args.cmd == "segmentation-dice":
+        assert_segmentation_dice(
+            args.pred,
+            gt_label_path=args.gt_label,
+            min_dice=args.min_dice,
+            min_fg_fraction=args.min_fg_fraction,
+            max_fg_fraction=args.max_fg_fraction,
+            pred_key=args.pred_key,
         )
     else:
         raise SystemExit(f"unknown subcommand {args.cmd!r}")

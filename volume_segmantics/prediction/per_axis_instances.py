@@ -188,14 +188,26 @@ class DistanceWatershedSliceProducer:
 
     1. Foreground mask = ``semantic_argmax`` ∈ ``foreground_class_ids``
        (default = "any non-zero class").
-    2. Markers = local maxima of the slice's ``distance_map`` with
+    2. Markers = local maxima of the seeding distance surface with
        ``min_distance >= peak_min_distance``, filtered to the
        foreground mask.
     3. ``skimage.segmentation.watershed(-distance_slice, markers,
        mask=fg_mask)``.
     4. :func:`_relabel_consecutive` to pack IDs.
 
-    Required bundle fields: ``semantic_argmax`` + ``distance_map``.
+    Params:
+    * ``peak_min_distance`` (int, default 5): minimum spacing between
+      watershed seeds. Scale to object size — far too small a value
+      over-segments large objects.
+    * ``peak_smooth_sigma`` (float, default 0): Gaussian smoothing of the
+      distance surface before peak detection, to suppress spurious maxima.
+    * ``distance_source`` (str, default ``"head"``): ``"head"`` seeds on the
+      learned distance head (``bundle.distance_map``); ``"semantic_edt"``
+      seeds on the EDT of the predicted foreground mask (no learned head
+      needed — robust when the distance head is weak).
+
+    Required bundle fields: ``semantic_argmax`` (+ ``distance_map`` when
+    ``distance_source="head"``).
     """
 
     name: str = "distance_watershed"
@@ -209,25 +221,43 @@ class DistanceWatershedSliceProducer:
         axes: Sequence[str],
         params: Mapping[str, Any],
     ) -> Dict[str, np.ndarray]:
-        _check_bundle_per_axis_input(bundle, axes, self.required_bundle_fields)
         peak_min_distance = int(params.get("peak_min_distance", 5))
         fg_class_ids = params.get("foreground_class_ids", None) or None
+        smooth_sigma = float(params.get("peak_smooth_sigma", 0.0))
+        # ``distance_source`` selects the surface the watershed seeds on:
+        #   "head"        -> the learned distance head (bundle.distance_map).
+        #   "semantic_edt" -> EDT of the predicted foreground mask, computed
+        #                     per slice. Robust when the distance head is
+        #                     weak/untrained, at the cost of not using learned
+        #                     cell-centre cues for touching objects.
+        distance_source = str(params.get("distance_source", "head"))
+        if distance_source not in ("head", "semantic_edt"):
+            raise ValueError(
+                f"distance_watershed: distance_source must be 'head' or "
+                f"'semantic_edt'; got {distance_source!r}"
+            )
         if peak_min_distance < 1:
             raise ValueError(
                 f"distance_watershed: peak_min_distance must be >= 1; "
                 f"got {peak_min_distance}"
             )
 
+        required = ("semantic_argmax",) if distance_source == "semantic_edt" \
+            else self.required_bundle_fields
+        _check_bundle_per_axis_input(bundle, axes, required)
+
         sem = np.asarray(bundle.semantic_argmax)
-        dist = np.asarray(bundle.distance_map)
-        # distance_map is (1, Z, Y, X) or (Z, Y, X) — squeeze leading 1.
-        if dist.ndim == 4 and dist.shape[0] == 1:
-            dist = dist[0]
-        if dist.shape != sem.shape:
-            raise ValueError(
-                f"distance_watershed: distance_map shape {dist.shape} "
-                f"does not match semantic_argmax shape {sem.shape}"
-            )
+        dist = None
+        if distance_source == "head":
+            dist = np.asarray(bundle.distance_map)
+            # distance_map is (1, Z, Y, X) or (Z, Y, X) — squeeze leading 1.
+            if dist.ndim == 4 and dist.shape[0] == 1:
+                dist = dist[0]
+            if dist.shape != sem.shape:
+                raise ValueError(
+                    f"distance_watershed: distance_map shape {dist.shape} "
+                    f"does not match semantic_argmax shape {sem.shape}"
+                )
 
         fg_mask = _foreground_mask_from_semantic(sem, fg_class_ids)
 
@@ -236,9 +266,16 @@ class DistanceWatershedSliceProducer:
             slabs = []
             for idx in _iterate_slices_along_axis(sem, axis):
                 fg_slice = _slice_along_axis(fg_mask, axis, idx)
-                dist_slice = _slice_along_axis(dist, axis, idx)
+                if distance_source == "semantic_edt":
+                    # Distance transform of the predicted foreground -> peaks
+                    # at object centres (computed, no learned head needed).
+                    dist_slice = _ndi.distance_transform_edt(
+                        fg_slice.astype(np.uint8)
+                    ).astype(np.float32)
+                else:
+                    dist_slice = _slice_along_axis(dist, axis, idx)
                 inst_slice = self._watershed_one_slice(
-                    fg_slice, dist_slice, peak_min_distance,
+                    fg_slice, dist_slice, peak_min_distance, smooth_sigma,
                 )
                 slabs.append(inst_slice)
             stacked = np.stack(slabs, axis=0).astype(np.uint32)
@@ -251,10 +288,15 @@ class DistanceWatershedSliceProducer:
         fg_mask: np.ndarray,
         dist_slice: np.ndarray,
         peak_min_distance: int,
+        smooth_sigma: float = 0.0,
     ) -> np.ndarray:
         """Run watershed on a single 2D slice."""
         if not fg_mask.any():
             return np.zeros_like(fg_mask, dtype=np.uint32)
+        # Optionally smooth the distance surface to suppress spurious local
+        # maxima (used for both peak detection and the watershed surface).
+        if smooth_sigma > 0:
+            dist_slice = _ndi.gaussian_filter(dist_slice, smooth_sigma)
         # Local maxima of the distance map, masked to FG.
         peaks = peak_local_max(
             dist_slice,

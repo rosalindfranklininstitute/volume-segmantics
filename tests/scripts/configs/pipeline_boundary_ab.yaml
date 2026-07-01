@@ -1,0 +1,101 @@
+# A/B test isolating the boundary head's `pos_weight`. Two identical arms
+# (resnet34, all four heads, single-axis) differing ONLY in
+# heads.boundary.pos_weight: arm A = None (current default, under-predicts the
+# ~5% boundary class), arm B = 15 (balances it). Instance assembly is disabled;
+# we only want the raw boundary_map to compare against the GT boundary target.
+paths:
+  image: training_data/images_and_labels_rgba/platelet-em/images/50-images.tif
+  label: training_data/platelet_50_cell_SEMANTIC.tif
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_boundary_ab
+global_overrides:
+  train:
+    image_size: 256
+    num_cyc_frozen: 6
+    num_cyc_unfrozen: 2
+    patience: 4
+    starting_lr: 5.0e-05
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet
+  predict:
+    quality: low
+    output_probs: true
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: true
+        loss: boundary_bce_dice
+        loss_weight: 0.5
+        width: 2
+      distance:
+        enabled: true
+        loss: distance_l1
+        loss_weight: 0.25
+      sdm:
+        enabled: true
+        loss: sdm_l1
+        loss_weight: 0.25
+        variant: binary
+    targets:
+      boundary:
+        width: 2
+      distance:
+        distance_transform: edt
+      sdm:
+        distance_transform: edt
+    prediction:
+      inference_mode: single_axis
+      per_axis_instances:
+        enabled: false
+    instance_assembly:
+      backend: null
+tests:
+- name: train_boundary_nopw
+  type: train
+  model_key: bnd_nopw
+  overrides:
+    train:
+      model_output_fn: boundary_nopw
+  assert_outputs:
+    should_exist_globs:
+    - '*_train_stats.csv'
+- name: predict_boundary_nopw
+  type: pipeline_predict_zarr
+  model_key: bnd_nopw
+  inference_mode: single_axis
+  output_zarr: prediction.zarr
+  zarr_key: zarr_nopw
+- name: train_boundary_pw
+  type: train
+  model_key: bnd_pw
+  overrides:
+    train:
+      model_output_fn: boundary_pw
+    pipeline:
+      heads:
+        boundary:
+          pos_weight: 15
+  assert_outputs:
+    should_exist_globs:
+    - '*_train_stats.csv'
+- name: predict_boundary_pw
+  type: pipeline_predict_zarr
+  model_key: bnd_pw
+  inference_mode: single_axis
+  output_zarr: prediction.zarr
+  zarr_key: zarr_pw

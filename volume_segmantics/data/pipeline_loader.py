@@ -56,7 +56,9 @@ KNOWN_PER_AXIS_PRODUCERS: frozenset = frozenset({
 })
 
 #: Instance-assembly backends shipped in pipeline version.
-KNOWN_ASSEMBLY_BACKENDS: frozenset = frozenset({"usegment3d"})
+KNOWN_ASSEMBLY_BACKENDS: frozenset = frozenset(
+    {"usegment3d", "slice_overlap", "watershed_3d"}
+)
 
 #: Per-axis names accepted by uSegment3D + the per-axis producers.
 KNOWN_AXES: frozenset = frozenset({"xy", "xz", "yz"})
