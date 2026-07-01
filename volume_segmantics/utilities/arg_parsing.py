@@ -118,6 +118,17 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to directory containing unlabeled image slices (required for semi-supervised learning or pseudo-labeling)",
     )
+
+    parser.add_argument(
+        "--optimization",
+        metavar="PATH",
+        type=str,
+        default=None,
+        nargs="?",
+        const="volseg-settings/optuna_config.yaml", # Default if no path is given
+        help="Path to Optuna search space config YAML. When provided, runs "
+            "hyperparameter optimization instead of a single training run.",
+    )
     return parser
 
 
