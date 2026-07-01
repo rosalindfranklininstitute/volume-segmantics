@@ -39,9 +39,13 @@ from volume_segmantics.model.operations.trainer_model_manager import ModelManage
 from volume_segmantics.model.operations.trainer_logging import TrainingLogger
 from volume_segmantics.model.operations.trainer_visualization import TrainingVisualizer
 
-import optuna
 
 from volume_segmantics.model.training.sam import SAM
+
+
+
+
+
 
 class VolSeg2dTrainer:
     """
@@ -535,8 +539,7 @@ class VolSeg2dTrainer:
         patience: int,
         create: bool = True,
         frozen: bool = False,
-        trial = None
-    ) -> Dict:
+    ) -> None:
         """
         Performs training of model for a number of epochs with automatic LR finding.
 
@@ -546,14 +549,7 @@ class VolSeg2dTrainer:
             patience: Epochs to wait while validation loss not improving before stopping.
             create: Whether to create a new model and optimizer from scratch.
             frozen: Whether to freeze encoder convolutional layers.
-            trial: Optional Optuna trial for hyperparameter optimization
-
-        Returns:
-            dict: training results including validation metrics.
         """
-
-        if not hasattr(self, 'best_val_metric'): # Track best validation metric
-            self.best_val_metric = 0.0  
         self.output_path = output_path  # Store for visualization
         if create:
             self._create_model_and_optimiser(self.starting_lr, frozen=frozen)
@@ -781,19 +777,8 @@ class VolSeg2dTrainer:
                             logging.warning(f"Failed to generate pseudo-labeling visualization at epoch {epoch}: {e}")
                             import traceback
                             logging.warning(traceback.format_exc())
-            
-            # Track best validation metric for Optuna
-            current_eval_metric = self.epoch_history["seg_dice"][-1]
-            if current_eval_metric > self.best_val_metric:
-                self.best_val_metric = current_eval_metric
 
-            # pruning: stops unpromising trials early
-            if trial is not None:
-                trial.report(self.best_val_metric, epoch)
-                if trial.should_prune():
-                    raise optuna.exceptions.TrialPruned()
-                
-            # Diagnostic Logging 
+            # Diagnostic Logging
             if epoch == 1 or epoch % 5 == 0:
                 self._log_gradient_statistics(epoch)
 
@@ -811,11 +796,6 @@ class VolSeg2dTrainer:
                 break
 
         self._load_in_weights(output_path)
-        return {
-                'best_val_metric': self.best_val_metric,
-                'final_train_loss': self.epoch_history["train_total"][-1] if self.epoch_history["train_total"] else 0.0,
-                'final_valid_loss': self.epoch_history["valid_total"][-1] if self.epoch_history["valid_total"] else 0.0,
-            }
 
     def _train_one_batch(self, lr_scheduler, batch) -> torch.Tensor:
         """Train on a single batch, handling both single and multi-task modes."""
