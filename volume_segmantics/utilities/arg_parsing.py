@@ -150,6 +150,22 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
             "config.py."
         ),
     )
+    parser.add_argument(
+        "--optuna",
+        metavar="Path to optuna search-space config YAML",
+        type=str,
+        nargs="?",
+        const="volseg-settings/optuna_config.yaml",
+        default=None,
+        help=(
+            "Run optuna hyperparameter optimisation instead of a single "
+            "training run. Takes an optuna config YAML path (default "
+            "'volseg-settings/optuna_config.yaml' if the flag is given with no "
+            "value). Optimisation drives the legacy trainer; requires the "
+            "optional [optuna] extra (pip install "
+            "volume-segmantics[optuna])."
+        ),
+    )
     return parser
 
 

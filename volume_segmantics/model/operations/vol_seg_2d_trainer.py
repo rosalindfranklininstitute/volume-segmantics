@@ -43,6 +43,16 @@ from volume_segmantics.model.operations.trainer_visualization import TrainingVis
 from volume_segmantics.model.training.sam import SAM
 
 
+class NumericalTrainingError(RuntimeError):
+    """Raised when training produces a non-finite objective (NaN/Inf).
+
+    Used by the optuna optimizer to fail a single trial cleanly (via
+    ``study.optimize(catch=...)``) rather than poisoning the sampler with a
+    sentinel score or silently completing a divergent run. Defined here (no
+    optuna dependency) so the trainer can raise it in the optuna-free install.
+    """
+
+
 
 
 
@@ -539,7 +549,8 @@ class VolSeg2dTrainer:
         patience: int,
         create: bool = True,
         frozen: bool = False,
-    ) -> None:
+        trial=None,
+    ) -> float:
         """
         Performs training of model for a number of epochs with automatic LR finding.
 
@@ -549,6 +560,18 @@ class VolSeg2dTrainer:
             patience: Epochs to wait while validation loss not improving before stopping.
             create: Whether to create a new model and optimizer from scratch.
             frozen: Whether to freeze encoder convolutional layers.
+            trial: Optional optuna ``Trial``. When given, the per-epoch
+                validation dice is reported to the trial and the trial may be
+                pruned. The reporting step is the *accumulated* validation-epoch
+                count (``len(epoch_history['seg_dice'])``), so it stays strictly
+                increasing across the separate frozen/unfrozen ``train_model``
+                calls of one trial — otherwise the second phase would reuse
+                steps 1..N and optuna would ignore those reports (pruning would
+                silently die in the phase that matters).
+
+        Returns:
+            Best (max) validation dice over the accumulated epoch history, i.e.
+            the trial objective so far. ``0.0`` if no validation epoch ran.
         """
         self.output_path = output_path  # Store for visualization
         if create:
@@ -785,6 +808,12 @@ class VolSeg2dTrainer:
             if epoch == 1 or epoch % 5 == 0:
                 self._log_parameter_statistics(epoch)
 
+            # Optuna: report the objective (validation dice) and maybe prune.
+            # Placed after validation stats are appended and before early
+            # stopping so a pruned trial exits promptly.
+            if trial is not None:
+                self._optuna_report_and_prune(trial)
+
             # Early Stopping Check
             current_valid_loss = self.epoch_history["valid_total"][-1]
             # Pass glob_it for semi-supervised learning
@@ -796,6 +825,38 @@ class VolSeg2dTrainer:
                 break
 
         self._load_in_weights(output_path)
+        dice_history = self.epoch_history.get("seg_dice", [])
+        return max(dice_history) if dice_history else 0.0
+
+    def _optuna_report_and_prune(self, trial) -> None:
+        """Report the latest validation dice to an optuna trial and prune.
+
+        Raises :class:`NumericalTrainingError` on a non-finite objective (so the
+        study records the trial as failed rather than trusting the value) and
+        ``optuna.TrialPruned`` when the pruner decides to stop the trial. The
+        report ``step`` is the accumulated validation-epoch count so it is
+        strictly monotonic across the frozen and unfrozen phases of one trial.
+        """
+        dice_history = self.epoch_history.get("seg_dice", [])
+        if not dice_history:
+            return
+        current_dice = float(dice_history[-1])
+        if not math.isfinite(current_dice):
+            raise NumericalTrainingError(
+                f"Validation dice is non-finite ({current_dice!r}) at "
+                f"validation epoch {len(dice_history)}; failing trial "
+                f"{getattr(trial, 'number', '?')}."
+            )
+        import optuna  # lazy: only needed to prune (after the finite check)
+
+        step = len(dice_history) - 1  # zero-based, monotonic across phases
+        trial.report(current_dice, step)
+        if trial.should_prune():
+            logging.info(
+                "Optuna pruning trial %s at step %d (dice=%.4f)",
+                getattr(trial, "number", "?"), step, current_dice,
+            )
+            raise optuna.TrialPruned()
 
     def _train_one_batch(self, lr_scheduler, batch) -> torch.Tensor:
         """Train on a single batch, handling both single and multi-task modes."""

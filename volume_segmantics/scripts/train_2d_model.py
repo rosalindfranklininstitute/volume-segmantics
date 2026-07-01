@@ -58,6 +58,15 @@ def main():
     use_legacy_trainer = getattr(args, "legacy_trainer", False)
     lightning_strategy = getattr(args, "strategy", None)
     lightning_devices = getattr(args, "devices", None)
+    optuna_config = getattr(args, "optuna", None)
+
+    # Optuna hyperparameter optimisation short-circuits normal training: run the
+    # study (over the legacy trainer) and return.
+    if optuna_config is not None:
+        return run_optimization(
+            data_vols, label_vols, root_path, optuna_config
+        )
+
     print("Mode: ", mode)
     if use_legacy_trainer:
         print("Trainer: legacy raw-torch (deprecated; --legacy-trainer set)")
@@ -338,6 +347,39 @@ def _calculate_max_label_no_from_slices(seg_im_out_dir: Path) -> int:
 
     logging.info(f"Detected {num_classes} classes (labels 0-{max_label}) from label slices")
     return num_classes
+
+
+def run_optimization(data_vols, label_vols, root_path, optuna_config_path):
+    """Run optuna hyperparameter optimisation over the legacy trainer.
+
+    Imported lazily so the optional [optuna] extra is only required when
+    ``--optuna`` is used; the core install (and the optuna-free test env)
+    keep working without it.
+    """
+    try:
+        from volume_segmantics.optimization import OptunaOptimizer, OPTUNA_AVAILABLE
+    except ImportError:
+        OPTUNA_AVAILABLE = False
+        OptunaOptimizer = None
+    if not OPTUNA_AVAILABLE or OptunaOptimizer is None:
+        raise SystemExit(
+            "Optuna is not installed. Install the optional extra:\n"
+            "    pip install volume-segmantics[optuna]"
+        )
+    if not label_vols:
+        raise SystemExit("--optuna requires --labels (one per data volume).")
+
+    settings_path = Path(root_path, cfg.SETTINGS_DIR, cfg.TRAIN_SETTINGS_FN)
+    optimizer = OptunaOptimizer(
+        data_paths=data_vols,
+        label_paths=label_vols,
+        settings_path=str(settings_path),
+        optuna_config=str(optuna_config_path),
+        root_path=str(root_path),
+    )
+    study = optimizer.optimize()
+    logging.info("Optimisation finished. Best value: %s", getattr(study, "best_value", None))
+    return study
 
 
 def run_trainer(data_im_out_dir, seg_im_out_dir, max_label_no, settings, root_path):
