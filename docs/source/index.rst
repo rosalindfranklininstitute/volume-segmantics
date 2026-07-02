@@ -11,10 +11,11 @@ Volume Segmantics documentation
    :parser: myst_parser.sphinx_
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 3
    :caption: Contents:
    :hidden:
 
    README
    tutorials
+   optuna
 
