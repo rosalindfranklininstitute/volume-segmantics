@@ -31,6 +31,8 @@ search_space:
   encoder_name:
     type: "categorical"
     choices: ["resnet34", "resnet50", "efficientnet-b3"]
+
+  ...
 ```
 
 Each entry in `search_space` corresponds to a parameter Optuna will vary from trial to trial. Four parameter types are supported:
@@ -67,4 +69,4 @@ Volume Segmantics' trainer reports its validation metric to Optuna after every e
 
 ## Example configuration
 
-A fuller example search space, covering more of the available parameters, is provided in [`optuna_config_example.yaml`](optuna_config_example.yaml).
+A fuller example search space, covering more of the available parameters, is provided in [`optuna_config.yaml`](https://github.com/aadedolapo/volume-segmantics/tree/main/volseg-settings/optuna_config.yaml).
