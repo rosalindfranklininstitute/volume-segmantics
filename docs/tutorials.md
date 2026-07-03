@@ -12,7 +12,9 @@ For the 13.11.25 'Segmentation with Volume Segmantics' seminar/tutorial, environ
 
 The dataset a set of files: a .tif image file containing a 700-slice cube of microCT scan data, and two .tif label files illustrating two biological components of the microCT scan data: the 'Villi' and 'Vessels'. The label-layer files are the best versions of the dataset currently available and referred to as GroundTruth Images. These files can be found in the 'COMPUTER-VISION_TUTORIAL_DATA directory that has also been added to your individual user space. The label files can be superimposed over the microCT image and viewed in 2D and 3D; the diagram below shows screenshot examples of the files viewed in Napari.  
 
-![width=200](_static/images/WINSdata-ViewFigure.png)
+<div align="center">
+  <img src="_static/images/WINSdata-ViewFigure.png" width="60%">
+</div>
 
 *``
 For this tutorial, we will only be using the GT-Vessel Data. 
@@ -39,7 +41,9 @@ napari
 
 You can use the napari window and the diagram/key below to view the data in both 2D and 3D; inspect the data for quality, anomalies/inconsistencies, contrast variability, scan artefacts etc.
 
-![width=150](_static/images/napari_figure1.png)
+<div align="center">
+  <img src="_static/images/napari_figure1.png" width="70%">
+</div>
 
 > - **(1)** Shuffle label colours **(2)** Erase tool **(3)** Paint tool **(4)** Bucket tool **(5)** Pan tool **(6)** Opacity bar **(7)** Label Selector **(8)** Tool applicator-size bar **(9)** Tool definition selector (2D or 3D) **(10)** New layer buttons (Points, Labels, Image) **(11)** Delete layer **(12)** Layer List, and Level selector **(13)** Command line **(14)** View shifter (2D/3D modes) **(15)** Change axis view (X, Y, Z) **(16)** Rotate plane (2D) **(17)** Napari Builtins plugin; Filename, Cursor place (3D), Current Axis view **(18)** Animate data and current data view (0-Z axis. 1-Y axis, 2-X axis) **(19)** Slice scroll bar **(20)** Slice viewer (current slice/overall slice total).
 
@@ -53,7 +57,10 @@ To navigate numerically around your data in 3D space, use the *Napari Builtins p
 
 > Do not use the '0:250, 0:250, 0:250' co-ordinates for the tutorial!
 
-![width=150](_static/images/ROI_Example.png)
+<div align="center">
+  <img src="_static/images/ROI_Example.png" width="60%">
+</div>
+
 
 ## Step 3 - Cropping your ROI;
 
@@ -101,7 +108,7 @@ viewer.add_labels(l_roi)
 
 Once you have your image-label layer ROI pair (250Cube), you can then train a Volume-Segmantics model using these crops and then utilise this model to predict the vessel components on the original 700Cube image; effectively remaking the original 700CUBE labels file using your own segmentation model. Creating your prediction will take 3 steps; 
 
-#### 1 Initialise a Volume-Segmantics Session:
+### 1 Initialise a Volume-Segmantics Session:
 
 To use Volume-Segmantics, you will need a terminal running a specific working environment with the correct packages installed. This environment has already been created for this tutorial, and the files connected to that environment can be viewed in the *'volume_segmantics'* directory that has been copied into your individual user space. Once the environment is activated, you will need to navigate to this directory in order to run its packages.
 
@@ -118,7 +125,7 @@ conda activate 'path_to_Volume-Segmantics-env'
 cd /ceph/users/'individual_user'/'path_to_volume-segmantics-directory'
 ```
 
-#### 2 Create Training Model:
+### 2 Create Training Model:
 
 To train your segmentation model, you will run the following command in the Volume-Segmantics terminal;
 
@@ -132,7 +139,9 @@ The command is split into 3 parts: The training programme, *model-train-2d*, the
 
 > 'directory_location_labels' = /ceph/'user'/'individual_user'/'path_to_labels_ROI.tif'
 
-![width=150](_static/images/training_script.png)
+<div align="center">
+  <img src="_static/images/training_script.png" width="80%">
+</div>
 
 Before you run your training model, you should first observe and confirm your training settings; to do this, navigate to the *Volume-Segmantics-settings* folder within the volume-segmantics directory. The *.yaml files* within this directory specify the conditions your model will be trained towards; they will be set to default however, a good practice is to make a written/visual note of or copy the file into another area before it is run to keep track of the model's conditions. The most important setting inputs can be found below.
 
@@ -154,7 +163,7 @@ As the training is running, you will observe the data being sliced, a training e
 A good way to initially instect your model is to open both the model_prediction_image.png and model_loss-Plot.png; visually inspect the model screenshots and the graph where if the components seem to be correct and the 2 lines on the graph do not cross, the model will have been created as per its settings.
 ``*
 
-#### 3 Generate Model Prediction:
+### 3 Generate Model Prediction:
 
 You can now use your model (trained on 250CUBE) to predict the vessel components of the original 700CUBE image; to do this, you will run the following command in the *same* Volume-Segmantics terminal;
 
@@ -170,7 +179,9 @@ These paths must specify the exact files ending in your saved .pytorch and .tif 
 
 > 'directory_location_new_image' = /ceph/'user'/'path_to_image-700CUBE.tif'
 
-![width=150](_static/images/prediciton_script.png)
+<div align="center">
+  <img src="_static/images/prediction_script.png" width=80%">
+</div>
 
 Before you run your prediction, you should first observe and confirm your prediction settings; to do this, again navigate to the Volume-Segmantics-settings folder within the volume-segmantics directory. The *.yaml files* conditions will again be set to default however, a good practice is to make a note of or copy the file into the same area as your copied training settings before it is run to keep track of the model output conditions. The most important setting inputs can be found below.
 
@@ -197,7 +208,9 @@ Use the Layer list (labelled as **12** on the napari diagram/key) to toggle on a
 
 - This will give you a complete visual representation of your model and predictions effectiveness.
 
-![width=150](_static/images/prediction_napari.png)
+<div align="center">
+  <img src="_static/images/prediction_napari.png" width="60%">
+</div>
 
 To produce a numerical representation of your model's effectiveness, we use a DiceScore to measure your predictions' labels relative to the original GroundTruth labels; it does this by calculating the space the 3D prediction labels occupy relatively. In order to calculate this, we are going to use a **Jupyter notebook** linked to the console's computing power to speed up the process. 
 
@@ -222,7 +235,9 @@ jupyter lab
 
 Once your Jupyter session is open, navigate to the'Jupyter_Notebooks' folder on the GIThub repo where a copy the *'Manual_DiceScore_MASTER.ipynb'* file is stored and download it; this will then appear in your downloads folder in your home space. Navigate to the same file within your Jupyter session using the File-Navigator (location [3]) on the left side of the Jupyter interface; double-clicking the file will then open it in the main window alongside the lauch menu. Once opened, the notebook can then be interacted with and run. 
 
-![width=150](_static/images/jupyter.png)
+<div align="center">
+  <img src="_static/images/jupyter.png" width="80%">
+</div>
 
 > - **(1)** Run; run selected cells/run all cells, **(2)** Kernel; interrupt/Reconnect/Restart Kernel session, **(3)** File-Navigator, **(4)** Table of Contents, **(5)** Viewer panel, **(6)** Notebook tab, **(7)** Executable cell (code), **(8)** Note cell (markdown).
 
