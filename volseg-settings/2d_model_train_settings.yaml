@@ -12,8 +12,11 @@ minmax_norm: False # Min-max normalisation/rescaling. Only needed if clip_data i
 use_imagenet_norm: True # If True, applies ImageNet mean/std normalisation to input images (wanted if Imagenet pretrained weights used)
 normalization_debug_mode: False # If True, enables detailed normalisation debugging in training loop
 
+# Reproducibility
+random_seed: # Optional integer seed. Leave blank for non-deterministic runs (default). When set, the train/val split, shuffling, and data-loader workers become reproducible.
+
 # Settings for Model Training
-training_axes: All # Specify axes/single axis to train on. Choose from [All, Z, X, Y]. 
+training_axes: All # Specify axes/single axis to train on. Choose from [All, Z, X, Y].
 image_size: 512 # size of images used for training (must be multiple of 32)
 downsample: False # If True, data will be downsampled by 2
 training_set_proportion: 0.85 # Proportion of images to use the training, rest are used for validation
@@ -103,7 +106,7 @@ use_monai_datasets: true # Use MONAI datasets when using MONAI augmentations (de
 use_2_5d_slicing: False # If True, enables 2.5D slicing with configurable number of slices
 num_slices: 3 # Number of slices to use (must be odd: 3, 5, 7, 9, etc.)
 slice_file_format: "png" # File format for multi-channel slices: "tiff" (default) or "png" (only for 3 channels or less)
-skip_border_slices: False # If True, skips first and last slices when using 2.5D slicing
+skip_border_slices: False # NOTE: not yet implemented
  
 # Multi-task learning settings (requires MONAI datasets)
 use_multitask: false # Enable multi-task learning (requires MONAI datasets)

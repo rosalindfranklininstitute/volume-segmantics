@@ -4,11 +4,13 @@ repository
 """
 
 import numpy as np
+import pytest
 import torch
 from skimage import measure
 from volume_segmantics.data.pytorch3dunet_metrics import (
     DiceCoefficient,
     MeanIoU,
+    get_evaluation_metric,
 )
 
 
@@ -76,3 +78,30 @@ def test_mean_iou_one_channel():
     target = pred > 0.5
     target = target.long()
     assert criterion(pred, target) == 1
+
+
+# Previously imported the undeclared `pytorch3dunet` package -> ModuleNotFoundError
+# on every call. It now resolves from this module's metric classes.
+
+
+def test_get_evaluation_metric_resolves_local_class():
+    metric = get_evaluation_metric({"eval_metric": {"name": "DiceCoefficient"}})
+    assert isinstance(metric, DiceCoefficient)
+
+
+def test_get_evaluation_metric_passes_kwargs():
+    metric = get_evaluation_metric(
+        {"eval_metric": {"name": "MeanIoU", "ignore_index": 0}}
+    )
+    assert isinstance(metric, MeanIoU)
+    assert metric.ignore_index == 0
+
+
+def test_get_evaluation_metric_unknown_name_raises_valueerror():
+    with pytest.raises(ValueError, match="unknown eval_metric"):
+        get_evaluation_metric({"eval_metric": {"name": "NotAMetric"}})
+
+
+def test_get_evaluation_metric_missing_config_raises_valueerror():
+    with pytest.raises(ValueError, match="Could not find evaluation metric"):
+        get_evaluation_metric({})

@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# smoke run artefacts
+checkpoints/
+tmp/
+
 # C extensions
 *.so
 
@@ -131,3 +135,21 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# bot
+/.claude
+
+# extra  training data
+/training_data/v2_smoke_corpus_700
+/training_data/Villi_Instances*
+
+# platelet-EM dataset (fetched via training_data/download_platelet_em.py)
+/training_data/images_and_labels_rgba/
+/training_data/images_and_labels_rgba.zip
+/training_data/images_and_labels_json.zip
+# derived label volumes (built by training_data/prepare_platelet_instance.py)
+/training_data/platelet_50_cell_SEMANTIC.tif
+/training_data/platelet_50_cell_INSTANCE.tif
+
+paper.bib
+paper.md

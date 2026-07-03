@@ -74,14 +74,20 @@ def test_consistency_loss_positive_when_different():
 
 
 def test_consistency_loss_gradient_flow():
-    """Backward propagates gradients to inputs."""
+    """Backward propagates gradients to the student only.
+
+    The teacher is detached inside the consistency loss in pipeline version (matches
+    ``seg_consistency_loss`` and the per-head variants), so its grad
+    must be ``None`` even if the input tensor was created with
+    ``requires_grad=True``.
+    """
     loss_fn = ConsistencyLoss()
     student = torch.randn(2, 3, 8, 8, requires_grad=True)
     teacher = torch.randn(2, 3, 8, 8, requires_grad=True)
     out = loss_fn(student, teacher)
     out.backward()
     assert student.grad is not None
-    assert teacher.grad is not None
+    assert teacher.grad is None
 
 
 # --- 3. get_rampup_ratio ---

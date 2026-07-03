@@ -1,0 +1,41 @@
+# Normalize line endings: store text as LF in the repository, regardless of the
+# checkout platform. This resolves the CRLF-on-disk vs LF-in-history mismatch
+# that otherwise makes every file on a Windows/WSL checkout appear modified.
+* text=auto eol=lf
+
+# Explicit text types (belt and braces)
+*.py    text eol=lf
+*.pyi   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.rst   text eol=lf
+*.txt   text eol=lf
+*.cfg   text eol=lf
+*.toml  text eol=lf
+*.ini   text eol=lf
+*.sh    text eol=lf
+*.json  text eol=lf
+Dockerfile text eol=lf
+
+# Binary / data files: never touch line endings.
+*.tiff  binary
+*.tif   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.h5    binary
+*.hdf5  binary
+*.nxs   binary
+*.mrc   binary
+*.mrcs  binary
+*.rec   binary
+*.map   binary
+*.npy   binary
+*.npz   binary
+*.pth   binary
+*.pytorch binary
+*.ckpt  binary
+*.zarr  binary
+*.zip   binary
+.coverage binary

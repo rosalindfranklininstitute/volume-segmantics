@@ -16,6 +16,7 @@ import torchvision.transforms.functional as F
 from skimage.measure import block_reduce
 
 import volume_segmantics.utilities.config as cfg
+from volume_segmantics.utilities.atomic_io import atomic_output_path
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -53,7 +54,8 @@ class ModelType(Enum):
     PAN = 8
     SEGFORMER = 9
     VANILLA_UNET = 10 # No pretrained encoder
-    MULTITASK_UNET = 11
+    MULTITASK_UNET = 11  # Deprecated, use PIPELINE_MULTITASK_UNET via pipeline.yaml.
+    PIPELINE_MULTITASK_UNET = 12  
 
 
 
@@ -109,6 +111,14 @@ def setup_path_if_exists(input_param):
 
 
 def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
+
+    if not torch.cuda.is_available():
+        # CPU-only (e.g. CI runners): there is no GPU memory to probe, so skip
+        # the CUDA queries below and use the conservative small batch size.
+        logging.info(
+            f"No CUDA device available; using CPU batch size {cfg.SMALL_CUDA_BATCH}."
+        )
+        return cfg.SMALL_CUDA_BATCH
 
     cuda_device_num = settings.cuda_device
     total_gpu_mem = torch.cuda.get_device_properties(cuda_device_num).total_memory
@@ -201,6 +211,14 @@ def prepare_training_batch(
         For dict format: (inputs, targets_dict) where targets_dict contains all task targets
     """
     if isinstance(batch, dict):
+        # pipeline-mode dict: keys are "image" and every enabled
+        # head's name from {semantic, boundary, distance, sdm}. The
+        # PipelineMultiTaskDataset already produces tensors in the
+        # exact shapes the calculator expects, so we just move them to
+        # device and return the targets dict verbatim.
+        if "image" in batch:
+            return _prepare_pipeline_batch(batch, device)
+
         # dictionary with keys like "img", "seg", "boundary" (MONAI)
         inputs = batch["img"].to(torch.float32)
         inputs = inputs.to(device)
@@ -270,6 +288,37 @@ def prepare_training_batch(
         return inputs, targets
 
 
+def _prepare_pipeline_batch(
+    batch: dict, device,
+) -> "tuple[torch.Tensor, dict]":
+    """Move pipeline-mode batch to device.
+
+    The :class:`PipelineMultiTaskDataset` (B3.D) produces per-sample
+    dicts ``{"image": ..., "semantic": ..., "boundary": ..., ...}``
+    whose tensor shapes already match the
+    :class:`PipelineMultiTaskLossCalculator`'s contract:
+
+    * image: ``(B, C, H, W) float32``
+    * semantic: ``(B, H, W) int64``
+    * boundary / distance / sdm: ``(B, K, H, W) float32`` (K=1 except
+      per_class SDM)
+
+    """
+    inputs = batch["image"].to(torch.float32).to(device)
+    targets: dict = {}
+    for key, val in batch.items():
+        if key == "image":
+            continue
+        if not isinstance(val, torch.Tensor):
+            # tolerate non-tensor extras (file paths, indices etc.)
+            continue
+        if key == "semantic":
+            targets[key] = val.to(torch.int64).to(device)
+        else:
+            targets[key] = val.to(torch.float32).to(device)
+    return inputs, targets
+
+
 def downsample_data(data, factor=2):
     logging.info(f"Downsampling data by a factor of {factor}.")
     return block_reduce(data, block_size=(factor, factor, factor), func=np.nanmean)
@@ -288,16 +337,33 @@ def numpy_from_tiff(path):
     return imageio.volread(path)
 
 def numpy_from_zarr(path):
-    """Returns a numpy array when given a path to a zarr file (folder).
+    """Returns a numpy array when given a path to a zarr store (folder).
+
+    Handles both supported layouts:
+
+    * a **plain zarr array** store -- the whole array is returned;
+    * a **group** (e.g. OME-Zarr multiscale) -- the full-resolution array is
+      returned (member ``"0"`` if present, otherwise the first array member).
+
+    The previous implementation did ``zarr.open(path)[0]`` unconditionally,
+    which returned only the first *slice* of a plain array (silent data
+    corruption) and, under zarr 3.x, raised ``TypeError`` on a group because
+    members are keyed by string, not integer.
 
     Args:
-        path(pathlib.Path): The path to the Zarr file.
+        path(pathlib.Path): The path to the Zarr store.
 
     Returns:
-        numpy.array: A numpy array object for the data stored in the Zarr file.
+        numpy.array: A numpy array object for the data stored in the Zarr store.
     """
-
-    return np.array(zarr.open(path)[0])
+    opened = zarr.open(path, mode="r")
+    if isinstance(opened, zarr.Group):
+        names = list(opened.array_keys())
+        if not names:
+            raise ValueError(f"Zarr group at {path} contains no arrays.")
+        member = "0" if "0" in names else sorted(names)[0]
+        opened = opened[member]
+    return np.array(opened)
 
 
 def numpy_from_mrc(path):
@@ -330,25 +396,30 @@ def numpy_from_hdf5(path, hdf5_path="/data", nexus=False):
         for the data and a tuple with the chunking size.
     """
 
-    data_handle = h5.File(path, "r")
-    if nexus:
-        try:
-            dataset = data_handle["processed/result/data"]
-        except KeyError:
-            logging.error(
-                "NXS file: Couldn't find data at 'processed/result/data' trying another path."
-            )
+    # Use a context manager so the file handle is always released, even when a
+    # lookup fails (the previous code leaked the handle on every call and, on
+    # the nexus error path, called sys.exit(1) -- killing the whole process from
+    # inside a library function).
+    with h5.File(path, "r") as data_handle:
+        if nexus:
             try:
-                dataset = data_handle["entry/final_result_tomo/data"]
+                dataset = data_handle["processed/result/data"]
             except KeyError:
                 logging.error(
-                    "NXS file: Could not find entry at entry/final_result_tomo/data, exiting!"
+                    "NXS file: Couldn't find data at 'processed/result/data' trying another path."
                 )
-                sys.exit(1)
-    else:
-        dataset = data_handle[hdf5_path]
-    input_data_chunking = dataset.chunks
-    return dataset[()], input_data_chunking
+                try:
+                    dataset = data_handle["entry/final_result_tomo/data"]
+                except KeyError as exc:
+                    raise KeyError(
+                        f"NXS file {path}: could not find data at "
+                        "'processed/result/data' or 'entry/final_result_tomo/data'."
+                    ) from exc
+        else:
+            dataset = data_handle[hdf5_path]
+        input_data_chunking = dataset.chunks
+        # Materialise the array before the file closes (dataset is a lazy view).
+        return dataset[()], input_data_chunking
 
 
 def get_numpy_from_path(
@@ -374,6 +445,14 @@ def get_numpy_from_path(
         return numpy_from_zarr(path), True
     elif path.suffix in cfg.MRC_SUFFIXES:
         return numpy_from_mrc(path), True
+    else:
+        supported = sorted(
+            cfg.TIFF_SUFFIXES | cfg.HDF5_SUFFIXES | cfg.ZARR_SUFFIXES | cfg.MRC_SUFFIXES
+        )
+        raise ValueError(
+            f"Cannot read {path!s}: unsupported file extension {path.suffix!r}. "
+            f"Supported extensions: {supported}."
+        )
 
 
 def sequential_labels(unique_labels: np.array) -> bool:
@@ -421,8 +500,14 @@ def clip_to_uint8(data: np.array, data_mean: float, st_dev_factor: float) -> np.
         data = data.astype(float)
     data = np.clip(data, lower_bound, upper_bound, out=data)
     data = np.subtract(data, lower_bound, out=data)
-    data = np.divide(data, (upper_bound - lower_bound), out=data)
-    # data = (data - lower_bound) / (upper_bound - lower_bound)
+    data_range = float(upper_bound - lower_bound)
+    if data_range > 0:
+        data = np.divide(data, data_range, out=data)
+    else:
+        # Constant (or near-constant) volume: std dev is ~0 so there is no
+        # intensity range to rescale. Guard the divide-by-zero, which would
+        # otherwise produce NaN and an undefined NaN->uint8 cast.
+        data[...] = 0.0
     data = np.clip(data, 0.0, 1.0, out=data)
     # data = exposure.rescale_intensity(data, in_range=(lower_bound, upper_bound))
     logging.info("Converting to uint8.")
@@ -493,19 +578,23 @@ def axis_index_to_slice(vol, axis, index):
 
 def save_data_to_hdf5(data, file_path, internal_path="/data", chunking=True):
     logging.info(f"Saving data of shape {data.shape} to {file_path}.")
-    with h5.File(file_path, "w") as f:
-        f.create_dataset(
-            internal_path, data=data, chunks=chunking, compression=cfg.HDF5_COMPRESSION
-        )
+    # Atomic publish: a crash mid-write must not leave a partial output file.
+    with atomic_output_path(file_path) as tmp:
+        with h5.File(tmp, "w") as f:
+            f.create_dataset(
+                internal_path, data=data, chunks=chunking, compression=cfg.HDF5_COMPRESSION
+            )
 
 
 def save_data_to_tif(data, file_path, compress=True):
     logging.info(f"Saving data of shape {data.shape} to {file_path}.")
     compression = 'zlib' if compress else None
-    tifffile.imwrite(file_path, data, compression=compression)
+    with atomic_output_path(file_path) as tmp:
+        tifffile.imwrite(tmp, data, compression=compression)
 
 def save_data_to_mrc(data, file_path, voxel_size_angstrom=1.0):
     logging.info(f"Saving data of shape {data.shape} to {file_path}.")
     from volume_segmantics.data.mrc_utils import save_mrc
 
-    save_mrc(data, file_path, voxel_size_angstrom=voxel_size_angstrom)
+    with atomic_output_path(file_path) as tmp:
+        save_mrc(data, tmp, voxel_size_angstrom=voxel_size_angstrom)

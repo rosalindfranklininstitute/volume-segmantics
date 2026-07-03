@@ -118,16 +118,53 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         default=None,
         help="Path to directory containing unlabeled image slices (required for semi-supervised learning or pseudo-labeling)",
     )
-
+    # v0.4.0b3 — Lightning is the new default. Opt back into the
+    # raw-torch trainer for one release behind --legacy-trainer.
     parser.add_argument(
-        "--optimization",
-        metavar="PATH",
+        "--legacy-trainer",
+        action="store_true",
+        default=False,
+        help=(
+            "[deprecated, scheduled for removal in v0.5] Use the raw-torch "
+            "VolSeg2dTrainer instead of the new PyTorch Lightning trainer. "
+            "Required for SAM optimiser (`use_sam: true`) which has not "
+            "been ported to Lightning."
+        ),
+    )
+    parser.add_argument(
+        "--strategy",
         type=str,
         default=None,
+        help=(
+            "Lightning strategy override (e.g. 'ddp', 'auto'). Default "
+            "depends on the device count auto-detected by Lightning."
+        ),
+    )
+    parser.add_argument(
+        "--devices",
+        type=str,
+        default=None,
+        help=(
+            "Lightning devices override (e.g. 'auto', '1', '2'). Default "
+            "is 'auto'. Replaces the legacy USE_ALL_GPUS flag in "
+            "config.py."
+        ),
+    )
+    parser.add_argument(
+        "--optuna",
+        metavar="Path to optuna search-space config YAML",
+        type=str,
         nargs="?",
-        const="volseg-settings/optuna_config.yaml", # Default if no path is given
-        help="Path to Optuna search space config YAML. When provided, runs "
-            "hyperparameter optimization instead of a single training run.",
+        const="volseg-settings/optuna_config.yaml",
+        default=None,
+        help=(
+            "Run optuna hyperparameter optimisation instead of a single "
+            "training run. Takes an optuna config YAML path (default "
+            "'volseg-settings/optuna_config.yaml' if the flag is given with no "
+            "value). Optimisation drives the legacy trainer; requires the "
+            "optional [optuna] extra (pip install "
+            "volume-segmantics[optuna])."
+        ),
     )
     return parser
 

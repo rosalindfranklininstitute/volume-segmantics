@@ -1,0 +1,81 @@
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_multihead_smoke
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: low
+    output_probs: false
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: true
+        loss: boundary_bce_dice
+        loss_weight: 0.5
+        width: 2
+      distance:
+        enabled: true
+        loss: distance_l1
+        loss_weight: 0.25
+      sdm:
+        enabled: true
+        loss: sdm_l1
+        loss_weight: 0.25
+        variant: binary
+    targets:
+      boundary:
+        width: 2
+      distance:
+        distance_transform: edt
+      sdm:
+        distance_transform: edt
+tests:
+- name: train_pipeline_multihead
+  type: train
+  model_key: pipeline_multihead_model
+  overrides:
+    train:
+      model_output_fn: pipeline_multihead_smoke
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:pipeline_multihead_model}
+- name: predict_pipeline_multihead_low
+  type: predict
+  model_key: pipeline_multihead_model
+  overrides:
+    predict:
+      quality: low
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'

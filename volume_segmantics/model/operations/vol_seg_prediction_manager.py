@@ -440,21 +440,20 @@ class VolSeg2DPredictionManager(BaseDataManager):
         """
         Map task name to file suffix.
 
-        Args:
-            task_name: Task name like 'task1', 'task2', etc.
-
-        Returns:
-            str: Suffix like '_BND', '_DIST', etc.
+        Recognises both pipeline version head names (``boundary`` -> ``_BND``,
+        ``distance`` -> ``_DIST``, ``sdm`` -> ``_SDM``) and legacy
+        positional task names (``task1`` -> ``_BND``, ``task2`` ->
+        ``_DIST``) for back-compat with v0.4 ``Multitask_Unet``
+        checkpoints.
         """
-        # Map task indices to suffixes
-        # Primary segmentation is saved without suffix (or with _SEG if needed)
-        # task1 (first additional task, typically boundary): append _BND
-        # task2 (second additional task, typically distance map): append _DIST
         task_suffix_map = {
-            'task1': '_BND',  # Boundary (first additional task)
-            'task2': '_DIST',  # Distance map (second additional task)
+            "boundary": "_BND",
+            "distance": "_DIST",
+            "sdm": "_SDM",
+            "task1": "_BND",
+            "task2": "_DIST",
         }
-        return task_suffix_map.get(task_name, f'_{task_name.upper()}')
+        return task_suffix_map.get(task_name, f"_{task_name.upper()}")
 
 
 

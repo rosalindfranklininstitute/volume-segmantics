@@ -15,23 +15,14 @@ from torch.nn import DataParallel
 import volume_segmantics.utilities.base_data_utils as utils
 import volume_segmantics.utilities.config as cfg
 from tqdm import tqdm
+from volume_segmantics.data import pipeline_registry as _registry
 from volume_segmantics.data.dataloaders import get_2d_training_dataloaders
-from volume_segmantics.data.pytorch3dunet_losses import (
-    BCEDiceLoss,
-    DiceLoss,
-    GeneralizedDiceLoss,
-    BoundaryDoULoss,
-    BoundaryDoULossV2,
-    TverskyLoss,
-    BoundaryLoss,
-    BoundaryDoUDiceLoss
-)
+# Loss construction is delegated to the pipeline loss registry (see
+# ``_get_loss_criterion``); the loss classes are no longer imported here.
 from volume_segmantics.model.model_2d import create_model_from_file_full_weights
 from volume_segmantics.model.training.sam import SAM
 from volume_segmantics.model.operations.trainer_losses import (
     ConsistencyLoss,
-    ClassWeightedDiceLoss,
-    CombinedCEDiceLoss,
     get_rampup_ratio,
 )
 from volume_segmantics.model.operations.trainer_multitask import (
@@ -48,9 +39,23 @@ from volume_segmantics.model.operations.trainer_model_manager import ModelManage
 from volume_segmantics.model.operations.trainer_logging import TrainingLogger
 from volume_segmantics.model.operations.trainer_visualization import TrainingVisualizer
 
-import optuna
 
 from volume_segmantics.model.training.sam import SAM
+
+
+class NumericalTrainingError(RuntimeError):
+    """Raised when training produces a non-finite objective (NaN/Inf).
+
+    Used by the optuna optimizer to fail a single trial cleanly (via
+    ``study.optimize(catch=...)``) rather than poisoning the sampler with a
+    sentinel score or silently completing a divergent run. Defined here (no
+    optuna dependency) so the trainer can raise it in the optuna-free install.
+    """
+
+
+
+
+
 
 class VolSeg2dTrainer:
     """
@@ -74,6 +79,23 @@ class VolSeg2dTrainer:
             labels: Either number of labels or dictionary containing label names.
             settings: A training settings object.
         """
+        # v0.4.0b3 deprecation: the raw torch trainer is replaced by the
+        # PyTorch Lightning path (default in `model-train-2d`). This
+        # class is preserved for one release behind the
+        # ``--legacy-trainer`` flag.
+        import os
+        if not os.environ.get("VOLSEG_SUPPRESS_RAW_TRAINER_DEPRECATION"):
+            import warnings
+            warnings.warn(
+                "VolSeg2dTrainer (the raw-torch trainer) is deprecated as "
+                "of v0.4.0b3 and scheduled for removal in v0.5. The "
+                "PyTorch Lightning trainer is now the default — pass "
+                "--legacy-trainer to model-train-2d to keep using this "
+                "class.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         # Semi-supervised learning settings
         self.use_semi_supervised = getattr(settings, "use_semi_supervised", False)
         self.use_pseudo_labeling = getattr(settings, "use_pseudo_labeling", False)
@@ -444,38 +466,29 @@ class VolSeg2dTrainer:
     def _get_loss_criterion(self):
         loss_name = self.settings.loss_criterion
 
-        loss_map = {
-            "BCEDiceLoss": lambda: BCEDiceLoss(self.settings.alpha, self.settings.beta),
-            "DiceLoss": lambda: DiceLoss(normalization="none"),
-            "BCELoss": lambda: nn.BCEWithLogitsLoss(),
-            "CrossEntropyLoss": lambda: nn.CrossEntropyLoss(),
-            "GeneralizedDiceLoss": lambda: GeneralizedDiceLoss(),
-            "TverskyLoss": lambda: TverskyLoss(self.label_no),
-            "BoundaryDoULoss": lambda: BoundaryDoULoss(),
-            "BoundaryDoUDiceLoss": lambda: BoundaryDoUDiceLoss(alpha=0.5, beta=0.5),
-            "BoundaryDoULossV2": lambda: BoundaryDoULossV2(),
-            "BoundaryLoss": lambda: BoundaryLoss(),
-            # New class-weighted Dice losses
-            "ClassWeightedDiceLoss": lambda: ClassWeightedDiceLoss(
-                num_classes=self.label_no,
-                weight_mode=getattr(self.settings, "dice_weight_mode", "inverse_sqrt_freq"),
-                exclude_background=getattr(self.settings, "exclude_background_from_dice", True),
-            ),
-            "CombinedCEDiceLoss": lambda: CombinedCEDiceLoss(
-                num_classes=self.label_no,
-                alpha=getattr(self.settings, "ce_weight", 0.5),
-                beta=getattr(self.settings, "dice_weight", 0.5),
-                dice_weight_mode=getattr(self.settings, "dice_weight_mode", "inverse_sqrt_freq"),
-                exclude_background=getattr(self.settings, "exclude_background_from_dice", True),
-            ),
-        }
+        # Single source of truth: the pipeline loss registry. The raw
+        # CamelCase factories there reproduce the legacy constructions
+        # exactly. We pass one superset kwargs dict; each factory consumes
+        # only the keys it needs and ignores the rest.
+        loss_kwargs = dict(
+            num_classes=self.label_no,
+            alpha=self.settings.alpha,
+            beta=self.settings.beta,
+            ce_weight=getattr(self.settings, "ce_weight", 0.5),
+            dice_weight=getattr(self.settings, "dice_weight", 0.5),
+            weight_mode=getattr(self.settings, "dice_weight_mode", "inverse_sqrt_freq"),
+            dice_weight_mode=getattr(self.settings, "dice_weight_mode", "inverse_sqrt_freq"),
+            exclude_background=getattr(self.settings, "exclude_background_from_dice", True),
+        )
 
-        if loss_name in loss_map:
-            logging.info(f"Using {loss_name}")
-            return loss_map[loss_name]()
-        else:
+        try:
+            criterion = _registry.build_loss(loss_name, **loss_kwargs)
+        except KeyError:
             logging.error(f"Unknown loss criterion: {loss_name}, exiting")
             sys.exit(1)
+
+        logging.info(f"Using {loss_name}")
+        return criterion
 
     def _ensure_tuple_output(self, output) -> tuple:
         """Ensure model output is a tuple for consistent handling."""
@@ -536,8 +549,8 @@ class VolSeg2dTrainer:
         patience: int,
         create: bool = True,
         frozen: bool = False,
-        trial = None
-    ) -> Dict:
+        trial=None,
+    ) -> float:
         """
         Performs training of model for a number of epochs with automatic LR finding.
 
@@ -547,14 +560,19 @@ class VolSeg2dTrainer:
             patience: Epochs to wait while validation loss not improving before stopping.
             create: Whether to create a new model and optimizer from scratch.
             frozen: Whether to freeze encoder convolutional layers.
-            trial: Optional Optuna trial for hyperparameter optimization
+            trial: Optional optuna ``Trial``. When given, the per-epoch
+                validation dice is reported to the trial and the trial may be
+                pruned. The reporting step is the *accumulated* validation-epoch
+                count (``len(epoch_history['seg_dice'])``), so it stays strictly
+                increasing across the separate frozen/unfrozen ``train_model``
+                calls of one trial — otherwise the second phase would reuse
+                steps 1..N and optuna would ignore those reports (pruning would
+                silently die in the phase that matters).
 
         Returns:
-            dict: training results including validation metrics.
+            Best (max) validation dice over the accumulated epoch history, i.e.
+            the trial objective so far. ``0.0`` if no validation epoch ran.
         """
-
-        if not hasattr(self, 'best_val_metric'): # Track best validation metric
-            self.best_val_metric = 0.0  
         self.output_path = output_path  # Store for visualization
         if create:
             self._create_model_and_optimiser(self.starting_lr, frozen=frozen)
@@ -782,24 +800,19 @@ class VolSeg2dTrainer:
                             logging.warning(f"Failed to generate pseudo-labeling visualization at epoch {epoch}: {e}")
                             import traceback
                             logging.warning(traceback.format_exc())
-            
-            # Track best validation metric for Optuna
-            current_eval_metric = self.epoch_history["seg_dice"][-1]
-            if current_eval_metric > self.best_val_metric:
-                self.best_val_metric = current_eval_metric
 
-            # pruning: stops unpromising trials early
-            if trial is not None:
-                trial.report(self.best_val_metric, epoch)
-                if trial.should_prune():
-                    raise optuna.exceptions.TrialPruned()
-                
-            # Diagnostic Logging 
+            # Diagnostic Logging
             if epoch == 1 or epoch % 5 == 0:
                 self._log_gradient_statistics(epoch)
 
             if epoch == 1 or epoch % 5 == 0:
                 self._log_parameter_statistics(epoch)
+
+            # Optuna: report the objective (validation dice) and maybe prune.
+            # Placed after validation stats are appended and before early
+            # stopping so a pruned trial exits promptly.
+            if trial is not None:
+                self._optuna_report_and_prune(trial)
 
             # Early Stopping Check
             current_valid_loss = self.epoch_history["valid_total"][-1]
@@ -812,11 +825,38 @@ class VolSeg2dTrainer:
                 break
 
         self._load_in_weights(output_path)
-        return {
-                'best_val_metric': self.best_val_metric,
-                'final_train_loss': self.epoch_history["train_total"][-1] if self.epoch_history["train_total"] else 0.0,
-                'final_valid_loss': self.epoch_history["valid_total"][-1] if self.epoch_history["valid_total"] else 0.0,
-            }
+        dice_history = self.epoch_history.get("seg_dice", [])
+        return max(dice_history) if dice_history else 0.0
+
+    def _optuna_report_and_prune(self, trial) -> None:
+        """Report the latest validation dice to an optuna trial and prune.
+
+        Raises :class:`NumericalTrainingError` on a non-finite objective (so the
+        study records the trial as failed rather than trusting the value) and
+        ``optuna.TrialPruned`` when the pruner decides to stop the trial. The
+        report ``step`` is the accumulated validation-epoch count so it is
+        strictly monotonic across the frozen and unfrozen phases of one trial.
+        """
+        dice_history = self.epoch_history.get("seg_dice", [])
+        if not dice_history:
+            return
+        current_dice = float(dice_history[-1])
+        if not math.isfinite(current_dice):
+            raise NumericalTrainingError(
+                f"Validation dice is non-finite ({current_dice!r}) at "
+                f"validation epoch {len(dice_history)}; failing trial "
+                f"{getattr(trial, 'number', '?')}."
+            )
+        import optuna  # lazy: only needed to prune (after the finite check)
+
+        step = len(dice_history) - 1  # zero-based, monotonic across phases
+        trial.report(current_dice, step)
+        if trial.should_prune():
+            logging.info(
+                "Optuna pruning trial %s at step %d (dice=%.4f)",
+                getattr(trial, "number", "?"), step, current_dice,
+            )
+            raise optuna.TrialPruned()
 
     def _train_one_batch(self, lr_scheduler, batch) -> torch.Tensor:
         """Train on a single batch, handling both single and multi-task modes."""
@@ -1320,6 +1360,25 @@ class VolSeg2dTrainer:
     def _load_in_model_and_optimizer(
         self, learning_rate, output_path, frozen=False, optimizer=False
     ):
+        # Resume must rebuild the architecture the checkpoint was SAVED with,
+        # not re-derive it from the current settings/data. Otherwise auto-detecting
+        # in_channels from data (or an encoder / class-count / 2.5D change since
+        # the checkpoint was written) rebuilds a different model and the strict
+        # state_dict load fails with a size mismatch. The checkpoint carries its
+        # own model_struc_dict, so adopt it before building.
+        try:
+            _ckpt = torch.load(output_path, map_location="cpu", weights_only=False)
+            saved_struc = _ckpt.get("model_struc_dict")
+        except Exception as e:  # noqa: BLE001 - fall back to current settings
+            saved_struc = None
+            logging.warning("Could not read model_struc_dict from %s (%s); "
+                            "rebuilding from current settings.", output_path, e)
+        if saved_struc is not None:
+            self.model_struc_dict = saved_struc
+        else:
+            logging.warning("Checkpoint has no model_struc_dict; rebuilding from "
+                            "current settings (resume may fail if the model "
+                            "architecture has changed).")
         self._create_model_and_optimiser(learning_rate, frozen=frozen)
         logging.info("Loading weights from saved checkpoint.")
         loss_val = self._load_in_weights(output_path, optimizer=optimizer)

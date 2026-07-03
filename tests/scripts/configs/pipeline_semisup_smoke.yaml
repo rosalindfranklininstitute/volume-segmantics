@@ -1,0 +1,99 @@
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+  unlabeled:
+  - training_data/vessels_256cube_DATA.h5
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_semisup_smoke
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+    mean_teacher_vis_epoch_interval: 1
+  predict:
+    quality: low
+    output_probs: false
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: true
+        loss: boundary_bce_dice
+        loss_weight: 0.5
+        width: 2
+      distance:
+        enabled: true
+        loss: distance_l1
+        loss_weight: 0.25
+    targets:
+      boundary:
+        width: 2
+      distance:
+        distance_transform: edt
+    ema_teacher:
+      enabled: true
+      schedule:
+        alpha_warmup: 0.99
+        alpha_end: 0.999
+        warmup_steps: 100
+      consistency_weights:
+        semantic: 0.1
+        boundary: 0.05
+        distance: 0.05
+tests:
+- name: slice_unlabeled_pool
+  type: unlabeled_slicer
+  output_key: unlabeled_slices
+  output_dir: unlabeled_pool
+- name: train_pipeline_ema_teacher
+  type: train
+  model_key: pipeline_ema_model
+  args:
+  - --unlabeled_data_dir
+  - ${artifact:unlabeled_slices}
+  overrides:
+    train:
+      model_output_fn: pipeline_semisup_smoke
+      use_semi_supervised: true
+      use_pseudo_labeling: false
+      ema_decay: 0.99
+      consistency_weight: 0.1
+      rampup_start: 0
+      rampup_end: 100
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+    - '*_mean_teacher_epoch_*.png'
+- name: assert_bn_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:pipeline_ema_model}
+- name: predict_pipeline_semisup_low
+  type: predict
+  model_key: pipeline_ema_model
+  overrides:
+    predict:
+      quality: low
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'

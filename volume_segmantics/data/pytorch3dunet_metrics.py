@@ -3,8 +3,6 @@
     https://github.com/wolny/pytorch-3dunet
 """
 
-import importlib
-
 import numpy as np
 import torch
 
@@ -132,19 +130,37 @@ class MSE:
         return mean_squared_error(input, target)
 
 
+# Evaluation metrics provided by this module, keyed by their config name.
+SUPPORTED_EVAL_METRICS = {
+    "DiceCoefficient": DiceCoefficient,
+    "MeanIoU": MeanIoU,
+    "PSNR": PSNR,
+    "MSE": MSE,
+}
+
+
 def get_evaluation_metric(config):
     """
-    Returns the evaluation metric function based on provided configuration
-    :param config: (dict) a top level configuration object containing the 'eval_metric' key
+    Returns the evaluation metric function based on provided configuration.
+
+    Metrics are resolved from the classes defined in this module
+    (:data:`SUPPORTED_EVAL_METRICS`); an unknown name raises a clear
+    ``ValueError``. (Previously this imported the external ``pytorch3dunet``
+    package, which is not a dependency, so any call raised
+    ``ModuleNotFoundError``.)
+
+    :param config: (dict) a top level configuration object containing the
+        'eval_metric' key, whose value is a dict with a 'name' entry plus any
+        constructor kwargs.
     :return: an instance of the evaluation metric
     """
-
-    def _metric_class(class_name):
-        m = importlib.import_module('pytorch3dunet.unet3d.metrics')
-        clazz = getattr(m, class_name)
-        return clazz
-
-    assert 'eval_metric' in config, 'Could not find evaluation metric configuration'
-    metric_config = config['eval_metric']
-    metric_class = _metric_class(metric_config['name'])
-    return metric_class(**metric_config)
+    if "eval_metric" not in config:
+        raise ValueError("Could not find evaluation metric configuration")
+    metric_config = dict(config["eval_metric"])
+    name = metric_config.get("name")
+    if name not in SUPPORTED_EVAL_METRICS:
+        raise ValueError(
+            f"unknown eval_metric {name!r}; "
+            f"available: {sorted(SUPPORTED_EVAL_METRICS)}"
+        )
+    return SUPPORTED_EVAL_METRICS[name](**metric_config)

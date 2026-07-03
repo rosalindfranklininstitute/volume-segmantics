@@ -4,11 +4,31 @@ Pseudo-labeling components for semi-supervised learning.
 This module provides:
 - PseudoLabelGenerator: Generates and filters pseudo-labels from model predictions
 - ConfidenceThresholdScheduler: Schedules confidence threshold over training
+
+
+ :meth:`PseudoLabelGenerator.generate_per_head_pseudo_labels`
+generalises the single-semantic-head behaviour to the four-head set
+(``semantic`` / ``boundary`` / ``distance`` / ``sdm``). Per-head
+pseudo-target dispatch:
+
+* ``semantic`` — softmax -> argmax -> class indices ``(B, H, W) long``;
+  per-pixel acceptance mask from the existing max-prob / entropy /
+  per-class confidence path.
+* ``boundary`` — sigmoid -> soft target ``(B, 1, H, W)`` float;
+  acceptance mask = pixels where teacher is *confident* (``|0.5 - p|
+  >= margin``). Pixels near 0.5 (uncertain) are rejected.
+* ``distance`` — identity -> raw target ``(B, 1, H, W)`` float; mask =
+  all-True. Distance regression has no natural confidence proxy in
+  this minimal implementation; consistency loss does the work.
+* ``sdm`` — tanh-bounded raw target ``(B, K, H, W)`` float; mask =
+  all-True for the same reason.
+
+
 """
 
 import logging
 import math
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional, Sequence
 
 import numpy as np
 import torch
@@ -243,6 +263,135 @@ class PseudoLabelGenerator:
             "rejected_pixels": 0,
             "per_class_acceptance": {},
         }
+
+    #  per-head pseudo-label generation
+
+    def generate_per_head_pseudo_labels(
+        self,
+        model: nn.Module,
+        unlabeled_inputs: torch.Tensor,
+        head_names: Sequence[str],
+        num_classes: int,
+        *,
+        use_teacher: Optional[bool] = None,
+        boundary_confidence_margin: float = 0.3,
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        """Generate per-head pseudo-labels from a multi-head model.
+
+        Parameters
+        ----------
+        model
+            :class:`PipelineMultitaskUnet` or :class:`MeanTeacherModel`
+            wrapping one. The forward must return a tuple of head
+            outputs in the order given by ``head_names``.
+        unlabeled_inputs
+            ``(B, C, H, W)`` unlabeled image batch.
+        head_names
+            Ordered tuple of enabled head names, matching the model's
+            forward output order. Typically
+            ``model.head_names`` or ``model.student.head_names``.
+        num_classes
+            Semantic class count (used for the semantic head's filters
+            + the per_class SDM channel count).
+        use_teacher
+            Override :attr:`use_teacher_for_labels` for this call.
+        boundary_confidence_margin
+            For the boundary head, pixels with sigmoid prob in
+            ``[0.5 - margin, 0.5 + margin]`` are rejected. Larger
+            margin = stricter rejection.
+
+        Returns
+        -------
+        dict
+            ``{head_name: {"pseudo_target": Tensor, "mask": Tensor}}``.
+            Shapes:
+
+            * ``semantic.pseudo_target``: ``(B, H, W) long``;
+              ``mask``: ``(B, H, W) bool``.
+            * ``boundary.pseudo_target``: ``(B, 1, H, W) float``;
+              ``mask``: ``(B, 1, H, W) bool``.
+            * ``distance.pseudo_target``: ``(B, 1, H, W) float``;
+              ``mask``: ``(B, 1, H, W) bool`` (all-True — no natural
+              confidence for distance regression in pipeline version).
+            * ``sdm.pseudo_target``: ``(B, K, H, W) float``; ``mask``:
+              same shape, all-True.
+
+        Raises
+        ------
+        ValueError
+            ``head_names`` contains an unknown head name.
+        """
+        if use_teacher is None:
+            use_teacher = self.use_teacher_for_labels
+
+        # Forward through teacher or student.
+        model.eval()
+        with torch.no_grad():
+            if hasattr(model, "teacher") and hasattr(model, "student"):
+                outputs = model(unlabeled_inputs, use_teacher=use_teacher)
+            else:
+                outputs = model(unlabeled_inputs)
+
+        # Force tuple shape — multi-head model returns tuple already;
+        # single-output legacy model returns Tensor.
+        if not isinstance(outputs, tuple):
+            outputs = (outputs,)
+
+        if len(outputs) != len(head_names):
+            raise ValueError(
+                f"generate_per_head_pseudo_labels: model produced "
+                f"{len(outputs)} outputs but head_names has "
+                f"{len(head_names)} entries — caller must align them."
+            )
+
+        out: Dict[str, Dict[str, torch.Tensor]] = {}
+        for name, raw in zip(head_names, outputs):
+            if name == "semantic":
+                probs = F.softmax(raw, dim=1)
+                pred_labels = torch.argmax(probs, dim=1)  # (B, H, W) long
+                confidence = self._compute_confidence(probs)  # (B, H, W)
+                mask = confidence >= self.confidence_threshold
+                if self.min_pixels_per_class > 0:
+                    mask = self._filter_by_class_size(
+                        pred_labels, mask, num_classes,
+                    )
+                out[name] = {
+                    "pseudo_target": pred_labels.long(),
+                    "mask": mask,
+                }
+                self._update_stats(pred_labels, mask, num_classes)
+            elif name == "boundary":
+                # Soft sigmoid target; mask rejects uncertain band.
+                probs = torch.sigmoid(raw)  # (B, 1, H, W)
+                margin = float(boundary_confidence_margin)
+                mask = (probs - 0.5).abs() >= margin
+                out[name] = {
+                    "pseudo_target": probs,
+                    "mask": mask,
+                }
+            elif name == "distance":
+                # Identity target; no natural confidence in pipeline version.
+                target = raw.detach().float()
+                mask = torch.ones_like(target, dtype=torch.bool)
+                out[name] = {
+                    "pseudo_target": target,
+                    "mask": mask,
+                }
+            elif name == "sdm":
+                # tanh-bounded; same all-True mask as distance.
+                target = raw.detach().float()
+                mask = torch.ones_like(target, dtype=torch.bool)
+                out[name] = {
+                    "pseudo_target": target,
+                    "mask": mask,
+                }
+            else:
+                raise ValueError(
+                    f"generate_per_head_pseudo_labels: unknown head "
+                    f"{name!r}; pipeline version supports semantic / boundary / "
+                    f"distance / sdm."
+                )
+        return out
 
 
 class ConfidenceThresholdScheduler:

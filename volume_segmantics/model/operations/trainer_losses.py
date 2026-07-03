@@ -22,32 +22,97 @@ class ConsistencyLoss(nn.Module):
     Consistency loss between student and teacher predictions.
     Uses MSE on softmax probabilities.
     """
-    
+
     def __init__(self):
         super().__init__()
-        self.mse_loss = nn.MSELoss()
-    
+
     def forward(
-        self, 
-        student_pred: torch.Tensor, 
-        teacher_pred: torch.Tensor
+        self,
+        student_pred: torch.Tensor,
+        teacher_pred: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Compute consistency loss between student and teacher predictions.
-        
-        Args:
-            student_pred: Student model prediction (logits)
-            teacher_pred: Teacher model prediction (logits)
-        
-        Returns:
-            Consistency loss value (MSE on softmax probabilities)
-        """
-        # Apply softmax to both predictions 
-        student_probs = torch.softmax(student_pred, dim=1)
-        teacher_probs = torch.softmax(teacher_pred, dim=1)
-        
-        # MSE loss on probabilities
-        return self.mse_loss(student_probs, teacher_probs)
+        return seg_consistency_loss(student_pred, teacher_pred)
+
+
+# per-head consistency losses 
+# Each function takes raw head outputs (in the head's native
+# activation space — semantic = logits, boundary = logits,
+# distance = identity, sdm = tanh-bounded). Per-head activation is
+# applied internally so the call site doesn't need to track which
+# head's output needs softmax/sigmoid/identity.
+#
+# Teacher is detached: SSL consistency is a *student-only* gradient.
+# The teacher's path is the EMA-updated reference.
+
+
+def seg_consistency_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+) -> torch.Tensor:
+    """MSE on softmax probabilities for the semantic head.
+
+    """
+    student_probs = torch.softmax(student_logits, dim=1)
+    teacher_probs = torch.softmax(teacher_logits.detach(), dim=1)
+    return F.mse_loss(student_probs, teacher_probs)
+
+
+def boundary_consistency_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+) -> torch.Tensor:
+    """MSE on sigmoid probabilities for the boundary head."""
+    student_probs = torch.sigmoid(student_logits)
+    teacher_probs = torch.sigmoid(teacher_logits.detach())
+    return F.mse_loss(student_probs, teacher_probs)
+
+
+def distance_consistency_loss(
+    student_pred: torch.Tensor,
+    teacher_pred: torch.Tensor,
+) -> torch.Tensor:
+    """MSE on raw distance values (identity activation)."""
+    return F.mse_loss(student_pred, teacher_pred.detach())
+
+
+def sdm_consistency_loss(
+    student_pred: torch.Tensor,
+    teacher_pred: torch.Tensor,
+) -> torch.Tensor:
+    """MSE on tanh-bounded SDM outputs.
+
+    The :class:`SDMHead` already applies ``tanh`` internally, so both
+    sides are in ``[-1, 1]``; we just MSE the values directly.
+    """
+    return F.mse_loss(student_pred, teacher_pred.detach())
+
+
+#  Per-head consistency dispatcher 
+
+
+_PER_HEAD_CONSISTENCY = {
+    "semantic": seg_consistency_loss,
+    "boundary": boundary_consistency_loss,
+    "distance": distance_consistency_loss,
+    "sdm":      sdm_consistency_loss,
+}
+
+
+def per_head_consistency_loss(
+    head_name: str,
+    student_pred: torch.Tensor,
+    teacher_pred: torch.Tensor,
+) -> torch.Tensor:
+    """Dispatch to the right consistency loss for ``head_name``.
+
+    """
+    fn = _PER_HEAD_CONSISTENCY.get(head_name)
+    if fn is None:
+        raise ValueError(
+            f"per_head_consistency_loss: unknown head {head_name!r}; "
+            f"known: {sorted(_PER_HEAD_CONSISTENCY)}"
+        )
+    return fn(student_pred, teacher_pred)
 
 
 def get_rampup_ratio(

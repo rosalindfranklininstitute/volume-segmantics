@@ -41,7 +41,11 @@ class BaseDataManager:
         if self.settings.minmax_norm:
             logging.info(f"Before normalisation, Min: {np.min(self.data_vol)}, Max: {np.max(self.data_vol)}")
             self.data_vol = self.data_vol - np.min(self.data_vol)
-            self.data_vol = self.data_vol/ np.max(self.data_vol)
+            vol_max = np.max(self.data_vol)
+            if vol_max > 0:
+                self.data_vol = self.data_vol / vol_max
+            # else: constant volume -> already all-zero after subtracting min;
+            # skip the divide to avoid 0/0 -> NaN.
 
         if np.isnan(self.data_vol).any():
             logging.info(f"Replacing NaN values.")

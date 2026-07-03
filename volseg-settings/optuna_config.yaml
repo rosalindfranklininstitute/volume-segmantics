@@ -1,55 +1,55 @@
-# Study settings
+# Optuna hyperparameter-search config .
+# Used by:  model-train-2d ... --optuna volseg-settings/optuna_config.yaml
+#
+# Objective = best validation dice (maximised). The search runs the legacy
+# raw-torch trainer, slices the volumes once and reuses them across trials, and
+# prunes unpromising trials via per-epoch dice reports (MedianPruner).
+
+# --- study ---
 study_name: "volseg_optimization"
-n_trials: 2
+n_trials: 20
 seed: 42
-direction: "maximize"   # maximize (Dice) or minimize (loss)
-timeout: null           # max seconds to run, null = no limit
-visualize: true      # set true to generate HTML plots after optimization
+direction: "maximize"     # dice objective must be maximised (validated)
+timeout: null             # max wall-clock seconds for the whole study; null = none
+min_free_gb: 5.0          # refuse to start below this free space (full-disk guard)
+visualize: true           # after the study, save plots to root/optuna_plots/
+                          # (optimization_history, param_importances,
+                          #  parallel_coordinate). Needs the [optuna] extra.
 
-# Optional: uncomment for distributed/resumable optimization
-# storage: "sqlite:///optuna.db"
+# --- pruning ---
+n_startup_trials: 5       # don't prune until this many trials have completed
+n_warmup_steps: 3         # don't prune within a trial until this many val epochs
+                          # (set >= num_cyc_frozen so trials aren't killed on the
+                          #  frozen-phase plateau before the encoder unfreezes)
 
-# Pruning settings
-n_startup_trials: 5     # don't prune the first N trials
-n_warmup_steps: 3       # wait N epochs before pruning within a trial
-
-# Search space
+# --- search space ---
+# Only allow-listed keys are tunable (see optuna_optimizer._ALLOWED_*).
+# NOTE: image_size is NOT tunable here — the study slices once and reuses.
 search_space:
-  model_type:
-    type: "categorical"
-    choices: ["U_NET", "U_NET_PLUS_PLUS", "DEEPLABV3", "SEGFORMER"]
-
   starting_lr:
     type: "loguniform"
-    low: 1e-5
-    high: 1e-3
+    low: 1.0e-5
+    high: 1.0e-3
 
   end_lr:
     type: "loguniform"
-    low: 1e-4
-    high: 5e-3
+    low: 1.0e-4
+    high: 5.0e-3
 
   encoder_name:
     type: "categorical"
-    choices: ["resnet34", "resnet50", "tu-convnextv2_base", "tu-convnext_base"]
-
-  num_cyc_frozen:
-    type: "int"
-    low: 5
-    high: 15
-    step: 1
-
-  num_cyc_unfrozen:
-    type: "int"
-    low: 3
-    high: 10
-    step: 1
+    choices: ["resnet34", "resnet50", "tu-convnextv2_base"]
 
   loss_criterion:
     type: "categorical"
     choices: ["CombinedCEDiceLoss", "DiceLoss", "GeneralizedDiceLoss"]
 
-  # encoder_lr_multiplier:
-  #   type: "uniform"
-  #   low: 0.05
-  #   high: 0.5
+  num_cyc_frozen:
+    type: "int"
+    low: 5
+    high: 12
+
+  num_cyc_unfrozen:
+    type: "int"
+    low: 3
+    high: 8

@@ -1,0 +1,71 @@
+# Basic semantic (foreground/background) QA for the platelet-EM cells.
+# Deliberately NO `pipeline` section: this trains a plain semantic U-Net (the
+# legacy/default path) so we can verify the model can learn a solid cell vs.
+# background segmentation in isolation -- separate from the multitask /
+# instance-assembly pipeline.
+paths:
+  image: training_data/images_and_labels_rgba/platelet-em/images/50-images.tif
+  label: training_data/platelet_50_cell_SEMANTIC.tif
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/semantic_cell_qa
+global_overrides:
+  train:
+    image_size: 256
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 4
+    patience: 4
+    starting_lr: 5.0e-05
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet
+  predict:
+    quality: medium
+    output_probs: true
+    prediction_axis: Z
+tests:
+- name: train_semantic_cell
+  type: train
+  model_key: semantic_cell_model
+  overrides:
+    train:
+      model_output_fn: semantic_cell_qa
+      loss_criterion: CombinedCEDiceLoss
+      ce_weight: 0.2
+      dice_weight: 0.8
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:semantic_cell_model}
+- name: predict_semantic
+  type: predict
+  model_key: semantic_cell_model
+  overrides:
+    predict:
+      quality: medium
+      output_probs: true
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+- name: assert_semantic_quality
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/semantic_cell_qa/predict_semantic/*_vol_pred.tif
+  - --gt-label
+  - training_data/platelet_50_cell_SEMANTIC.tif
+  - --min-dice
+  - '0.85'

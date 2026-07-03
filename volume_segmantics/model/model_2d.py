@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Tuple, Optional, Union, Callable, Sequence, Any
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 from dataclasses import dataclass
 
 import segmentation_models_pytorch as smp
@@ -362,6 +362,19 @@ import volume_segmantics.utilities.config as cfg
 def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.Module:
     struct_dict_copy = model_struc_dict.copy()
     model_type = struct_dict_copy.pop("type")
+    # pipeline version trainer saves model_struc_dict["type"] as a string
+    # ("PIPELINE_MULTITASK_UNET", "U_NET", ...); legacy v0.4 saves the
+    # ``ModelType`` enum value itself. Coerce both to the enum so the
+    # downstream ``==`` comparisons work for either format.
+    if isinstance(model_type, str):
+        try:
+            model_type = utils.ModelType[model_type]
+        except KeyError as e:
+            raise ValueError(
+                f"create_model_on_device: unknown model type "
+                f"{model_type!r}; known: "
+                f"{[m.name for m in utils.ModelType]}"
+            ) from e
     in_channels_requested = struct_dict_copy.get("in_channels", cfg.MODEL_INPUT_CHANNELS)
     encoder_weights = struct_dict_copy.get("encoder_weights", None)
 
@@ -533,46 +546,96 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
         model = VanillaUNet(in_channels=in_channels, out_classes=struct_dict_copy["classes"], up_sample_mode='conv_transpose')
         logging.info(f"Sending the Vanilla Unet model to device {device_num}")
     elif model_type == utils.ModelType.MULTITASK_UNET:
-
-        heads_config = struct_dict_copy.pop("heads_config", None)
-        decoder_sharing = struct_dict_copy.pop("decoder_sharing", "shared")  # "shared" or "separate"
-        task_out_channels = struct_dict_copy.pop("task_out_channels", None)  # Remove if present (not used by MultitaskUnet)
-        task3_activation = struct_dict_copy.pop("task3_activation", None)  # e.g. "tanh" for SDF/EDT regression
-
-        classes = struct_dict_copy.pop("classes", 1)
-
-        if heads_config is None:
-            num_tasks = struct_dict_copy.pop("num_tasks", 1)
-            if num_tasks is None:
-                num_tasks = 1
-            num_tasks = int(num_tasks)
-
-            # Resolve task3 activation: "tanh" bounds output to [-1, 1] for SDF targets
-            t3_act = None
-            if task3_activation and str(task3_activation).lower() not in ("none", "null"):
-                t3_act = str(task3_activation).lower()
-
-            if decoder_sharing == "shared":
-                # All heads share decoder 0
-                heads_config = [
-                    {"classes": classes, "decoder_idx": 0, "activation": None}
-                ]
-                if num_tasks >= 2:
-                    heads_config.append({"classes": 1, "decoder_idx": 0, "activation": None})
-                if num_tasks >= 3:
-                    heads_config.append({"classes": 1, "decoder_idx": 0, "activation": t3_act})
+        raise DeprecationWarning(
+            "v0.4 'Multitask_Unet' is deprecated as of v0.4.0b3. "
+            "Use the new pipeline.yaml head registry instead — drop a "
+            "pipeline.yaml into your project's volseg-settings/ "
+            "directory and enable boundary / distance / sdm heads "
+            "under heads: "
+        )
+    elif model_type == utils.ModelType.PIPELINE_MULTITASK_UNET:
+        from volume_segmantics.model.pipeline_multitask_unet import (
+            PipelineMultitaskUnet,
+        )
+        head_modules = struct_dict_copy.pop("head_modules", None)
+        heads_descriptor = struct_dict_copy.pop("heads", None)
+        if head_modules is None:
+            if not heads_descriptor:
+                raise ValueError(
+                    "PIPELINE_MULTITASK_UNET requires either 'head_modules' "
+                    "(pre-built) or 'heads' (saved descriptor list) in the "
+                    "model_struc_dict — neither was present."
+                )
+            from volume_segmantics.data.pipeline_loader import HeadConfig
+            from volume_segmantics.model.heads import build_head_modules
+            heads_cfg: Dict[str, "HeadConfig"] = {}
+            for entry in heads_descriptor:
+                if not isinstance(entry, dict) or "name" not in entry:
+                    raise ValueError(
+                        f"PIPELINE_MULTITASK_UNET 'heads' entry must be a "
+                        f"dict with 'name'; got {entry!r}"
+                    )
+                hc = HeadConfig(enabled=True)
+                oc = entry.get("out_channels")
+                if oc is not None:
+                    hc.out_channels = int(oc)
+                heads_cfg[str(entry["name"])] = hc
+            # Mirror PipelineMultitaskUnet.__init__'s DINO-aware
+            # decoder_channels resolution so the heads we build here
+            # have in_channels matching the decoder's last-stage
+            # output. The trainer saves encoder_name + encoder_depth
+            # in struct_dict; we replicate the SMP-vs-DINO branching
+            # so the predict-side rebuild does not hardcode 16.
+            encoder_name_ckpt = str(struct_dict_copy.get("encoder_name", ""))
+            encoder_depth_ckpt = int(
+                struct_dict_copy.get("encoder_depth", 5) or 5
+            )
+            is_dino_ckpt = (
+                encoder_name_ckpt.startswith("dinov2_")
+                or encoder_name_ckpt.startswith("dinov3_")
+            )
+            default_decoder_channels = (256, 128, 64, 32, 16)
+            effective_depth_ckpt = (
+                min(encoder_depth_ckpt, 4)
+                if is_dino_ckpt
+                else encoder_depth_ckpt
+            )
+            if is_dino_ckpt and effective_depth_ckpt == 4:
+                effective_decoder_channels_ckpt = (256, 128, 64, 32)
             else:
-                # Each head has its own decoder
-                heads_config = [
-                    {"classes": classes, "decoder_idx": 0, "activation": None}
-                ]
-                if num_tasks >= 2:
-                    heads_config.append({"classes": 1, "decoder_idx": 1, "activation": None})
-                if num_tasks >= 3:
-                    heads_config.append({"classes": 1, "decoder_idx": 2, "activation": t3_act})
-
-        model = MultitaskUnet(heads_config=heads_config, **struct_dict_copy)
-        logging.info(f"Sending the Multitask U-Net model to device {device_num}")
+                effective_decoder_channels_ckpt = (
+                    default_decoder_channels[:effective_depth_ckpt]
+                )
+            decoder_in = int(
+                struct_dict_copy.get(
+                    "decoder_in_channels",
+                    int(effective_decoder_channels_ckpt[-1]),
+                )
+            )
+            head_modules = build_head_modules(
+                heads_cfg,
+                in_channels=decoder_in,
+                num_classes=int(struct_dict_copy.get("classes", 2)),
+                dim=2,
+            )
+            # Make sure PipelineMultitaskUnet rebuilds the decoder
+            # with the same channel sequence the trainer used.
+            struct_dict_copy.setdefault(
+                "decoder_channels",
+                tuple(effective_decoder_channels_ckpt),
+            )
+        # Discard fields that smp constructors consume but
+        # PipelineMultitaskUnet does not (they live on heads now).
+        struct_dict_copy.pop("classes", None)
+        struct_dict_copy.pop("activation", None)
+        struct_dict_copy.pop("aux_params", None)
+        model = PipelineMultitaskUnet(
+            head_modules=head_modules, **struct_dict_copy,
+        )
+        logging.info(
+            f"Sending the Pipeline Multitask U-Net model "
+            f"(heads={list(model.head_names)}) to device {device_num}"
+        )
 
     # If using pretrained weights with >3 input channels, adapt first conv by averaging RGB.
     # Skip this for DINO encoders as they handle channel adaptation internally
@@ -783,6 +846,49 @@ def _adapt_first_conv_from_imagenet_avg(model: torch.nn.Module, model_type, stru
             return
 
 
+def _load_state_dict_checked(module, state_dict, *, context=""):
+    """``load_state_dict(strict=False)`` that refuses to load a random model.
+
+    ``strict=False`` silently tolerates *any* key mismatch, so a checkpoint that
+    does not match the architecture (after the known MeanTeacher / ``module.``
+    normalisations) would load a partially- or fully-random model with no error.
+
+    This wrapper inspects the returned missing/unexpected keys:
+
+    * if **no** model parameter was loaded (every model key is missing), the
+      checkpoint is fundamentally incompatible and a ``RuntimeError`` is raised
+      rather than returning a fully-random model;
+    * otherwise any missing/unexpected keys are logged as a warning (with a
+      sample) so partial loads are visible instead of silent.
+    """
+    where = f" ({context})" if context else ""
+    total_model_keys = len(module.state_dict())
+    incompatible = module.load_state_dict(state_dict, strict=False)
+    missing = list(incompatible.missing_keys)
+    unexpected = list(incompatible.unexpected_keys)
+    matched = total_model_keys - len(missing)
+
+    if total_model_keys > 0 and matched == 0:
+        raise RuntimeError(
+            f"Checkpoint does not match the model architecture{where}: none of "
+            f"the model's {total_model_keys} parameters were found in the "
+            f"checkpoint ({len(unexpected)} unexpected key(s) present). Refusing "
+            f"to return a randomly-initialised model. Unexpected (sample): "
+            f"{unexpected[:5]}"
+        )
+    if missing or unexpected:
+        logging.warning(
+            "Checkpoint%s loaded with mismatches: %d/%d model parameters matched, "
+            "%d missing, %d unexpected. Missing (sample): %s; unexpected (sample): %s",
+            where, matched, total_model_keys, len(missing), len(unexpected),
+            missing[:5], unexpected[:5],
+        )
+    else:
+        logging.info("All %d checkpoint keys matched the model%s.",
+                     total_model_keys, where)
+    return incompatible
+
+
 def create_model_from_file(
     weights_fn: Path, gpu: bool = True, device_num: int = 0, settings=None,
 ) -> Tuple[torch.nn.Module, int, dict]:
@@ -795,9 +901,13 @@ def create_model_from_file(
         device_num: GPU device number
         settings: Optional settings object to override input channels for prediction
     """
-    if gpu:
+    if gpu and torch.cuda.is_available():
         map_location = f"cuda:{device_num}"
     else:
+        # No usable CUDA device: load and build on CPU regardless of the
+        # requested ``gpu``/``device_num`` so checkpoints saved on GPU still
+        # deserialize on CPU-only machines (e.g. CI runners).
+        gpu = False
         map_location = "cpu"
     weights_fn = weights_fn.resolve()
     logging.info("Loading model dictionary from file.")
@@ -832,11 +942,11 @@ def create_model_from_file(
     if isinstance(model, DataParallel):
         if state_dict and next(iter(state_dict.keys())).startswith("module."):
             state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
-        model.module.load_state_dict(state_dict, strict=False)
+        _load_state_dict_checked(model.module, state_dict, context=str(weights_fn))
     else:
         if state_dict and next(iter(state_dict.keys())).startswith("module."):
             state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
-        model.load_state_dict(state_dict, strict=False)
+        _load_state_dict_checked(model, state_dict, context=str(weights_fn))
 
     # Adapt first conv layer if input channels changed
     if requested_in_channels != saved_in_channels:
@@ -862,9 +972,11 @@ def create_model_from_file_full_weights(
 ) -> Tuple[torch.nn.Module, int, dict]:
     """Creates and returns a model and the number of segmentation labels
     that are predicted by the model."""
-    if gpu:
+    if gpu and torch.cuda.is_available():
         map_location = f"cuda:{device_num}"
     else:
+        # No usable CUDA device: fall back to CPU (see create_model_from_file).
+        device_num = "cpu"
         map_location = "cpu"
     weights_fn = weights_fn.resolve()
     logging.info("Loading model dictionary from file.")
@@ -874,7 +986,7 @@ def create_model_from_file_full_weights(
     model_dict = torch.load(weights_fn, map_location=map_location, weights_only=False)
 
     logging.info("Loading in the saved weights.")
-    model.load_state_dict(model_dict, strict=False)
+    _load_state_dict_checked(model, model_dict, context=str(weights_fn))
     model.to(device=map_location)
     num_classes = 2 #not used
     return model, num_classes, None

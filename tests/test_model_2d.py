@@ -123,14 +123,15 @@ def test_create_model_on_device_vanilla_unet(model_struc_vanilla_unet):
     assert device.index == 0
 
 
-@pytest.mark.gpu
-def test_create_model_on_device_multitask_unet(model_struc_multitask_unet):
-    """Create Multitask U-Net with single head."""
-    model = create_model_on_device(0, model_struc_multitask_unet)
-    assert isinstance(model, torch.nn.Module)
-    device = next(model.parameters()).device
-    assert device.type == "cuda"
-    assert device.index == 0
+def test_create_model_on_device_multitask_unet_deprecated(model_struc_multitask_unet):
+    """v0.4 ``MULTITASK_UNET`` raises ``DeprecationWarning`` in pipeline version.
+
+    The pipeline.yaml head registry (``PipelineMultitaskUnet`` +
+    ``model/heads/``) is the supported replacement; see its own
+    coverage in ``test_pipeline_multitask_unet.py``.
+    """
+    with pytest.raises(DeprecationWarning, match="pipeline.yaml"):
+        create_model_on_device(0, model_struc_multitask_unet)
 
 
 @pytest.mark.gpu
@@ -228,18 +229,15 @@ def test_model_forward_output_shape(model_type, encoder_name):
     assert out.shape == (2, 3, 64, 64)
 
 
-@pytest.mark.gpu
-def test_multitask_unet_forward_output_shape(model_struc_multitask_unet):
-    """Multitask U-Net forward returns tuple of masks with correct shape."""
-    model = create_model_on_device(0, model_struc_multitask_unet)
-    model.eval()
-    in_channels = model_struc_multitask_unet["in_channels"]
-    x = torch.rand(1, in_channels, 64, 64, device=next(model.parameters()).device)
-    with torch.no_grad():
-        out = model(x)
-    assert isinstance(out, tuple)
-    assert len(out) >= 1
-    assert out[0].shape == (1, 2, 64, 64)
+def test_multitask_unet_forward_deprecated(model_struc_multitask_unet):
+    """Forward path for v0.4 ``MULTITASK_UNET`` is unreachable in pipeline version.
+
+    Model construction raises before a forward pass is possible; the
+    pipeline-multitask forward shape is covered by
+    ``test_pipeline_multitask_unet.test_model_forward_returns_tuple_in_head_order``.
+    """
+    with pytest.raises(DeprecationWarning, match="pipeline.yaml"):
+        create_model_on_device(0, model_struc_multitask_unet)
 
 
 def test_create_model_unknown_type_raises(binary_model_struc_dict):

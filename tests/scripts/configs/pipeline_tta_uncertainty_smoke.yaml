@@ -1,0 +1,96 @@
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_tta_uncertainty_smoke
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: medium
+    output_probs: true
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+    prediction:
+      inference_mode: tta_uncertainty
+      uncertainty_provider: tta_uncertainty
+tests:
+- name: train_pipeline_tta
+  type: train
+  model_key: pipeline_tta_model
+  overrides:
+    train:
+      model_output_fn: pipeline_tta_smoke
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:pipeline_tta_model}
+- name: predict_tta_uncertainty
+  type: pipeline_predict_zarr
+  model_key: pipeline_tta_model
+  inference_mode: tta_uncertainty
+  output_zarr: prediction.zarr
+  zarr_key: tta_zarr
+- name: assert_tta_zarr_keys
+  type: pipeline_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:tta_zarr}
+  - --keys
+  - teacher_argmax
+  - teacher_probs
+  - tta_variance_map
+  - tta_entropy_map
+- name: assert_variance_nonneg
+  type: pipeline_assert
+  subcommand: zarr-array-range
+  args:
+  - ${artifact:tta_zarr}
+  - --key
+  - tta_variance_map
+  - --min
+  - '0.0'
+- name: assert_entropy_bounds
+  type: pipeline_assert
+  subcommand: zarr-array-range
+  args:
+  - ${artifact:tta_zarr}
+  - --key
+  - tta_entropy_map
+  - --min
+  - '0.0'
+  - --max
+  - '0.7'
+- name: assert_variance_low_max_prob
+  type: pipeline_assert
+  subcommand: variance-low-max-prob
+  args:
+  - ${artifact:tta_zarr}
+  - --min-spearman
+  - '0.15'

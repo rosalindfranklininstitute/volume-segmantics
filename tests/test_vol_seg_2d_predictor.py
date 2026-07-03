@@ -103,6 +103,31 @@ class TestVolseg2DPredictor:
 
     @pytest.mark.gpu
     @pytest.mark.slow
+    def test_predict_12_ways_noncubic_volume_stays_aligned(self, volseg_2d_predictor):
+        """12-way rotation/merge must keep output aligned on a NON-CUBIC volume.
+
+        The two 12-way paths use different rotation
+        conventions -- max_probs rotates 3D arrays with np.rot90 (axes 0,1),
+        one_hot rotates the channel-first 4D one-hot with axes=(-3,-2). Both
+        target the (Z, Y) plane, so they are correct; a wrong axis would make
+        the rotated term mis-shaped and the in-place `+=` would raise on a
+        non-cubic (Z != Y != X) volume.
+        """
+        rng = np.random.default_rng(0)
+        vol = rng.integers(0, 256, size=(28, 44, 60), dtype=np.uint8)  # Z!=Y!=X
+
+        labels, probs = volseg_2d_predictor._predict_12_ways_max_probs(vol)
+        assert labels.shape == vol.shape
+        assert probs.shape == vol.shape
+
+        counts = volseg_2d_predictor._predict_12_ways_one_hot(vol)
+        # channel-first one-hot: (num_labels, Z, Y, X)
+        assert counts.shape == (volseg_2d_predictor.num_labels, *vol.shape)
+        # argmax over classes is a valid label volume aligned to the input
+        assert np.argmax(counts, axis=0).shape == vol.shape
+
+    @pytest.mark.gpu
+    @pytest.mark.slow
     def test_prediction_estimate_entropy_medium_returns_shapes(self, volseg_2d_predictor, rand_int_volume):
         """_prediction_estimate_entropy with quality medium returns labels, probs, entropy, counts."""
         volseg_2d_predictor.settings.quality = "medium"

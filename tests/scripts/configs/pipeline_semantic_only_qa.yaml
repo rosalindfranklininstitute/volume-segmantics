@@ -1,0 +1,88 @@
+# Diagnostic: run the MULTITASK PIPELINE with ONLY the semantic head enabled,
+# same data/encoder/training budget as semantic_cell_qa.yaml (the plain
+# semantic U-Net, which reaches Dice ~0.96). Comparing the two isolates the
+# multitask pipeline's semantic regression:
+#   * if this reaches ~0.96 too  -> the bug is multi-head interaction
+#     (boundary/distance/sdm heads or loss weighting corrupting semantic).
+#   * if this is also low/edge-like -> the bug is in the pipeline's own
+#     semantic target / loss / prediction path.
+paths:
+  image: training_data/images_and_labels_rgba/platelet-em/images/50-images.tif
+  label: training_data/platelet_50_cell_SEMANTIC.tif
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_semantic_only_qa
+global_overrides:
+  train:
+    image_size: 256
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 4
+    patience: 4
+    starting_lr: 5.0e-05
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet
+  predict:
+    quality: low
+    output_probs: true
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: false
+      distance:
+        enabled: false
+      sdm:
+        enabled: false
+    prediction:
+      inference_mode: single_axis
+      per_axis_instances:
+        enabled: false
+    instance_assembly:
+      backend: null
+tests:
+- name: train_pipeline_semantic_only
+  type: train
+  model_key: pipeline_semantic_only_model
+  overrides:
+    train:
+      model_output_fn: pipeline_semantic_only_qa
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:pipeline_semantic_only_model}
+- name: predict_semantic_zarr
+  type: pipeline_predict_zarr
+  model_key: pipeline_semantic_only_model
+  inference_mode: single_axis
+  output_zarr: prediction.zarr
+  zarr_key: sem_zarr
+- name: assert_semantic_quality
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:sem_zarr}
+  - --pred-key
+  - teacher_argmax
+  - --gt-label
+  - training_data/platelet_50_cell_SEMANTIC.tif
+  - --min-dice
+  - '0.85'
