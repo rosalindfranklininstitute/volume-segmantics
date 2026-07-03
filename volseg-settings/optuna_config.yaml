@@ -38,7 +38,7 @@ search_space:
 
   encoder_name:
     type: "categorical"
-    choices: ["resnet34", "resnet50"]
+    choices: ["resnet34", "resnet50", "tu-convnextv2_base"]
 
   loss_criterion:
     type: "categorical"
