@@ -48,11 +48,12 @@ def get_backend(name: str) -> Type:
     """
     if name not in _BACKENDS:
         known = sorted(_BACKENDS)
-        if name == "usegment3d" and not known:
+        if name == "usegment3d":
             raise KeyError(
-                "instance-assembly backend 'usegment3d' requires the "
-                "optional extra. Install via "
-                "`pip install volume-segmantics[usegment3d]`."
+                "instance-assembly backend 'usegment3d' is not registered; it "
+                "requires the optional extra. Install via "
+                "`pip install volume-segmantics[usegment3d]`. "
+                f"(currently known: {known})"
             )
         raise KeyError(
             f"unknown instance-assembly backend {name!r}; known: {known}"

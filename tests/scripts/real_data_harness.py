@@ -44,6 +44,9 @@ class HarnessContext:
     dry_run: bool = False
     models: Dict[str, Path] = field(default_factory=dict)
     artifacts: Dict[str, Path] = field(default_factory=dict)
+    # Artifacts whose producing step was skipped (e.g. an unavailable optional
+    # instance-assembly backend). Steps that consume these are cascade-skipped.
+    skipped_artifacts: set = field(default_factory=set)
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -680,6 +683,50 @@ STEP_DISPATCH = {
 }
 
 
+def _instance_backend_available(name: Optional[str]) -> bool:
+    """True if the named instance-assembly backend is registered.
+
+    Optional backends (e.g. ``usegment3d``, which needs the ``[usegment3d]``
+    extra) are absent from the registry when their package isn't installed.
+    """
+    if not name:
+        return True
+    try:
+        from volume_segmantics.inference.instance_assembly import list_backends
+        return name in list_backends()
+    except Exception:
+        return False
+
+
+def _should_skip_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> bool:
+    """Gracefully skip steps needing an unavailable optional backend, and cascade
+    the skip to later steps that consume the skipped artifact.
+
+    """
+    name = str(step_cfg.get("name", "<unnamed>"))
+    step_type = str(step_cfg.get("type", "")).lower()
+
+    if step_type == "pipeline_predict_zarr":
+        backend = step_cfg.get("instance_assembly_backend")
+        if backend and not _instance_backend_available(backend):
+            zarr_key = step_cfg.get("zarr_key", f"{name}_zarr")
+            ctx.skipped_artifacts.add(zarr_key)
+            print(
+                f"[SKIP] {name}: instance-assembly backend '{backend}' is not "
+                f"installed (optional extra). Skipping step and cascading to "
+                f"artifact '{zarr_key}'."
+            )
+            return True
+
+    # Cascade: skip any step whose args reference an already-skipped artifact.
+    for arg in step_cfg.get("args", []) or []:
+        for key in ctx.skipped_artifacts:
+            if f"${{artifact:{key}}}" in str(arg):
+                print(f"[SKIP] {name}: depends on skipped artifact '{key}'.")
+                return True
+    return False
+
+
 def run_harness(
     config_path: Path,
     dry_run: bool = False,
@@ -714,6 +761,8 @@ def run_harness(
         test_type = str(test_cfg.get("type", "")).lower()
         name = str(test_cfg.get("name", "<unnamed>"))
         print(f"\n=== {name} ({test_type}) ===")
+        if _should_skip_step(context, test_cfg):
+            continue
         handler = STEP_DISPATCH.get(test_type)
         if handler is None:
             raise ValueError(f"Unsupported step type '{test_type}' in '{name}'")
