@@ -150,6 +150,3 @@ dmypy.json
 # derived label volumes (built by training_data/prepare_platelet_instance.py)
 /training_data/platelet_50_cell_SEMANTIC.tif
 /training_data/platelet_50_cell_INSTANCE.tif
-
-paper.bib
-paper.md
