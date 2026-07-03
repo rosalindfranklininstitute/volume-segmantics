@@ -91,9 +91,10 @@ with pretrained models for common EM segmentation tasks. Several commercial
 packages exist, such as Dragonfly [@Dragonfly2025], WebKnossos [@Boergens2017]
 and Avizo [@Avizo2025], which provide commercial, often proprietary, deep
 learning frameworks for volumetric image segmentation. Overall, open-source
-packages often require some coding to use fully, and there are few integrated
-packages for deep-learning segmentation of volumetric images designed for
-non-specialists that exist outside of commercial packages.
+packages often require some coding to use fully, and there are few packages 
+for deep-learning segmentation of volumetric images designed to allow highly
+configurable and annotation-efficient segmentation pipelines outside of commercial 
+options.
 
 # New features
 
