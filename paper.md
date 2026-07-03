@@ -1,5 +1,5 @@
 ---
-title: 'Volume Segmantics: an annotation-efficient volumetric bioimage segmentation toolkit (new release)'
+title: 'Volume Segmantics: an annotation-efficient volumetric bioimage segmentation toolkit (version 0.4)'
 tags:
   - Python
   - Deep learning
