@@ -12,7 +12,7 @@ This work utilises the abilities afforded by the excellent [segmentation-models-
 
 ## Requirements
 
-A machine capable of running CUDA enabled PyTorch version 2.0 or greater is required. This generally means a reasonably modern NVIDIA GPU. The exact requirements differ according to operating system. For example on Windows you will need Visual Studio Build Tools as well as CUDA Toolkit installed see [the CUDA docs](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html) for more details. 
+A machine capable of running CUDA enabled with a recent version of Pytorch (2.5 or greater is recommended). This generally means a reasonably modern NVIDIA GPU. The exact requirements differ according to operating system. For example on Windows you will need Visual Studio Build Tools as well as CUDA Toolkit installed see [the CUDA docs](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html) for more details. 
 
 ## Installation
 
@@ -69,41 +69,18 @@ model-predict-2d path/to/model_file.pytorch path/to/data_for_prediction.tiff
 
 The input data will be segmented using the input model following the settings specified in `volseg-settings/2d_model_predict_settings.yaml`. Depending on whether OUTPUT_FORMAT in config.py is set to "tif" or "hdf" or "mrc", a TIFF or HDF5 or MRC file containing the segmented volume will be saved to your working directory.
 
-### 2.5D Slicing Feature
+### Training features
 
-Volume-segmantics supports 2.5D slicing, which creates multi-channel images from adjacent slices in the volume. This feature can be enabled by setting `use_2_5d_slicing: True` in the training settings file. This approach provides the model with spatial context from adjacent slices. The encoder adjusts to use the number of input channels specified by the num_slices parameter in  `volseg-settings/2d_model_train_settings.yaml` (when 2.5D slicing is enabled). When using 2.5D slicing for training, you must also enable 2.5D prediction for inference by setting `use_2_5d_prediction: True` in your `2d_model_predict_settings.yaml` file and set the num_slices parameter there.
+Volume Segmantics supports training using a variety of U-net encoder-decoder architectures and encoder choices, including Transformer- based models such as DINO. It allows purely axial or tri-planar/multi-axis prediction as well as supporting multiple decoder and multiple head architectures and multi-task training through a configurable `pipeline.yaml`.
+
+Volume Segmantics supports 2.5D slicing, which creates multi-channel images from adjacent slices in the volume. This feature can be enabled by setting `use_2_5d_slicing: True` in the training settings file. This approach provides the model with spatial context from adjacent slices. The encoder adjusts to use the number of input channels specified by the num_slices parameter in  `volseg-settings/2d_model_train_settings.yaml` (when 2.5D slicing is enabled). When using 2.5D slicing for training, you must also enable 2.5D prediction for inference by setting `use_2_5d_prediction: True` in your `2d_model_predict_settings.yaml` file and set the num_slices parameter there. 
+
 
 
 ### Tutorial using example data
 
 A tutorial is available [here](training_data/README.md) that provides a walk-through of how to segment blood vessels from synchrotron X-ray micro-CT data collected on a sample of human placental tissue.
 
-## Currently supported model architectures and encoders
-
-The model architectures which are currently available and tested are: 
-- U-Net
-- U-Net++
-- FPN
-- DeepLabV3
-- DeepLabV3+
-- MA-Net
-- LinkNet
-- PAN
-- SegFormer
-- Vanilla U-net 
-
-The pre-trained encoders that can be used with these architectures are: 
-- ResNet-34
-- ResNet50
-- ResNeXt-50_32x4d
-- Efficientnet-b3
-- Efficientnet-b4
-- Resnest50d\*
-- Resnest101e\*
-- ConvNext
-- ConvNextV2
-
-\* Encoders with asterisk not compatible with PAN.
 
 
 ## Contributing

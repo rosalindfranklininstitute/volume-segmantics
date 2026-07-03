@@ -10,28 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-Multitask support using MONAI dataloaders and augmentations.
-Multi-slice support
-New encoders including DINO encoders
-New and revised loss functions
-Extensive additional logging and training plots 
-MRC file support. 
-Confidence maps from Test-Time Augmentation (rotations and flips).
+
+Multitask support through a YAML-configurable pipeline.
+Support for MONAI dataloaders and augmentations.
+Multi-slice support.
+Pytorch Lightning trainer with support for mixed precision and multi-GPU training.
+New encoders including DINO encoders.
+New and revised loss functions.
+Extensive additional logging and training plots. 
+MRC I/O file support.
+Zarr output support for structured outputs like multi-task and confidence maps.
+Confidence maps from Test-Time Augmentation.
 The use of Optuna for automated hyperparameter tuning. 
 This release has a testing harness for script-driven regression testing. 
+Added sample data for multiclass and multitask training.
+Added Github pages documentation.
 
 ### Fixed
 
+Improved determinism, atomic IO and I/O error handling.
 
-
-### Changed
 
 
 ## [0.3.3] 
 
 ### Added
-Surface Distance Library
-Initial support for prediction over Zarr
+Asseed Surface Distance loss.
+Initial support for prediction over Zarr.
 Allow prediction over a directory of images.
 Additional train settings for providing weights.
 Allow train script to run slicer and train mode separately.
@@ -48,10 +53,6 @@ Ensure certain arguments are required on command line.
 
 
 ## [0.3.2] 
-
-### Added
-
-### Fixed
 
 ### Changed
 Moved development to RFI.
@@ -85,7 +86,6 @@ Increases minimum dimensions for random volume in tests.
 ### Fixed
 Fixes regex to in datasets.py use a raw string.
 
-### Changed
 
 
 
@@ -95,7 +95,6 @@ Adds tests for VolSeg2DPredictor.
 More consolidation of pytorch-3dunet code.
 Adds tests for VolSegPredictionManager.
 
-### Fixed
 
 ### Changed
 
@@ -104,12 +103,13 @@ Formatting changes for VolSeg2DPredictor tests.
 
 ## [0.2.6]
 
+### Added
+
 Adds training data.
 Adds imagecodecs as a dependency to enable opening compressed tiff files.
 Adds action to zip training data and add to release as asset.
 Rationalise testing for pytorch-3dunet functions.
 
-### Fixed
 
 ### Changed
 Replaces GeneralisedAveragePrecision metric with DiceCoefficient.
