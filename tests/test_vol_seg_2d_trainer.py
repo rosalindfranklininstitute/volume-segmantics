@@ -99,3 +99,23 @@ class TestVolSeg2dTrainer:
         volseg_2d_trainer.output_prediction_figure(output_path)
         pred_fig_path = empty_dir / "one_epoch_model_prediction_image.png"
         assert pred_fig_path.is_file()
+
+    @pytest.mark.gpu
+    def test_resume_rebuilds_architecture_from_checkpoint(
+        self, volseg_2d_trainer, model_path
+    ):
+        """Resume (create=False) must rebuild the model from the checkpoint's
+        saved ``model_struc_dict``, not re-derive ``in_channels`` from the
+        (grayscale) training data.
+
+        """
+        saved = torch.load(model_path, map_location="cpu", weights_only=False)
+        saved_in_channels = saved["model_struc_dict"]["in_channels"]
+
+        # Should not raise (previously: RuntimeError size mismatch [.,3,.] vs [.,1,.]).
+        volseg_2d_trainer._load_in_model_and_optimizer(
+            volseg_2d_trainer.starting_lr, model_path, frozen=True, optimizer=False
+        )
+
+        # The rebuilt model matches the checkpoint's saved architecture.
+        assert volseg_2d_trainer.model_struc_dict["in_channels"] == saved_in_channels

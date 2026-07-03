@@ -612,23 +612,42 @@ class ModelManager:
         map_location = f"cuda:{self.model_device_num}" if gpu else "cpu"
         model_dict = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
         logging.info("Loading model weights.")
-        
+
+        def _strict_load(module):
+            # A size mismatch here means the model being loaded into was built
+            # with a different architecture than the checkpoint was saved with
+            # (in_channels / encoder / class-count drift). Re-raise with an
+            # actionable message instead of a raw torch state_dict trace. The
+            # resume path (train_model create=False) rebuilds from the
+            # checkpoint's saved 'model_struc_dict' to avoid this.
+            try:
+                module.load_state_dict(model_dict["model_state_dict"])
+            except RuntimeError as e:
+                saved_struc = model_dict.get("model_struc_dict")
+                raise RuntimeError(
+                    "Failed to load checkpoint weights: the model architecture "
+                    "does not match the checkpoint. This usually means the "
+                    "checkpoint was saved with a different in_channels / encoder "
+                    f"/ number of classes. Saved model_struc_dict={saved_struc}. "
+                    f"Original error: {e}"
+                ) from e
+
         # Handle MeanTeacherModel state dict and DataParallel checkpoint mismatch.
         # Checkpoints are saved from model.module.state_dict() (no "module." prefix)
         # when using DataParallel, so load into model.module when wrapped.
         if use_semi_supervised:
             if isinstance(model, DataParallel):
-                model.module.load_state_dict(model_dict["model_state_dict"])
+                _strict_load(model.module)
                 if 'glob_it' in model_dict:
                     model.module.glob_it = model_dict['glob_it']
             else:
-                model.load_state_dict(model_dict["model_state_dict"])
+                _strict_load(model)
                 if 'glob_it' in model_dict:
                     model.glob_it = model_dict['glob_it']
         elif isinstance(model, DataParallel):
-            model.module.load_state_dict(model_dict["model_state_dict"])
+            _strict_load(model.module)
         else:
-            model.load_state_dict(model_dict["model_state_dict"])
+            _strict_load(model)
         
         if load_optimizer:
             logging.info("Loading optimizer weights.")

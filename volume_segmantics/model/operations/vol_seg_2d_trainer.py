@@ -1360,6 +1360,25 @@ class VolSeg2dTrainer:
     def _load_in_model_and_optimizer(
         self, learning_rate, output_path, frozen=False, optimizer=False
     ):
+        # Resume must rebuild the architecture the checkpoint was SAVED with,
+        # not re-derive it from the current settings/data. Otherwise auto-detecting
+        # in_channels from data (or an encoder / class-count / 2.5D change since
+        # the checkpoint was written) rebuilds a different model and the strict
+        # state_dict load fails with a size mismatch. The checkpoint carries its
+        # own model_struc_dict, so adopt it before building.
+        try:
+            _ckpt = torch.load(output_path, map_location="cpu", weights_only=False)
+            saved_struc = _ckpt.get("model_struc_dict")
+        except Exception as e:  # noqa: BLE001 - fall back to current settings
+            saved_struc = None
+            logging.warning("Could not read model_struc_dict from %s (%s); "
+                            "rebuilding from current settings.", output_path, e)
+        if saved_struc is not None:
+            self.model_struc_dict = saved_struc
+        else:
+            logging.warning("Checkpoint has no model_struc_dict; rebuilding from "
+                            "current settings (resume may fail if the model "
+                            "architecture has changed).")
         self._create_model_and_optimiser(learning_rate, frozen=frozen)
         logging.info("Loading weights from saved checkpoint.")
         loss_val = self._load_in_weights(output_path, optimizer=optimizer)
