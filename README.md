@@ -16,11 +16,21 @@ A machine capable of running CUDA enabled with a recent version of Pytorch (2.5 
 
 ## Installation
 
-### Conda/Virtualenv (PyPI)
+### Conda/Virtualenv 
 
-The latest published release may be installed from the Python Package Index in a new conda environment or virtualenv with python (ideally >= version 3.10) and pip: activate the environment and `pip install volume-segmantics`. 
+Currently, the release version of Volume Segmantics (0.4.0) is not on PyPy. To install, create a new Conda/Miniconda environment (We recommend Python 3.11-3.12) and clone the Volume-Segmentics package directly from the online repo and go to the 'volume-segmantics' directory. Then:
 
-If you find a CUDA-enabled build of PyTorch is not being installed by pip (this particularity seems to be an issue on Windows), you can try `pip install volume-segmantics --extra-index-url https://download.pytorch.org/whl`.
+```
+pip install poetry
+poetry install
+```
+
+To check that that the Pytorch version downloaded by the install is a CUDA version start a Python interpreter in the environment you've just installed Volume Segmantics into. Then:
+
+```
+import torch; torch.__version__
+```
+It should print out a version number (eg. 2.5.1+cu124) the "cu" indicates it's a CUDA version. If not ("cpu"), you will need to go to https://pytorch.org/get-started/locally/ and install a version of Pytorch that is suited to your CUDA version.
 
 ### Docker/Apptainer Container (quay.io)
 A container image with the latest published release is available on the
