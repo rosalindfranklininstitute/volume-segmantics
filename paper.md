@@ -9,7 +9,7 @@ tags:
   - Bioimage analysis
 authors:
   - name: Avery Pennington
-    orcid: 0000-0000-0000-0000
+    orcid: 0000-0002-1179-4243
     corresponding: true
     affiliation: 1
   - name: Dolapo Adebo
