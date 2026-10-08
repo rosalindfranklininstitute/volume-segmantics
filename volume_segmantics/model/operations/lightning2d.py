@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 import volume_segmantics.utilities.config as cfg
 from volume_segmantics.data.pipeline_loader import (
@@ -24,6 +25,7 @@ from volume_segmantics.data.pipeline_loader import (
 )
 from volume_segmantics.model.heads import build_head_modules
 from volume_segmantics.model.operations.trainer_losses import (
+    get_rampup_ratio,
     per_head_consistency_loss,
 )
 from volume_segmantics.model.pipeline_multitask_unet import PipelineMultitaskUnet
@@ -188,6 +190,63 @@ class _BinaryDiceAccumulator:
 # LightningModule
 
 
+class _PseudoLabelling:
+    """Pseudo-label loss on the unlabeled batch, settings-driven as in the
+    raw-torch trainer: hard labels from the teacher's (or the student's)
+    view, a confidence mask with a per-class size filter and an optional
+    threshold schedule, cross-entropy on the accepted pixels of the student's
+    view, and ``pseudo_label_weight`` ramped over
+    ``pseudo_label_rampup_start`` .. ``pseudo_label_rampup_end`` steps."""
+
+    def __init__(self, settings: SimpleNamespace, *, teacher_available: bool) -> None:
+        from volume_segmantics.model.training.pseudo_labeling import (
+            ConfidenceThresholdScheduler,
+            PseudoLabelGenerator,
+        )
+        wants_teacher = bool(getattr(settings, "pseudo_label_use_teacher", teacher_available))
+        if wants_teacher and not teacher_available:
+            logger.warning(
+                "pseudo_label_use_teacher is True but Mean Teacher is not enabled; "
+                "pseudo-labels come from the student."
+            )
+        self.use_teacher = wants_teacher and teacher_available
+        threshold = float(getattr(settings, "pseudo_label_confidence_threshold", 0.95))
+        self.generator = PseudoLabelGenerator(
+            confidence_threshold=threshold,
+            confidence_method=str(getattr(settings, "pseudo_label_confidence_method", "max_prob")),
+            min_pixels_per_class=int(getattr(settings, "pseudo_label_min_pixels_per_class", 10) or 0),
+            use_teacher_for_labels=self.use_teacher,
+        )
+        self.weight = float(getattr(settings, "pseudo_label_weight", 1.0))
+        self.rampup_start = int(getattr(settings, "pseudo_label_rampup_start", 0) or 0)
+        self.rampup_end = int(getattr(settings, "pseudo_label_rampup_end", 5000) or 0)
+        self.scheduler = ConfidenceThresholdScheduler(
+            start_threshold=float(getattr(settings, "pseudo_label_start_threshold", 0.9)),
+            end_threshold=threshold,
+            schedule_type=str(getattr(settings, "pseudo_label_threshold_schedule", "fixed")),
+            start_iter=self.rampup_start,
+            end_iter=max(self.rampup_end, self.rampup_start + 1),
+            target_acceptance_rate=float(getattr(settings, "pseudo_label_target_acceptance_rate", 0.3)),
+        )
+        self.total_pixels = 0
+        self.accepted_pixels = 0
+
+    @classmethod
+    def from_settings(cls, settings: SimpleNamespace, *, teacher_available: bool):
+        if not getattr(settings, "use_pseudo_labeling", False):
+            return None
+        return cls(settings, teacher_available=teacher_available)
+
+    def weight_at(self, step: int) -> float:
+        return self.weight * get_rampup_ratio(step, self.rampup_start, self.rampup_end, "sigmoid")
+
+    def threshold_at(self, step: int) -> float:
+        acceptance = self.accepted_pixels / self.total_pixels if self.total_pixels else 0.0
+        threshold = float(self.scheduler.get_threshold(step, acceptance_rate=acceptance))
+        self.generator.confidence_threshold = threshold
+        return threshold
+
+
 class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
     """LightningModule wrapping the pipeline-mode model and loss.
 
@@ -267,6 +326,13 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         self.loss_calculator = loss_calculator
         self.settings = settings
         self.num_classes = int(num_classes)
+        # Mean Teacher's ramp of the consistency weight (pipeline.yaml
+        # ema_teacher.consistency_rampup; the legacy rampup_start/rampup_end).
+        self._consistency_ramp = ema_cfg.consistency_rampup if self._ssl_enabled else None
+        # Pseudo-labelling on the unlabeled batch (legacy pseudo_label_* settings).
+        self._pseudo_labelling = _PseudoLabelling.from_settings(
+            settings, teacher_available=self._ssl_enabled,
+        )
         self.total_steps = total_steps if total_steps is not None else 1
         self.label_codes: Dict[int, str] = dict(label_codes or {})
 
@@ -399,8 +465,16 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
     #  Training / validation steps 
 
     def _step(
-        self, batch: Mapping[str, torch.Tensor], stage: str,
+        self, batch: Mapping[str, Any], stage: str,
     ) -> torch.Tensor:
+        # With an unlabeled directory the data module pairs every labeled
+        # batch with an unlabeled one: {"labeled": ..., "unlabeled": ...}.
+        unlabeled_batch = None
+        if (
+            isinstance(batch, Mapping) and "labeled" in batch and "unlabeled" in batch
+        ):
+            unlabeled_batch = batch["unlabeled"]
+            batch = batch["labeled"]
         inputs, targets = prepare_training_batch(
             batch, device=self.device, num_labels=self.num_classes,
         )
@@ -418,25 +492,44 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
 
         total_loss = out.total_loss
 
-        # SSL: per-head consistency loss against the EMA teacher.
-        # Only fires during training_step. Validation runs the
-        # supervised loss only (we never log val_consistency).
+        # SSL: per-head consistency loss against the EMA teacher, on the
+        # unlabeled batch when the data module supplies one (student view vs
+        # teacher view), else on the labeled batch. The weight follows the
+        # Mean Teacher ramp. Validation runs the supervised loss only.
+        teacher_preds: Optional[Tuple[torch.Tensor, ...]] = None
+        student_unl_preds: Optional[Tuple[torch.Tensor, ...]] = None
+        x_teacher: Optional[torch.Tensor] = None
+        if stage == "train" and unlabeled_batch is not None:
+            x_student = unlabeled_batch["image"].to(torch.float32).to(self.device)
+            x_teacher = unlabeled_batch.get("image_teacher", unlabeled_batch["image"])
+            x_teacher = x_teacher.to(torch.float32).to(self.device)
+            student_unl_preds = _ensure_tuple_output(self.forward(x_student))
         if (
             stage == "train"
             and self._ssl_enabled
             and isinstance(self.model, MeanTeacherModel)
         ):
+            cons_student = student_unl_preds if student_unl_preds is not None else preds
+            cons_input = x_teacher if x_teacher is not None else inputs
             with torch.no_grad():
-                teacher_preds = self.model(inputs, use_teacher=True)
+                teacher_preds = _ensure_tuple_output(self.model(cons_input, use_teacher=True))
+            ramp = (
+                self._consistency_ramp.ratio(int(self.global_step))
+                if self._consistency_ramp is not None else 1.0
+            )
+            self.log(
+                "train_consistency_ramp", float(ramp),
+                on_step=False, on_epoch=True, sync_dist=True,
+            )
             head_names = self.head_names
             for head_name, weight in self._consistency_weights.items():
                 if weight == 0.0 or head_name not in head_names:
                     continue
                 idx = head_names.index(head_name)
                 cons_val = per_head_consistency_loss(
-                    head_name, preds[idx], teacher_preds[idx],
+                    head_name, cons_student[idx], teacher_preds[idx],
                 )
-                total_loss = total_loss + float(weight) * cons_val
+                total_loss = total_loss + float(weight) * float(ramp) * cons_val
                 self.log(
                     f"train_{head_name}_consistency", cons_val,
                     on_step=False, on_epoch=True, sync_dist=True,
@@ -444,7 +537,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
 
             # Per-head disagreement: monitoring only (TensorBoard).
             try:
-                student_dict = {n: preds[head_names.index(n)] for n in head_names}
+                student_dict = {n: cons_student[head_names.index(n)] for n in head_names}
                 teacher_dict = {n: teacher_preds[head_names.index(n)] for n in head_names}
                 disagreement = compute_per_head_disagreement(
                     student_dict, teacher_dict,
@@ -453,8 +546,18 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
                     "train_disagreement_mean", disagreement.mean(),
                     on_step=False, on_epoch=True, sync_dist=True,
                 )
-            except Exception:  # noqa: BLE001 — defensive monitoring
+            except Exception:  # noqa: BLE001 - defensive monitoring
                 pass
+
+        # Pseudo-labelling on the unlabeled batch.
+        if (
+            stage == "train"
+            and self._pseudo_labelling is not None
+            and student_unl_preds is not None
+        ):
+            total_loss = total_loss + self._pseudo_label_loss(
+                student_unl_preds, x_teacher, teacher_preds,
+            )
 
         # Logging contract: ``train_loss`` / ``val_loss`` are the
         # primary scalars. Per-head losses + weights go into the same
@@ -510,6 +613,63 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
                     )
 
         return total_loss
+
+    def _pseudo_label_loss(
+        self,
+        student_preds: Tuple[torch.Tensor, ...],
+        x_teacher: torch.Tensor,
+        teacher_preds: Optional[Tuple[torch.Tensor, ...]],
+    ) -> torch.Tensor:
+        """Weighted cross-entropy of the student's semantic head against hard
+        pseudo-labels on the accepted pixels of the unlabeled batch."""
+        pl_cfg = self._pseudo_labelling
+        head_names = self.head_names
+        sem_idx = head_names.index("semantic") if "semantic" in head_names else 0
+        threshold = pl_cfg.threshold_at(int(self.global_step))
+        if pl_cfg.use_teacher and isinstance(self.model, MeanTeacherModel):
+            source = teacher_preds
+            if source is None:
+                with torch.no_grad():
+                    source = _ensure_tuple_output(self.model(x_teacher, use_teacher=True))
+        else:
+            student = self._underlying_student
+            was_training = self.training
+            student.eval()
+            with torch.no_grad():
+                source = _ensure_tuple_output(student(x_teacher))
+            if was_training:
+                self.train()  # the override re-pins a frozen encoder to eval
+        with torch.no_grad():
+            probs = torch.softmax(source[sem_idx].detach(), dim=1)
+            labels = torch.argmax(probs, dim=1)
+            confidence = pl_cfg.generator._compute_confidence(probs)
+            mask = confidence >= threshold
+            if pl_cfg.generator.min_pixels_per_class > 0:
+                mask = pl_cfg.generator._filter_by_class_size(labels, mask, self.num_classes)
+        pl_cfg.total_pixels += int(mask.numel())
+        pl_cfg.accepted_pixels += int(mask.sum().item())
+        self.log(
+            "train_pseudo_label_acceptance", mask.float().mean(),
+            on_step=False, on_epoch=True, sync_dist=True,
+        )
+        self.log(
+            "train_pseudo_label_threshold", float(threshold),
+            on_step=False, on_epoch=True, sync_dist=True,
+        )
+        if not bool(mask.any()):
+            return torch.zeros((), device=self.device)
+        ce = F.cross_entropy(student_preds[sem_idx], labels, reduction="none")
+        loss = (ce * mask.float()).sum() / mask.float().sum()
+        weight = pl_cfg.weight_at(int(self.global_step))
+        self.log(
+            "train_pseudo_label_loss", loss,
+            on_step=False, on_epoch=True, sync_dist=True,
+        )
+        self.log(
+            "train_pseudo_label_weight", float(weight),
+            on_step=False, on_epoch=True, sync_dist=True,
+        )
+        return float(weight) * loss
 
     def on_train_batch_end(self, outputs, batch, batch_idx) -> None:
         """Advance the EMA teacher after every training step.

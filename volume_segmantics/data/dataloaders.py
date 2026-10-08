@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import volume_segmantics.utilities.base_data_utils as utils
 import volume_segmantics.utilities.config as cfg
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, RandomSampler
 from volume_segmantics.data.datasets import (get_2d_prediction_dataset,
                                              get_2d_training_dataset,
                                              get_2d_validation_dataset,
@@ -398,3 +398,55 @@ def get_pipeline_training_dataloaders(
         pin_memory=cfg.PIN_CUDA_MEMORY,
     )
     return training_dataloader, validation_dataloader
+
+
+def get_pipeline_unlabeled_dataloader(
+    unlabeled_dir: Path,
+    settings: SimpleNamespace,
+    pipeline_config: PipelineConfig,
+    *,
+    num_batches: int,
+) -> DataLoader:
+    """A loader of unlabeled slices whose epoch is exactly ``num_batches`` long.
+
+    Samples ``num_batches * batch_size`` slices with replacement, so it pairs
+    one-to-one with the labeled loader however many unlabeled slices there
+    are (the raw-torch trainer cycled its unlabeled iterator for the same
+    effect). Each batch is ``{"image": student view, "image_teacher": teacher
+    view}`` from :class:`UnlabeledPipelineDataset`, prepared exactly as the
+    labeled batches are.
+    """
+    from volume_segmantics.data.pipeline_dataset import UnlabeledPipelineDataset
+
+    img_size = int(getattr(settings, "image_size", 512) or 512)
+    use_imagenet_norm = bool(getattr(settings, "use_imagenet_norm", True))
+    use_2_5d_slicing = bool(getattr(settings, "use_2_5d_slicing", False))
+    num_2_5d_slices = int(getattr(settings, "num_slices", 3) or 3)
+    batch_size = int(
+        getattr(settings, "unlabeled_batch_size", None) or utils.get_batch_size(settings)
+    )
+    dataset = UnlabeledPipelineDataset(
+        unlabeled_dir,
+        pipeline_config=pipeline_config,
+        settings=settings,
+        img_size=img_size,
+        imagenet_norm=use_imagenet_norm,
+        use_2_5d_slicing=use_2_5d_slicing,
+        num_2_5d_slices=num_2_5d_slices,
+    )
+    seed = _get_seed(settings)
+    sampler = RandomSampler(
+        dataset, replacement=True,
+        num_samples=max(1, int(num_batches)) * batch_size,
+        generator=make_generator(seed),
+    )
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        num_workers=cfg.NUM_WORKERS,
+        persistent_workers=cfg.PERSISTENT_WORKERS,
+        pin_memory=cfg.PIN_CUDA_MEMORY,
+        drop_last=True,
+        **_seeded_loader_kwargs(seed),
+    )

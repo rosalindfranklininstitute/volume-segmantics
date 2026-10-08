@@ -501,7 +501,10 @@ def test_legacy_adapter_propagates_ssl_flags():
     assert cfg.ema_teacher.schedule.alpha_warmup == 0.97
     assert cfg.ema_teacher.schedule.alpha_end == 0.97
     assert cfg.ema_teacher.schedule.warmup_steps == 0
-    assert cfg.ema_teacher.consistency_weights == {"semantic": 1.0}
+    # The documented default consistency_weight (0.1), ramped over the
+    # documented rampup_start..rampup_end; 1.0 with no ramp was the bug.
+    assert cfg.ema_teacher.consistency_weights == {"semantic": 0.1}
+    assert cfg.ema_teacher.consistency_rampup.end_step == 10000
 
 
 def test_legacy_adapter_pseudo_labeling_alone_enables_ema_teacher():

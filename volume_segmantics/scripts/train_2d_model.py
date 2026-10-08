@@ -5,6 +5,7 @@ import os
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Optional
 
 import volume_segmantics.utilities.config as cfg
 from volume_segmantics.data import (TrainingDataSlicer,
@@ -21,6 +22,35 @@ from volume_segmantics.utilities.seeding import set_seed
 import torch
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
+
+
+def _resolve_unlabeled_dir(settings) -> Optional[Path]:
+    """The unlabeled slice directory the Lightning trainer feeds into training.
+
+    Required when Mean Teacher (``use_semi_supervised``) or pseudo-labelling
+    (``use_pseudo_labeling``) is on; ignored, with a warning, otherwise.
+    """
+    wants = bool(getattr(settings, "use_semi_supervised", False)) or bool(
+        getattr(settings, "use_pseudo_labeling", False)
+    )
+    raw = getattr(settings, "unlabeled_data_dir", None)
+    if not wants:
+        if raw:
+            logging.warning(
+                "unlabeled_data_dir %s given but neither use_semi_supervised nor "
+                "use_pseudo_labeling is set; it is not used.", raw,
+            )
+        return None
+    if not raw:
+        raise ValueError(
+            "unlabeled_data_dir must be provided when use_semi_supervised or "
+            "use_pseudo_labeling is set: pass --unlabeled_data_dir on the command "
+            "line or set it in the settings file."
+        )
+    unlabeled_dir = Path(str(raw))
+    if not unlabeled_dir.is_dir():
+        raise FileNotFoundError(f"Unlabeled data directory not found: {unlabeled_dir}")
+    return unlabeled_dir
 
 
 def _resolve_pipeline_config(
@@ -510,9 +540,10 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         settings=settings,
         pipeline_config=pipeline_config,
         num_classes=int(max_label_no),
+        unlabeled_dir=_resolve_unlabeled_dir(settings),
     )
     data_module.setup()
-    steps_per_epoch = len(data_module.train_dataloader())
+    steps_per_epoch = data_module.steps_per_epoch()
     total_steps = steps_per_epoch * total_epochs
 
     pl_module = VolSeg2dLightningModule.from_pipeline_config(

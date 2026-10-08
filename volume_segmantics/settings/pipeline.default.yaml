@@ -65,6 +65,14 @@ ema_teacher:
     boundary: 0.5
     distance: 0.3
     sdm:      0.3
+  # Mean Teacher's ramp of the consistency weight over optimiser steps:
+  # weight * ratio(step), 0 before start_step, 1 from end_step on.
+  # end_step: 0 -> no ramp. (The legacy settings' consistency_weight /
+  # rampup_start / rampup_end map onto these when no pipeline.yaml exists.)
+  consistency_rampup:
+    start_step: 0
+    end_step: 0
+    type: sigmoid                   # sigmoid | linear
 
 # Per-head loss scheduling 
 # linear_warmup: start_weight -> end_weight over the first

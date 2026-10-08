@@ -513,3 +513,94 @@ __all__ = [
     "compute_pipeline_targets",
     "heads_enabled",
 ]
+
+
+class UnlabeledPipelineDataset(BaseDataset):
+    """Unlabeled slices prepared exactly as :class:`PipelineMultiTaskDataset`
+    prepares labeled ones: the same reader, resize/pad, ImageNet
+    normalisation and tensor layout.
+
+    Each item carries two views of one slice. ``image`` is the student's view
+    (the training spatial + photometric augmentations); ``image_teacher`` is
+    the teacher's (resize/pad only). Mean Teacher consistency and
+    pseudo-labelling are defined on that weak/strong pair.
+    """
+
+    _read_image = PipelineMultiTaskDataset._read_image
+    _apply_imagenet_norm = PipelineMultiTaskDataset._apply_imagenet_norm
+
+    def __init__(
+        self,
+        images_dir: Union[str, Path],
+        *,
+        pipeline_config: PipelineConfig,
+        settings: Optional[SimpleNamespace] = None,
+        img_size: Optional[int] = None,
+        imagenet_norm: bool = True,
+        use_2_5d_slicing: bool = False,
+        num_2_5d_slices: int = 1,
+    ) -> None:
+        images_dir = Path(images_dir)
+        if not images_dir.is_dir():
+            raise FileNotFoundError(
+                f"UnlabeledPipelineDataset: images_dir not found: {images_dir}"
+            )
+        self.images_fps: List[Path] = sorted(
+            list(images_dir.glob("*.png"))
+            + list(images_dir.glob("*.tiff"))
+            + list(images_dir.glob("*.tif")),
+            key=PipelineMultiTaskDataset._natsort,
+        )
+        if len(self.images_fps) == 0:
+            raise ValueError(
+                f"UnlabeledPipelineDataset: no PNG/TIFF images found in {images_dir}"
+            )
+        self.settings = settings
+        self.use_2_5d_slicing = bool(use_2_5d_slicing)
+        self.num_2_5d_slices = int(num_2_5d_slices)
+        # Student view: the labeled training set's own augmentations.
+        self.spatial_aug, self.photometric_aug, _ = build_pipeline_augmentations(
+            pipeline_config.augmentations,
+            enabled_head_names={"semantic": True},
+            img_size=img_size,
+        )
+        # Teacher view: the validation-time resize/pad only.
+        self.preprocess = (
+            A.Compose([
+                A.LongestMaxSize(max_size=img_size, p=1.0),
+                A.PadIfNeeded(min_height=img_size, min_width=img_size, p=1.0),
+            ])
+            if img_size is not None else None
+        )
+        self.imagenet_norm = bool(imagenet_norm)
+        if use_2_5d_slicing:
+            mean, std = cfg.get_imagenet_normalization(settings)
+            self.imagenet_mean = mean
+            self.imagenet_std = std
+        else:
+            self.imagenet_mean = cfg.IMAGENET_MEAN
+            self.imagenet_std = cfg.IMAGENET_STD
+
+    def __len__(self) -> int:
+        return len(self.images_fps)
+
+    @staticmethod
+    def _to_tensor(image: np.ndarray) -> torch.Tensor:
+        if image.ndim == 2:
+            image = image[..., np.newaxis]
+        return torch.from_numpy(np.transpose(image, (2, 0, 1)).astype(np.float32))
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        image = self._read_image(self.images_fps[idx])
+        teacher = image
+        if self.preprocess is not None:
+            teacher = self.preprocess(image=teacher)["image"]
+        student = image
+        if self.spatial_aug is not None:
+            student = self.spatial_aug(image=student)["image"]
+        if self.photometric_aug is not None:
+            student = self.photometric_aug(image=student)["image"]
+        return {
+            "image": self._to_tensor(self._apply_imagenet_norm(student)),
+            "image_teacher": self._to_tensor(self._apply_imagenet_norm(teacher)),
+        }

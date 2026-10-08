@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+import math
+
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -220,12 +222,53 @@ class EMAScheduleConfig:
 
 
 @dataclass
+class ConsistencyRampConfig:
+    """Mean Teacher's ramp of the consistency weight over optimiser steps.
+
+    The weight is ``consistency_weights[head] * ratio(step)``: ``ratio`` is 0
+    before ``start_step``, 1 from ``end_step`` on, and follows a sigmoid
+    (``exp(-5 (1 - phase)^2)``, Tarvainen & Valpola) or a straight line in
+    between. ``end_step <= start_step`` means no ramp: the full weight from
+    the first step.
+    """
+
+    start_step: int = 0
+    end_step: int = 0
+    type: str = "sigmoid"
+
+    def __post_init__(self) -> None:
+        if self.start_step < 0 or self.end_step < 0:
+            raise PipelineConfigError(
+                f"ema_teacher.consistency_rampup steps must be non-negative; "
+                f"got start_step={self.start_step}, end_step={self.end_step}"
+            )
+        if self.type not in ("sigmoid", "linear"):
+            raise PipelineConfigError(
+                f"ema_teacher.consistency_rampup.type must be 'sigmoid' or "
+                f"'linear'; got {self.type!r}"
+            )
+
+    def ratio(self, step: int) -> float:
+        if self.end_step <= self.start_step:
+            return 1.0
+        if step < self.start_step:
+            return 0.0
+        if step >= self.end_step:
+            return 1.0
+        phase = (step - self.start_step) / float(self.end_step - self.start_step)
+        if self.type == "linear":
+            return float(phase)
+        return float(math.exp(-5.0 * (1.0 - phase) ** 2))
+
+
+@dataclass
 class EMATeacherConfig:
     """Mean-teacher SSL config."""
 
     enabled: bool = False
     schedule: EMAScheduleConfig = field(default_factory=EMAScheduleConfig)
     consistency_weights: Dict[str, float] = field(default_factory=dict)
+    consistency_rampup: ConsistencyRampConfig = field(default_factory=ConsistencyRampConfig)
 
     def __post_init__(self) -> None:
         for head_name, weight in self.consistency_weights.items():
@@ -531,10 +574,12 @@ def parse_pipeline_dict(data: Mapping[str, Any]) -> PipelineConfig:
 
     ema_src = data.get("ema_teacher", {}) or {}
     sched_src = ema_src.get("schedule", {}) or {}
+    ramp_src = ema_src.get("consistency_rampup", {}) or {}
     ema_teacher = EMATeacherConfig(
         enabled=ema_src.get("enabled", False),
         schedule=EMAScheduleConfig(**sched_src),
         consistency_weights=dict(ema_src.get("consistency_weights", {})),
+        consistency_rampup=ConsistencyRampConfig(**ramp_src),
     )
 
     loss_schedule_src = data.get("loss_schedule", {}) or {}
@@ -632,20 +677,35 @@ def legacy_settings_to_pipeline_config(
         loss_weight=1.0,
     )
 
-    # SSL knobs from legacy ``use_semi_supervised`` / ``use_pseudo_labeling``.
-    use_ssl = (
-        getattr(settings, "use_semi_supervised", False)
-        or getattr(settings, "use_pseudo_labeling", False)
-    )
+    # SSL knobs from the legacy settings. The EMA teacher is built for
+    # Mean Teacher and for pseudo-labelling (which may label with it); the
+    # consistency term exists only for Mean Teacher, at the documented
+    # ``consistency_weight`` (default 0.1) ramped over ``rampup_start`` ..
+    # ``rampup_end`` optimiser steps, as the raw-torch trainer did.
+    use_mean_teacher = bool(getattr(settings, "use_semi_supervised", False))
+    use_pseudo = bool(getattr(settings, "use_pseudo_labeling", False))
+    use_ssl = use_mean_teacher or use_pseudo
     ema_decay = getattr(settings, "ema_decay", 0.99)
+    if ema_decay is None:
+        ema_decay = 0.99
+    consistency_weight = getattr(settings, "consistency_weight", None)
+    consistency_weight = 0.1 if consistency_weight is None else float(consistency_weight)
+    ramp = ConsistencyRampConfig(
+        start_step=int(getattr(settings, "rampup_start", 0) or 0),
+        end_step=int(getattr(settings, "rampup_end", 10000) or 0),
+        type="sigmoid",
+    )
     ema_teacher = EMATeacherConfig(
         enabled=use_ssl,
         schedule=EMAScheduleConfig(
-            alpha_warmup=ema_decay,
-            alpha_end=ema_decay,
+            alpha_warmup=float(ema_decay),
+            alpha_end=float(ema_decay),
             warmup_steps=0,  # legacy single-decay behaviour
         ),
-        consistency_weights={"semantic": 1.0} if use_ssl else {},
+        consistency_weights=(
+            {"semantic": consistency_weight if use_mean_teacher else 0.0} if use_ssl else {}
+        ),
+        consistency_rampup=ramp,
     )
 
     return PipelineConfig(
