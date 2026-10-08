@@ -11,12 +11,10 @@ from pathlib import Path
 
 import pytest
 
-# The two registered console entry points (pyproject ``[tool.poetry.scripts]``:
-# ``model-train-2d`` and ``model-predict-2d``). These are the supported CLI
-# surface, so a broken import in either is a user-facing regression.
 ENTRY_POINT_MODULES = [
     "volume_segmantics.scripts.train_2d_model",
     "volume_segmantics.scripts.predict_2d_model",
+    "volume_segmantics.scripts.predict_pipeline",
 ]
 
 # Exception names that, when caught around an import, mark it as optional.

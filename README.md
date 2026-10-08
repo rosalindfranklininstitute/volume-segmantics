@@ -18,14 +18,26 @@ A machine capable of running CUDA enabled with a recent version of Pytorch (2.5 
 
 ### Conda/Virtualenv 
 
-Currently, the release version of Volume Segmantics (0.4.0) is not on PyPy. To install, create a new Conda/Miniconda environment (We recommend Python 3.11-3.12) and clone the Volume-Segmentics package directly from the online repo and go to the 'volume-segmantics' directory. Then:
+The release version of Volume Segmantics (0.4.0) is available on [PyPI](https://pypi.org/project/volume-segmantics/). Create a new Conda/Miniconda environment (we recommend Python 3.12), activate it, then:
+
+```
+pip install volume-segmantics
+```
+
+Optional extras add Optuna hyperparameter search (`optuna`) and u-Segment3D instance assembly (`usegment3d`):
+
+```
+pip install "volume-segmantics[optuna,usegment3d]"
+```
+
+To install the latest development version instead, clone the repository, go to the 'volume-segmantics' directory and run:
 
 ```
 pip install poetry
 poetry install
 ```
 
-To check that that the Pytorch version downloaded by the install is a CUDA version start a Python interpreter in the environment you've just installed Volume Segmantics into. Then:
+To check that the Pytorch version downloaded by the install is a CUDA version start a Python interpreter in the environment you've just installed Volume Segmantics into. Then:
 
 ```
 import torch; torch.__version__
@@ -55,7 +67,7 @@ on the [Volume EM Container documentation](https://rosalindfranklininstitute.git
 
 ## Configuration and command line use
 
-After installation, two new commands will be available from your terminal whilst your environment is activated, `model-train-2d` and `model-predict-2d`.
+After installation, three new commands will be available from your terminal whilst your environment is activated: `model-train-2d`, `model-predict-2d` and `model-predict-pipeline`.
 
 These commands require access to some settings stored in YAML files. These need to be located in a directory named `volseg-settings` within the directory where you are running the commands. The settings files can be copied from [here](https://github.com/rosalindfranklininstitute/volume-segmantics/blob/main/volseg-settings). 
 
@@ -78,6 +90,13 @@ model-predict-2d path/to/model_file.pytorch path/to/data_for_prediction.tiff
 ```
 
 The input data will be segmented using the input model following the settings specified in `volseg-settings/2d_model_predict_settings.yaml`. Depending on whether OUTPUT_FORMAT in config.py is set to "tif" or "hdf" or "mrc", a TIFF or HDF5 or MRC file containing the segmented volume will be saved to your working directory.
+
+### For pipeline prediction with instance assembly and Zarr output
+Run the following command. It wraps the Python API (`volume_segmantics.api.predict`) and reads `volseg-settings/2d_model_predict_settings.yaml` together with an optional `volseg-settings/pipeline.yaml`.
+
+```shell
+model-predict-pipeline path/to/model_file.pytorch path/to/data_for_prediction.tiff --output-zarr path/to/prediction.zarr
+```
 
 ### Training features
 

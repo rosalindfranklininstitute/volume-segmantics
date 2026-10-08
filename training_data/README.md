@@ -1,16 +1,16 @@
 # Mini-tutorial. Using `Volume Segmantics` to train a model to segment blood vessels from synchrotron X-ray micro-CT data of human placental tissue. 
 
-The data for this tutorial comes from experiments described in [this paper](https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0140). The [full dataset](https://www.ebi.ac.uk/empiar/EMPIAR-10562/) is publicly available on EPIAR.
+The data for this tutorial comes from experiments described in [this paper](https://royalsocietypublishing.org/doi/10.1098/rsif.2021.0140). The [full dataset](https://www.ebi.ac.uk/empiar/EMPIAR-10562/) is publicly available on EMPIAR.
 
 In this tutorial we will be using a $256^3$ pixel training dataset and corresponding segmentation labels to train a segmentation model. Then we will then download a larger $512^3$ pixel dataset and predict a segmentation for all the the blood vessels contained within this new region of data.
 
 ## Library set-up and then training a model
 
-Installation and configuration is also described in the [README](https://github.com/DiamondLightSource/volume-segmantics) for the `Volume Segmantics` repository:
+Installation and configuration is also described in the [README](https://github.com/rosalindfranklininstitute/volume-segmantics) for the `Volume Segmantics` repository:
 
-1. `pip install volume-segmantics` into a conda environment or pip vitualenv and activate it.
+1. `pip install volume-segmantics` into a conda environment or pip virtualenv and activate it.
 2. Create a new directory for working through the tutorial.
-3. Download and unzip the [`volseg-settings`](https://github.com/DiamondLightSource/volume-segmantics/releases/download/v0.2.6/volseg-settings.zip) directory and the [`training-data`](https://github.com/DiamondLightSource/volume-segmantics/releases/download/v0.2.6/training-data.zip) directory into your new folder.
+3. Download and unzip the [`volseg-settings`](https://github.com/rosalindfranklininstitute/volume-segmantics/releases/download/v0.4.0/volseg-settings.zip) directory and the [`training-data`](https://github.com/rosalindfranklininstitute/volume-segmantics/releases/download/v0.4.0/training-data.zip) directory into your new folder.
 4. If required, edit settings in the file `volseg-settings/2d_model_train_settings.yaml`. For example you may want to change the model architecture or number of training epochs.
 5. Train the model using the command `model-train-2d --data training-data/vessels_256cube_DATA.h5 --labels training-data/vessels_256cube_LABELS.h5`. A model will be saved to your working directory. In addition, a figure showing "ground truth" segmentation vs model segmentation for some images in the validation set will be saved. Look at this to get an idea of how your model is performing.
 

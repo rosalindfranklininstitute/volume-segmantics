@@ -92,6 +92,7 @@ filterwarnings = [
 [tool.poetry.scripts]
 model-train-2d = 'volume_segmantics.scripts.train_2d_model:main'
 model-predict-2d = 'volume_segmantics.scripts.predict_2d_model:main'
+model-predict-pipeline = 'volume_segmantics.scripts.predict_pipeline:main'
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

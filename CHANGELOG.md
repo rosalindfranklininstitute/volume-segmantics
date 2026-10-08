@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+* `model-predict-pipeline` console script exposing the pipeline prediction CLI (`volume_segmantics.scripts.predict_pipeline`) with Zarr output and instance assembly.
+
+
+
+
 ## [0.4.0]
 
 ### Added
