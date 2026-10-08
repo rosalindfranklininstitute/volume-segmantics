@@ -7,13 +7,11 @@ settings_templates:
 output_root: tmp/dino_two_5d_qa
 global_overrides:
   train:
-    image_size: 512
+    image_size: 256
     num_cyc_frozen: 8
     num_cyc_unfrozen: 5
     patience: 4
     starting_lr: 5.0e-05
-    end_lr: 0.001
-    plot_lr_graph: false
     use_multitask: false
     use_semi_supervised: false
     use_pseudo_labeling: false
@@ -49,6 +47,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_2_5d_3slice_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_3slice}
 - name: qa_predict_dino_3slice_medium
   type: predict
   model_key: qa_dino_3slice
@@ -61,6 +64,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_predict_dino_3slice_medium
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_two_5d_qa/qa_predict_dino_3slice_medium/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_predict_dino_3slice_entropy
   type: predict
   model_key: qa_dino_3slice
@@ -74,6 +86,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_entropy.*'
+- name: dice_qa_predict_dino_3slice_entropy
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_two_5d_qa/qa_predict_dino_3slice_entropy/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_dino_2_5d_5slice
   type: train
   model_key: qa_dino_5slice
@@ -88,6 +109,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_2_5d_5slice_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_5slice}
 - name: qa_predict_dino_5slice_medium
   type: predict
   model_key: qa_dino_5slice
@@ -100,6 +126,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_predict_dino_5slice_medium
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_two_5d_qa/qa_predict_dino_5slice_medium/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_predict_dino_5slice_entropy
   type: predict
   model_key: qa_dino_5slice
@@ -113,3 +148,12 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_entropy.*'
+- name: dice_qa_predict_dino_5slice_entropy
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_two_5d_qa/qa_predict_dino_5slice_entropy/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"

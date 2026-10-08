@@ -75,6 +75,82 @@ def assert_checkpoint_trained(
     )
 
 
+# encoder-family
+
+
+# The state-dict key prefixes that prove a declared encoder family is really
+# there, and the prefixes that betray the encoder smp falls back to.
+_ENCODER_SIGNATURES = {
+    "dino": {
+        "require": ("encoder.dino_model.",),
+        "forbid": ("encoder.conv1.", "encoder.layer1."),
+    },
+}
+
+
+def _encoder_family(encoder_name: str) -> Optional[str]:
+    if str(encoder_name).lower().startswith(("dinov2_", "dinov3_")):
+        return "dino"
+    return None
+
+
+def _has_prefix(keys: Sequence[str], prefix: str) -> bool:
+    return any(k.startswith(prefix) for k in keys)
+
+
+def _check_weight_signature(declared: str, keys: Sequence[str], signature: dict) -> int:
+    """Raise unless ``keys`` carry every required prefix and no forbidden one.
+    Returns how many keys carry the first required prefix."""
+    missing = [p for p in signature["require"] if not _has_prefix(keys, p)]
+    if missing:
+        raise AssertionError(
+            f"encoder-family: checkpoint declares {declared!r} but carries no "
+            f"{missing} weights — the declared name is a claim; these keys are the "
+            f"evidence, and their absence is the silent fallback that made a DINO "
+            f"run train a ResNet-34."
+        )
+    intruders = [p for p in signature["forbid"] if _has_prefix(keys, p)]
+    if intruders:
+        raise AssertionError(
+            f"encoder-family: checkpoint declares {declared!r} but carries "
+            f"{intruders} weights — the signature of a fallback encoder."
+        )
+    return sum(1 for k in keys if k.startswith(signature["require"][0]))
+
+
+def assert_encoder_family(
+    ckpt_path: Path, *, expect_name: Optional[str] = None, name_only: bool = False,
+) -> None:
+    """The checkpoint's weights must match the encoder it declares.
+
+    ``model_struc_dict.encoder_name`` is a claim; the state-dict keys are the
+    evidence. ``name_only`` checks the declaration against ``expect_name`` and 
+    nothing else, for encoder families with no signature here.
+    """
+    ckpt = _load_torch_checkpoint(ckpt_path)
+    declared = str(ckpt["model_struc_dict"]["encoder_name"])
+    if expect_name is not None and declared != expect_name:
+        raise AssertionError(
+            f"encoder-family: checkpoint declares encoder_name={declared!r}, "
+            f"expected {expect_name!r}."
+        )
+    if name_only:
+        print(f"[OK] encoder-family: {ckpt_path.name} declares {declared} (name only)")
+        return
+    family = _encoder_family(declared)
+    if family is None:
+        raise AssertionError(
+            f"encoder-family: no weight signature is defined for {declared!r}, so "
+            f"the claim cannot be supported; add one to _ENCODER_SIGNATURES or "
+            f"pass --name-only."
+        )
+    keys = list(ckpt.get("model_state_dict") or {})
+    if not keys:
+        raise AssertionError(f"encoder-family: {ckpt_path} has no state dict to inspect.")
+    counted = _check_weight_signature(declared, keys, _ENCODER_SIGNATURES[family])
+    print(f"[OK] encoder-family: {declared} corroborated by {counted} DINO weights")
+
+
 # zarr-keys 
 
 
@@ -548,6 +624,13 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--min-nbts", type=int, default=1)
     sp.add_argument("--min-rvar-std", type=float, default=0.01)
 
+    sp = sub.add_parser("encoder-family")
+    sp.add_argument("ckpt", type=Path)
+    sp.add_argument("--expect", default=None, dest="expect_name",
+                    help="Declared encoder_name the checkpoint must carry.")
+    sp.add_argument("--name-only", action="store_true", dest="name_only",
+                    help="Check the declared name only; no weight signature.")
+
     sp = sub.add_parser("zarr-keys")
     sp.add_argument("zarr", type=Path)
     sp.add_argument("--keys", nargs="+", required=True)
@@ -668,6 +751,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         assert_val_dice_within(
             args.ckpt_a, args.ckpt_b, max_drift=args.max_drift,
         )
+    elif args.cmd == "encoder-family":
+        assert_encoder_family(args.ckpt, expect_name=args.expect_name, name_only=args.name_only)
     elif args.cmd == "segmentation-dice":
         assert_segmentation_dice(
             args.pred,

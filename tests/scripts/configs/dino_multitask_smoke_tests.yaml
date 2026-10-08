@@ -62,6 +62,13 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_encoder_dino_s_single
+  type: pipeline_assert
+  subcommand: encoder-family
+  args:
+  - ${model:dino_s_single}
+  - --expect
+  - dinov2_vits14
 - name: dino_s_2task_shared
   type: train
   model_key: dino_s_2task
@@ -84,6 +91,13 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_encoder_dino_s_2task
+  type: pipeline_assert
+  subcommand: encoder-family
+  args:
+  - ${model:dino_s_2task}
+  - --expect
+  - dinov2_vits14
 - name: dino_s_3task_sdf
   type: train
   model_key: dino_s_3task
@@ -111,6 +125,13 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_encoder_dino_s_3task
+  type: pipeline_assert
+  subcommand: encoder-family
+  args:
+  - ${model:dino_s_3task}
+  - --expect
+  - dinov2_vits14
 - name: dino_s_predict_2task
   type: predict
   model_key: dino_s_2task

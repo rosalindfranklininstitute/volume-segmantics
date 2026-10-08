@@ -9,7 +9,7 @@ models to work with CNN-based decoders in segmentation_models_pytorch.
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -24,6 +24,8 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_HUB_REPOS = {"v2": "facebookresearch/dinov2", "v3": "facebookresearch/dinov3"}
 
 
 class DINOEncoder(nn.Module):
@@ -41,6 +43,14 @@ class DINOEncoder(nn.Module):
         "dinov2_vitb14": {"embed_dim": 768, "num_heads": 12, "num_layers": 12, "params": 86e6, "patch_size": 14, "version": "v2"},
         "dinov2_vitl14": {"embed_dim": 1024, "num_heads": 16, "num_layers": 24, "params": 300e6, "patch_size": 14, "version": "v2"},
         "dinov2_vitg14": {"embed_dim": 1536, "num_heads": 24, "num_layers": 40, "params": 1100e6, "patch_size": 14, "version": "v2"},
+        # DINOv2 with registers (Darcet et al. 2023): the same blocks, and four
+        # register tokens between the class token and the patch tokens. Their
+        # features come through the backbone's native forward, which places the
+        # registers and strips them.
+        "dinov2_vits14_reg": {"embed_dim": 384, "num_heads": 6, "num_layers": 12, "params": 21e6, "patch_size": 14, "version": "v2", "num_register_tokens": 4},
+        "dinov2_vitb14_reg": {"embed_dim": 768, "num_heads": 12, "num_layers": 12, "params": 86e6, "patch_size": 14, "version": "v2", "num_register_tokens": 4},
+        "dinov2_vitl14_reg": {"embed_dim": 1024, "num_heads": 16, "num_layers": 24, "params": 300e6, "patch_size": 14, "version": "v2", "num_register_tokens": 4},
+        "dinov2_vitg14_reg": {"embed_dim": 1536, "num_heads": 24, "num_layers": 40, "params": 1100e6, "patch_size": 14, "version": "v2", "num_register_tokens": 4},
         # DINOv3 models (patch size 16x16)
         "dinov3_vitl16": {"embed_dim": 1024, "num_heads": 16, "num_layers": 24, "params": 300e6, "patch_size": 16, "version": "v3"},
         "dinov3_vit7b16": {"embed_dim": 1536, "num_heads": 24, "num_layers": 40, "params": 7000e6, "patch_size": 16, "version": "v3"},
@@ -70,7 +80,8 @@ class DINOEncoder(nn.Module):
                   - "dinov3_vit7b16": 7B (7B params, ViT-7B/16) - very large, requires significant GPU memory
             in_channels: Input channels (1 for grayscale, 3 for RGB, N for 2.5D)
             depth: Number of feature levels to extract (typically 4-5)
-            weights: Weight source ("dinov2", "dinov3", "dinov1", or path to checkpoint)
+            weights: Weight source ("dinov2" or "dinov3"). A checkpoint path is
+                refused; a fine-tuned model is loaded whole via ``full_weights_path``.
             pretrained: Whether to load pretrained weights
         """
         super().__init__()
@@ -96,6 +107,8 @@ class DINOEncoder(nn.Module):
         self.num_layers = config["num_layers"]
         self.patch_size = config.get("patch_size", 14)  # DINOv2 uses 14x14, DINOv3 uses 16x16
         self.dino_version = config.get("version", "v2")  # Track DINO version
+        # DINOv3 and the registers variants run their own token path.
+        self._native_forward = self.dino_version == "v3" or config.get("num_register_tokens", 0) > 0
         
         # Adapt input channels if needed
         if in_channels != 3:
@@ -147,213 +160,74 @@ class DINOEncoder(nn.Module):
             f"stage_upsample_factors={self._stage_upsample_factors}"
         )
     
-    def _load_dino_model(
-        self, 
-        model_name: str, 
-        weights: str, 
-        pretrained: bool
-    ) -> nn.Module:
-        """Load DINO model with pretrained weights."""
+    def _hub_load(self, model_name: str, *, pretrained: bool) -> nn.Module:
+        """``torch.hub.load`` of ``model_name`` from its version's repository;
+        the hub entry points carry the same names as ``DINO_MODELS``."""
+        repo = _HUB_REPOS[self.DINO_MODELS[model_name].get("version", "v2")]
+        logger.info("Loading %s from %s (pretrained=%s)", model_name, repo, pretrained)
+        return torch.hub.load(repo, model_name, pretrained=pretrained, trust_repo=True)
+
+    def _load_dino_model(self, model_name: str, weights: Optional[str], pretrained: bool) -> nn.Module:
+        """The backbone from torch.hub, with Meta's weights when ``pretrained``.
+        Whatever fails raises; a randomly initialised backbone is never
+        substituted for the pretrained one that was asked for. A checkpoint
+        path is refused: it used to load with ``strict=False``, which
+        drops a missing tensor silently."""
         if not TORCH_HUB_AVAILABLE:
             raise ImportError(
                 "torch.hub is not available. Cannot load DINO models. "
                 "Please ensure PyTorch is properly installed."
             )
-        
-        # Determine DINO version from model name or weights parameter
-        is_dinov3 = model_name.startswith("dinov3_") or weights == "dinov3"
-        is_dinov2 = model_name.startswith("dinov2_") or weights == "dinov2"
-        
-        if is_dinov3 and pretrained:
-            # Use torch.hub to load official DINOv3
-            logger.info(f"Loading DINOv3 model: {model_name} from torch.hub")
-            # Try multiple possible model names
-            hub_model_names = [model_name]  # Try original name first
-            if model_name == "dinov3_vitl16":
-                hub_model_names.extend(["dinov3_vitl", "dinov3_vitl_16"])
-            elif model_name == "dinov3_vit7b16":
-                hub_model_names.extend(["dinov3_vit7b", "dinov3_vit7b_16"])
-            
-            last_error = None
-            for hub_model_name in hub_model_names:
-                try:
-                    model = torch.hub.load(
-                        'facebookresearch/dinov3',
-                        hub_model_name,
-                        pretrained=True,
-                        trust_repo=True
-                    )
-                    logger.info(f"Successfully loaded {model_name} from torch.hub (using {hub_model_name})")
-                    return model
-                except ImportError as e:
-                    error_str = str(e).lower()
-                    if 'torchmetrics' in error_str:
-                        error_msg = (
-                            f"DINOv3 requires 'torchmetrics' package which is not installed. "
-                            f"Please install it with: pip install torchmetrics"
-                        )
-                        logger.error(error_msg)
-                        raise ImportError(error_msg) from e
-                    elif 'termcolor' in error_str:
-                        error_msg = (
-                            f"DINOv3 requires 'termcolor' package which is not installed. "
-                            f"Please install it with: pip install termcolor"
-                        )
-                        logger.error(error_msg)
-                        raise ImportError(error_msg) from e
-                    else:
-                        last_error = e
-                        continue
-                except (RuntimeError, AttributeError) as e:
-                    if "Cannot find callable" in str(e) or "has no attribute" in str(e):
-                        # Try next name
-                        last_error = e
-                        continue
-                    else:
-                        # Other error, re-raise
-                        raise
-                except Exception as e:
-                    last_error = e
-                    continue
-            
-            # If we get here, all model names failed
-            if last_error:
-                logger.warning(f"Failed to load DINOv3 from torch.hub with all attempted names: {last_error}")
-                logger.info("Attempting to create model without pretrained weights")
-                # Fall through to create model without weights
-        elif is_dinov2 and pretrained:
-            # Use torch.hub to load official DINOv2
-            logger.info(f"Loading DINOv2 model: {model_name} from torch.hub")
-            try:
-                model = torch.hub.load(
-                    'facebookresearch/dinov2',
-                    model_name,
-                    pretrained=True,
-                    trust_repo=True
-                )
-                logger.info(f"Successfully loaded {model_name} from torch.hub")
-                return model
-            except Exception as e:
-                logger.warning(f"Failed to load from torch.hub: {e}")
-                logger.info("Attempting to create model without pretrained weights")
-                # Fall through to create model without weights
-        elif Path(weights).exists() if weights else False:
-            # Load from local checkpoint
-            logger.info(f"Loading DINO model from checkpoint: {weights}")
-            model = self._load_from_checkpoint(model_name, weights)
-            return model
-        
-        # Create model without pretrained weights (fallback)
-        if not pretrained or (is_dinov3 and pretrained):
-            # For DINOv3, even creating without pretrained weights requires torch.hub
-            logger.info(f"Creating {model_name} without pretrained weights")
-            # Determine which hub to use based on model name
-            if model_name.startswith("dinov3_"):
-                hub_repo = 'facebookresearch/dinov3'
-                # Try multiple possible model names
-                hub_model_names = [model_name]  # Try original name first
-                if model_name == "dinov3_vitl16":
-                    hub_model_names.extend(["dinov3_vitl", "dinov3_vitl_16"])
-                elif model_name == "dinov3_vit7b16":
-                    hub_model_names.extend(["dinov3_vit7b", "dinov3_vit7b_16"])
-            else:
-                hub_repo = 'facebookresearch/dinov2'
-                hub_model_names = [model_name]
-            
-            last_error = None
-            for hub_model_name in hub_model_names:
-                try:
-                    model = torch.hub.load(
-                        hub_repo,
-                        hub_model_name,
-                        pretrained=False,
-                        trust_repo=True
-                    )
-                    logger.info(f"Successfully created {model_name} (using {hub_model_name})")
-                    return model
-                except ImportError as e:
-                    error_str = str(e).lower()
-                    if 'torchmetrics' in error_str:
-                        error_msg = (
-                            f"DINOv3 requires 'torchmetrics' package which is not installed. "
-                            f"Please install it with: pip install torchmetrics"
-                        )
-                        logger.error(error_msg)
-                        raise ImportError(error_msg) from e
-                    elif 'termcolor' in error_str:
-                        error_msg = (
-                            f"DINOv3 requires 'termcolor' package which is not installed. "
-                            f"Please install it with: pip install termcolor"
-                        )
-                        logger.error(error_msg)
-                        raise ImportError(error_msg) from e
-                    else:
-                        last_error = e
-                        continue
-                except (RuntimeError, AttributeError) as e:
-                    if "Cannot find callable" in str(e) or "has no attribute" in str(e):
-                        # Try next name
-                        last_error = e
-                        continue
-                    else:
-                        # Other error, re-raise
-                        raise
-                except Exception as e:
-                    last_error = e
-                    continue
-            
-            # If we get here, all model names failed
-            if last_error:
-                raise RuntimeError(
-                    f"Could not create DINO model {model_name}. "
-                    f"Tried model names: {hub_model_names}. "
-                    f"Last error: {last_error}. Please ensure DINO is available via torch.hub."
-                ) from last_error
-        else:
-            raise RuntimeError(
-                f"Could not load pretrained weights for {model_name}. "
-                f"Please check your internet connection or provide a local checkpoint path."
+        if weights and Path(weights).exists():
+            raise ValueError(
+                f"DINO weights {weights!r} name a file, and a checkpoint no longer initialises a DINO "
+                "encoder: it used to load with strict=False, which drops a missing tensor silently. "
+                "Set encoder_weights to 'dinov2' or 'dinov3' for the hub-pretrained backbone, or load a "
+                "full saved model through full_weights_path."
             )
-    
-    def _load_from_checkpoint(self, model_name: str, checkpoint_path: str) -> nn.Module:
-        """Load DINO model from local checkpoint file."""
-        # Determine which hub to use based on model name
-        if model_name.startswith("dinov3_"):
-            hub_repo = 'facebookresearch/dinov3'
-            hub_model_name = model_name
-            if model_name == "dinov3_vitl16":
-                hub_model_name = "dinov3_vitl"
-            elif model_name == "dinov3_vit7b16":
-                hub_model_name = "dinov3_vit7b"
-        else:
-            hub_repo = 'facebookresearch/dinov2'
-            hub_model_name = model_name
-        
-        # First load the model architecture
-        model = torch.hub.load(
-            hub_repo,
-            hub_model_name,
-            pretrained=False,
-            trust_repo=True
+        return self._hub_load(model_name, pretrained=pretrained)
+
+    @property
+    def output_stride(self) -> int:
+        """smp encoder protocol: reduction factor of the deepest feature map.
+
+        ``SegmentationModel.check_input_shape`` divides the input size by this
+        and refuses non-divisible shapes. Mirrors smp's own base-encoder rule,
+        ``min(32, 2 ** depth)``, so a depth-4 DINO encoder behaves like any
+        other depth-4 encoder to the decoder above it.
+        """
+        return min(32, 2 ** self.depth)
+
+    def set_in_channels(
+        self, in_channels: int, *, pretrained: bool = True,
+    ) -> None:
+        """smp encoder protocol: re-key the stem for a different channel count.
+
+        ``smp.encoders.get_encoder`` builds the encoder from the registry's
+        static ``params``, which cannot carry a per-call ``in_channels``, then
+        calls this. The instance is always freshly built with the default 3
+        channels at that point, so this only ever widens or narrows from 3.
+        """
+        if in_channels == self.in_channels:
+            return
+        self._adapt_input_channels(in_channels)
+        self.in_channels = in_channels
+        self._stem_channels = in_channels
+        # out_channels[0] is the stem, which smp's decoder uses to size its
+        # first skip connection; it must track the real input width.
+        self.out_channels = [in_channels] + list(self.out_channels[1:])
+
+    def make_dilated(self, output_stride: int) -> None:
+        """smp encoder protocol: unsupported here.
+
+        Only called for ``output_stride != 32``. A ViT's patch stride is fixed,
+        so there is no dilation to apply.
+        """
+        raise ValueError(
+            f"DINO encoders have a fixed patch stride of {self.patch_size} and "
+            f"cannot be dilated (requested output_stride={output_stride})."
         )
-        
-        # Load checkpoint
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        
-        # Handle different checkpoint formats
-        if 'model' in checkpoint:
-            state_dict = checkpoint['model']
-        elif 'state_dict' in checkpoint:
-            state_dict = checkpoint['state_dict']
-        else:
-            state_dict = checkpoint
-        
-        # Load weights
-        model.load_state_dict(state_dict, strict=False)
-        logger.info(f"Loaded weights from {checkpoint_path}")
-        
-        return model
-    
+
     def _adapt_input_channels(self, in_channels: int):
         """Adapt DINO patch embedding for different input channels."""
         if in_channels == 3:
@@ -443,6 +317,25 @@ class DINOEncoder(nn.Module):
         
         return selected
     
+    def _native_intermediate_features(self, x: torch.Tensor) -> List[torch.Tensor]:
+        """Patch tokens of the selected layers through the backbone's own
+        ``get_intermediate_layers``, which runs its native token path (DINOv3's
+        RoPE, DINOv2's registers) and returns patch tokens only."""
+        kwargs = dict(reshape=False, return_class_token=False, norm=False)
+        if self.dino_version == "v3":  # DINOv2's signature has no extra-tokens argument
+            kwargs["return_extra_tokens"] = False
+        intermediate_outputs = self.dino_model.get_intermediate_layers(x, n=self.selected_layers, **kwargs)
+        features = list(intermediate_outputs) if isinstance(intermediate_outputs, tuple) else [intermediate_outputs]
+        # Ensure we have exactly depth features: repeat the last one, or read
+        # the last layer when none came back.
+        while len(features) < self.depth:
+            if features:
+                features.append(features[-1])
+            else:
+                last_output = self.dino_model.get_intermediate_layers(x, n=[self.num_layers - 1], **kwargs)
+                features.append(last_output[0] if isinstance(last_output, tuple) else last_output)
+        return features[:self.depth]
+
     def _extract_intermediate_features(self, x: torch.Tensor) -> List[torch.Tensor]:
         """
         Extract features from multiple DINO transformer layers.
@@ -455,52 +348,9 @@ class DINOEncoder(nn.Module):
         """
         B, C, H, W = x.shape
         
-        # DINOv3 uses get_intermediate_layers which handles RoPE automatically
-        if self.dino_version == "v3":
-            # Use get_intermediate_layers for DINOv3 (handles RoPE internally)
-            # Convert selected layer indices to 1-based or use directly
-            # get_intermediate_layers expects layer indices
-            layer_indices = self.selected_layers
-            
-            # Get features from selected layers
-            # get_intermediate_layers returns a tuple, and we want patch tokens only
-            intermediate_outputs = self.dino_model.get_intermediate_layers(
-                x,
-                n=layer_indices,
-                reshape=False,
-                return_class_token=False,
-                return_extra_tokens=False,
-                norm=False
-            )
-            
-            # Convert tuple to list and ensure we have the right number
-            if isinstance(intermediate_outputs, tuple):
-                features = list(intermediate_outputs)
-            else:
-                features = [intermediate_outputs]
-            
-            # Ensure we have exactly depth features
-            while len(features) < self.depth:
-                # If we got fewer features, repeat the last one
-                if features:
-                    features.append(features[-1])
-                else:
-                    # Fallback: get the last layer
-                    last_output = self.dino_model.get_intermediate_layers(
-                        x,
-                        n=[self.num_layers - 1],
-                        reshape=False,
-                        return_class_token=False,
-                        return_extra_tokens=False,
-                        norm=False
-                    )
-                    if isinstance(last_output, tuple):
-                        features.append(last_output[0])
-                    else:
-                        features.append(last_output)
-            
-            return features[:self.depth]
-        
+        if self._native_forward:
+            return self._native_intermediate_features(x)
+
         # DINOv2: manual extraction (original code)
         # Patch embedding
         x = self.dino_model.patch_embed(x)  # (B, N, D) where N = H' * W'
@@ -694,107 +544,45 @@ class DINOEncoder(nn.Module):
 
 # Register DINO encoders with segmentation_models_pytorch
 def register_dino_encoders():
-    """Register DINO encoders with segmentation_models_pytorch."""
-    try:
-        # Try multiple ways to access the encoder registry
-        _encoders = None
-        
-        # Method 1: Direct import (may not work in newer versions)
-        try:
-            from segmentation_models_pytorch.encoders import _encoders
-        except ImportError:
-            pass
-        
-        # Method 2: Access via encoders module
-        if _encoders is None:
-            try:
-                import segmentation_models_pytorch.encoders as encoders_module
-                _encoders = getattr(encoders_module, '_encoders', None)
-            except (ImportError, AttributeError):
-                pass
-        
-        # Method 3: Try accessing via get_encoder function's module
-        if _encoders is None:
-            try:
-                from segmentation_models_pytorch.encoders import get_encoder
-                import sys
-                encoders_module = sys.modules.get('segmentation_models_pytorch.encoders')
-                if encoders_module:
-                    _encoders = getattr(encoders_module, '_encoders', None)
-            except (ImportError, AttributeError):
-                pass
-        
-        # Method 4: Try accessing via __dict__ or private attributes
-        if _encoders is None:
-            try:
-                import segmentation_models_pytorch.encoders as encoders_module
-                # Try to find _encoders in the module's __dict__
-                if hasattr(encoders_module, '__dict__'):
-                    _encoders = encoders_module.__dict__.get('_encoders', None)
-            except (ImportError, AttributeError):
-                pass
-        
-        if _encoders is None:
-            raise ImportError("Could not access _encoders registry")
-        
-        # Register each DINO variant
-        for model_name, config in DINOEncoder.DINO_MODELS.items():
-            # Calculate out_channels for default depth=5 without creating full model
-            # This avoids loading weights during registration
-            base_dim = config["embed_dim"]
-            depth = 5
-            default_out_channels = []
-            for i in range(depth):
-                if i == 0:
-                    default_out_channels.append(base_dim // 4)
-                elif i == depth - 1:
-                    default_out_channels.append(base_dim)
-                else:
-                    ratio = i / (depth - 1)
-                    ch = int(base_dim // 4 + ratio * (base_dim - base_dim // 4))
-                    default_out_channels.append(ch)
-            
-            # Determine pretrained settings based on DINO version
-            config = DINOEncoder.DINO_MODELS[model_name]
-            dino_version = config.get("version", "v2")
-            
-            pretrained_settings = {}
-            if dino_version == "v2":
-                pretrained_settings["dinov2"] = {
-                    "url": f"https://dl.fbaipublicfiles.com/dinov2/{model_name}_pretrain.pth",
-                    "input_space": "RGB",
-                    "input_size": [3, 518, 518],  # DINOv2 default input size
-                    "input_range": [0, 1],
-                }
-            elif dino_version == "v3":
-                pretrained_settings["dinov3"] = {
-                    "url": f"https://dl.fbaipublicfiles.com/dinov3/{model_name}_pretrain.pth",
-                    "input_space": "RGB",
-                    "input_size": [3, 518, 518],  # DINOv3 default input size (may vary)
-                    "input_range": [0, 1],
-                }
-            
-            _encoders[model_name] = {
-                "encoder": DINOEncoder,
-                "pretrained_settings": pretrained_settings,
-                "params": {
-                    "model_name": model_name,
-                    "out_channels": tuple(default_out_channels),
-                }
-            }
-        
-        logger.info(f"Registered DINO encoders: {list(DINOEncoder.DINO_MODELS.keys())}")
-        
-    except ImportError:
-        # Registration is optional - DINO can be used directly with MultitaskUnet
-        # Silently skip registration failure (expected behavior)
-        pass
+    """Register the DINO encoders in ``segmentation_models_pytorch``.
+
+    Makes ``encoder_name="dinov2_vits14"`` resolve anywhere smp builds an
+    encoder, so the decoder is sized from the DINO feature pyramid instead of
+    a default ResNet's.
+
+    ``pretrained_settings`` is deliberately empty: smp's weight loader expects
+    HF-Hub ``repo_id``/``revision`` entries, while DINO weights are fetched by
+    :class:`DINOEncoder` itself via ``torch.hub`` during construction. Callers
+    therefore pass ``encoder_weights=None`` and still get a pretrained
+    backbone; any other value raises from smp naming the valid options.
+    """
+    # The public registry. Older smp exposed a private ``_encoders``; this is
+    # the supported name, and failing loudly here beats silently building a
+    # ResNet when a DINO encoder was asked for.
+    from segmentation_models_pytorch.encoders import encoders as smp_encoders
+
+    for model_name, config in DINOEncoder.DINO_MODELS.items():
+        smp_encoders[model_name] = {
+            "encoder": DINOEncoder,
+            "pretrained_settings": {},
+            "params": {
+                "model_name": model_name,
+                # Per-name so a v3 backbone is not asked for v2 weights.
+                "weights": "dinov3" if config.get("version") == "v3" else "dinov2",
+            },
+        }
+
+    logger.info(
+        "Registered DINO encoders with smp: %s", list(DINOEncoder.DINO_MODELS)
+    )
 
 
-# Auto-register on import (but don't fail if it doesn't work)
-# Registration is optional - DINO works directly with MultitaskUnet
+# Auto-register on import. A failure here is worth knowing about: without
+# registration, a DINO request silently resolves to smp's default encoder.
 try:
     register_dino_encoders()
-except Exception:
-    # Silently skip registration failure (expected behavior when _encoders is not accessible)
-    pass
+except Exception:  # noqa: BLE001 - import must not hard-fail on a stale smp
+    logger.exception(
+        "Could not register DINO encoders with smp; DINO encoder names will "
+        "not resolve."
+    )

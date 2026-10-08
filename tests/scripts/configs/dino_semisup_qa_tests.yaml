@@ -9,13 +9,11 @@ settings_templates:
 output_root: tmp/dino_semisup_qa
 global_overrides:
   train:
-    image_size: 512
+    image_size: 256
     num_cyc_frozen: 8
     num_cyc_unfrozen: 5
     patience: 4
     starting_lr: 5.0e-05
-    end_lr: 0.001
-    plot_lr_graph: false
     use_multitask: false
     loss_criterion: CombinedCEDiceLoss
     ce_weight: 0.2
@@ -50,6 +48,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_baseline_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_baseline}
 - name: qa_predict_dino_baseline
   type: predict
   model_key: qa_dino_baseline
@@ -60,6 +63,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_predict_dino_baseline
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_semisup_qa/qa_predict_dino_baseline/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_predict_dino_baseline_entropy
   type: predict
   model_key: qa_dino_baseline
@@ -71,6 +83,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_entropy.*'
+- name: dice_qa_predict_dino_baseline_entropy
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_semisup_qa/qa_predict_dino_baseline_entropy/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_slice_unlabeled
   type: unlabeled_slicer
   output_key: unlabeled_slices
@@ -87,15 +108,17 @@ tests:
       use_semi_supervised: true
       use_pseudo_labeling: false
       ema_decay: 0.99
-      consistency_weight: 0.1
-      rampup_start: 0
-      rampup_end: 5000
   assert_outputs:
     should_exist_globs:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
     - '*_mean_teacher_epoch_*.png'
+- name: assert_qa_dino_mean_teacher_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_mt}
 - name: qa_predict_dino_mt
   type: predict
   model_key: qa_dino_mt
@@ -106,6 +129,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_predict_dino_mt
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_semisup_qa/qa_predict_dino_mt/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_dino_mt_pl
   type: train
   model_key: qa_dino_mt_pl
@@ -118,13 +150,8 @@ tests:
       use_semi_supervised: true
       use_pseudo_labeling: true
       ema_decay: 0.99
-      consistency_weight: 0.1
-      rampup_start: 0
-      rampup_end: 5000
       pseudo_label_confidence_threshold: 0.95
       pseudo_label_use_teacher: true
-      pseudo_label_weight: 0.3
-      pseudo_label_threshold_schedule: linear
   assert_outputs:
     should_exist_globs:
     - '*_loss_plot.png'
@@ -132,6 +159,11 @@ tests:
     - '*_prediction_image.png'
     - '*_mean_teacher_epoch_*.png'
     - '*_pseudo_labeling_epoch_*.png'
+- name: assert_qa_dino_mt_pl_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_mt_pl}
 - name: qa_predict_dino_mt_pl_medium
   type: predict
   model_key: qa_dino_mt_pl
@@ -142,6 +174,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_predict_dino_mt_pl_medium
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_semisup_qa/qa_predict_dino_mt_pl_medium/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_predict_dino_mt_pl_high
   type: predict
   model_key: qa_dino_mt_pl
@@ -149,6 +190,15 @@ tests:
     predict:
       quality: high
       output_probs: true
+- name: dice_qa_predict_dino_mt_pl_high
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_semisup_qa/qa_predict_dino_mt_pl_high/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_predict_dino_mt_pl_entropy
   type: predict
   model_key: qa_dino_mt_pl
@@ -160,3 +210,12 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_entropy.*'
+- name: dice_qa_predict_dino_mt_pl_entropy
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_semisup_qa/qa_predict_dino_mt_pl_entropy/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"

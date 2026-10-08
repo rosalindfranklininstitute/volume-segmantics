@@ -726,30 +726,71 @@ def _should_skip_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> bool:
                 return True
     return False
 
+QUALITY_STEP_TYPES = {"pipeline_assert"}
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _run_step(context: HarnessContext, test_cfg: Dict[str, Any]) -> Optional[str]:
+    """Run one step. Returns a quality-failure message, or ``None`` on success.
+
+    An ``AssertionError`` (an ``assert_outputs`` glob) or a failing
+    ``pipeline_assert`` subprocess is a quality failure and is returned so
+    the run can continue; any other exception is an infrastructure error and
+    propagates.
+    """
+    test_type = str(test_cfg.get("type", "")).lower()
+    name = str(test_cfg.get("name", "<unnamed>"))
+    handler = STEP_DISPATCH.get(test_type)
+    if handler is None:
+        raise ValueError(f"Unsupported step type '{test_type}' in '{name}'")
+    try:
+        handler(context, test_cfg)
+    except AssertionError as exc:
+        return f"{name}: {exc}"
+    except RuntimeError as exc:
+        if test_type not in QUALITY_STEP_TYPES:
+            raise
+        return f"{name}: {exc}"
+    return None
+
+
+def _apply_profile(
+    cfg: Dict[str, Any], path_overrides: Optional[Dict[str, Any]], output_suffix: Optional[str]
+) -> None:
+    """Apply a data-profile's path overrides and keep its outputs separate."""
+    if path_overrides:
+        _deep_update(cfg.setdefault("paths", {}), path_overrides)
+    if output_suffix:
+        cfg["output_root"] = cfg.get("output_root", "tmp/smoke") + f"_{output_suffix}"
+
+
+def _report(failures: List[str], cfg_path: Path, output_root: Path) -> None:
+    if failures:
+        print(f"\n{len(failures)} quality assertion(s) failed in {cfg_path.name}:")
+        for failure in failures:
+            print(f"  - {failure}")
+    else:
+        print("\nAll configured smoke steps completed successfully.")
+    print(f"Outputs: {output_root}")
+
 
 def run_harness(
     config_path: Path,
     dry_run: bool = False,
     path_overrides: Optional[Dict[str, Any]] = None,
     output_suffix: Optional[str] = None,
-) -> None:
-    root_dir = Path(__file__).resolve().parents[2]
+) -> List[str]:
+    """Run every configured step. Returns the quality failures collected."""
+    root_dir = _repo_root()
     cfg_path = config_path if config_path.is_absolute() else (root_dir / config_path)
     cfg_path = cfg_path.resolve()
     cfg = _load_yaml(cfg_path)
+    _apply_profile(cfg, path_overrides, output_suffix)
 
-    # Apply data-profile path overrides (image, label, unlabeled, etc.)
-    if path_overrides:
-        if "paths" not in cfg:
-            cfg["paths"] = {}
-        _deep_update(cfg["paths"], path_overrides)
-
-    # Append suffix to output_root to keep profiles separate
-    if output_suffix:
-        cfg["output_root"] = cfg.get("output_root", "tmp/smoke") + f"_{output_suffix}"
-
-    config_dry_run = bool(cfg.get("dry_run", False))
-    effective_dry_run = bool(dry_run or config_dry_run)
+    effective_dry_run = bool(dry_run or cfg.get("dry_run", False))
     context = _build_context(root_dir, cfg, dry_run=effective_dry_run)
     tests = cfg.get("tests", [])
     if not tests:
@@ -757,19 +798,17 @@ def run_harness(
 
     mode_suffix = " [DRY-RUN]" if effective_dry_run else ""
     print(f"Running {len(tests)} configured steps from {cfg_path}{mode_suffix}")
+    failures: List[str] = []
     for test_cfg in tests:
-        test_type = str(test_cfg.get("type", "")).lower()
-        name = str(test_cfg.get("name", "<unnamed>"))
-        print(f"\n=== {name} ({test_type}) ===")
+        print(f"\n=== {test_cfg.get('name', '<unnamed>')} ({test_cfg.get('type', '')}) ===")
         if _should_skip_step(context, test_cfg):
             continue
-        handler = STEP_DISPATCH.get(test_type)
-        if handler is None:
-            raise ValueError(f"Unsupported step type '{test_type}' in '{name}'")
-        handler(context, test_cfg)
-
-    print("\nAll configured smoke steps completed successfully.")
-    print(f"Outputs: {context.output_root}")
+        failure = _run_step(context, test_cfg)
+        if failure is not None:
+            print(f"[FAIL] {failure}")
+            failures.append(failure)
+    _report(failures, cfg_path, context.output_root)
+    return failures
 
 
 def _parse_args() -> argparse.Namespace:
@@ -791,7 +830,9 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    run_harness(Path(args.config), dry_run=bool(getattr(args, "dry_run", False)))
+    failures = run_harness(Path(args.config), dry_run=args.dry_run)
+    if failures:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

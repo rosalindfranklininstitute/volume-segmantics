@@ -75,6 +75,29 @@ class DummyDINOv3(nn.Module):
         return out
 
 
+class DummyDINOv2Reg(nn.Module):
+    """DINOv2 with registers as the hub builds it: ``get_intermediate_layers``
+    puts the class token and the registers in front of the patch tokens and
+    strips them from what it returns, and takes no ``return_extra_tokens``.
+    It has no ``blocks``, so the manual DINOv2 path cannot run on it. Patch
+    tokens carry their raster index; the prefix tokens carry -1e6."""
+
+    def __init__(self, *, embed_dim: int, patch_size: int, num_register_tokens: int = 4):
+        super().__init__()
+        self.patch_embed = _DummyPatchEmbedV2(in_channels=3, embed_dim=embed_dim, patch_size=patch_size)
+        self.num_register_tokens = num_register_tokens
+        self.calls = []
+
+    def get_intermediate_layers(self, x, n, reshape, return_class_token, norm):
+        self.calls.append({"n": list(n), "reshape": reshape, "return_class_token": return_class_token, "norm": norm})
+        B, _, H, W = x.shape
+        p, D = self.patch_embed.proj.kernel_size[0], self.patch_embed.proj.out_channels
+        patches = torch.arange((H // p) * (W // p), dtype=x.dtype).reshape(1, -1, 1).expand(B, -1, D)
+        prefix = torch.full((B, 1 + self.num_register_tokens, D), -1e6, dtype=x.dtype)
+        tokens = torch.cat([prefix, patches], dim=1)
+        return tuple(tokens[:, 1 + self.num_register_tokens:] for _ in n)
+
+
 def _dummy_torch_hub_load_factory(record_calls: list):
     def _dummy_load(repo_or_org, model_name, pretrained=False, trust_repo=True, **kwargs):
         record_calls.append(
@@ -231,3 +254,64 @@ def test_dino_encoder_v3_forward_and_token_padding(monkeypatch):
     for i in range(1, len(feats)):
         assert feats[i].shape[1] == enc.out_channels[i]
 
+
+
+def test_a_registers_variant_reads_patch_tokens_through_the_native_forward(monkeypatch):
+    built = []
+
+    def _load(repo_or_org, model_name, *, pretrained=False, trust_repo=True, **kwargs):
+        cfg = DINOEncoder.DINO_MODELS[model_name]
+        built.append((repo_or_org, model_name, cfg["num_register_tokens"]))
+        built.append(DummyDINOv2Reg(embed_dim=cfg["embed_dim"], patch_size=cfg["patch_size"]))
+        return built[-1]
+
+    monkeypatch.setattr(torch.hub, "load", _load)
+    enc = DINOEncoder(model_name="dinov2_vits14_reg", in_channels=1, depth=4, weights="dinov2", pretrained=False)
+    feats = enc(torch.randn(2, 1, 42, 56))
+
+    assert built[0] == ("facebookresearch/dinov2", "dinov2_vits14_reg", 4)
+    assert built[1].calls == [{"n": enc.selected_layers, "reshape": False, "return_class_token": False, "norm": False}]
+    # 42 x 56 is reflect-padded by one patch a side to a 5 x 6 grid, then cropped
+    # back to the 3 x 4 patches over the input; the last stage is not projected.
+    expected = torch.tensor([[r * 6 + c for c in range(1, 5)] for r in range(1, 4)], dtype=torch.float32)
+    assert feats[-1].shape == (2, 384, 3, 4)
+    assert torch.equal(feats[-1][1, 7], expected)
+    assert all((f > -1e5).all() for f in feats[1:])
+
+
+# --- the loader's contract: hub by the model's own name, no checkpoint path, and no fallback
+
+
+def test_hub_load_uses_the_versions_repo_and_the_model_name(monkeypatch):
+    calls = []
+    monkeypatch.setattr(torch.hub, "load", _dummy_torch_hub_load_factory(calls))
+    DINOEncoder(model_name="dinov2_vits14", weights="dinov2", pretrained=True)
+    DINOEncoder(model_name="dinov3_vitl16", weights="dinov3", pretrained=False)
+    assert calls == [
+        {"repo_or_org": "facebookresearch/dinov2", "model_name": "dinov2_vits14", "pretrained": True},
+        {"repo_or_org": "facebookresearch/dinov3", "model_name": "dinov3_vitl16", "pretrained": False},
+    ]
+
+
+def test_a_failed_pretrained_load_raises_instead_of_training_a_random_backbone(monkeypatch):
+    calls = []
+
+    def _failing_load(repo_or_org, model_name, pretrained=False, trust_repo=True, **kwargs):
+        calls.append(pretrained)
+        raise RuntimeError("weights download failed")
+
+    monkeypatch.setattr(torch.hub, "load", _failing_load)
+    with pytest.raises(RuntimeError, match="weights download failed"):
+        DINOEncoder(model_name="dinov3_vitl16", weights="dinov3", pretrained=True)
+    assert calls == [True]  # one attempt, and never a second one without weights
+
+
+def test_a_checkpoint_path_is_refused(monkeypatch, tmp_path):
+    """The non-strict checkpoint loader is gone; a fine-tuned model loads whole."""
+    calls = []
+    monkeypatch.setattr(torch.hub, "load", _dummy_torch_hub_load_factory(calls))
+    ckpt = tmp_path / "dino.pth"
+    torch.save({"model": {}}, ckpt)
+    with pytest.raises(ValueError, match="full_weights_path"):
+        DINOEncoder(model_name="dinov2_vits14", weights=str(ckpt), pretrained=True)
+    assert calls == []

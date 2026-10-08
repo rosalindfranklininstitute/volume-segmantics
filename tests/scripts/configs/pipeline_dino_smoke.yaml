@@ -52,6 +52,13 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_encoder_pipeline_dino_s
+  type: pipeline_assert
+  subcommand: encoder-family
+  args:
+  - ${model:pipeline_dino_s}
+  - --expect
+  - dinov2_vits14
 - name: assert_bn_trained
   type: pipeline_assert
   subcommand: checkpoint-trained

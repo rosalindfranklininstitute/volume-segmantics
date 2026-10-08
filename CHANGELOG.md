@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 * `model-predict-pipeline` console script exposing the pipeline prediction CLI (`volume_segmantics.scripts.predict_pipeline`) with Zarr output and instance assembly.
+* DINOv2 encoders with registers (`dinov2_vits14_reg`, `dinov2_vitb14_reg`, `dinov2_vitl14_reg`, `dinov2_vitg14_reg`).
+
+### Changed
+
+* A file path in `model.encoder_weights` no longer initialises a DINO encoder (it loaded with `strict=False`, dropping missing tensors silently). Use `dinov2`/`dinov3` for the hub backbone, or load a full saved model via `full_weights_path`.
+
+### Fixed
+
+* DINO encoders are registered with `segmentation_models_pytorch` through its public `encoders` registry, and `DINOEncoder` implements the smp encoder protocol (`output_stride`, `set_in_channels`, `make_dilated`). 
+* A failed DINO weight download raises instead of silently continuing with a randomly initialised DINOv3 backbone.
+* Prediction rebuilds a DINO model from the checkpoint alone and no longer fetches hub weights it then overwrites.
+* `create_model_on_device` verifies after every construction that the built encoder's class matches the requested `encoder_name`, so a substituted backbone raises instead of training or predicting silently.
+* `create_model_from_file` and `create_model_from_file_full_weights` check a checkpoint's declared `encoder_name` against its state-dict keys before building anything, refusing the mislabelled "DINO" checkpoints.
+* The default (Lightning) trainer now feeds `--unlabeled_data_dir` into training correcly: every labeled batch is paired with a batch of unlabeled slices prepared exactly like the labeled ones, Mean Teacher's consistency loss is taken between the student's augmented view and the teacher's plain view of those slices, and pseudo-labelling adds a confidence-masked cross-entropy on them with its documented weight, ramp and threshold schedule. 
+* The legacy settings' `consistency_weight` (default 0.1), `rampup_start` and `rampup_end` are honoured by the default trainer; `pipeline.yaml` gains an optional `ema_teacher.consistency_rampup` block.
+* Test harness: an `encoder-family` assertion checks that a checkpoint's weights corroborate its declared encoder; the DINO smoke configs now run it, and the harness collects assertion failures instead of aborting a config at the first one.
 
 
 

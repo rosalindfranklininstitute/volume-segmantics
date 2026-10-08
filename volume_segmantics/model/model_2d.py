@@ -353,11 +353,112 @@ class MultitaskUnet(MultitaskSegmentationModel):
         self.initialize()
 
 
-import torch
-import torch.nn as nn
-import volume_segmantics.utilities.base_data_utils as utils
-from torch.nn import DataParallel
-import volume_segmantics.utilities.config as cfg
+
+
+DINO_ENCODER_PREFIXES = ("dinov1_", "dinov2_", "dinov3_")
+
+# How each architecture copes with a DINO (ViT) encoder. Established by
+# building each pairing and running a forward pass at 128 px:
+#
+#   "any"   - the decoder reconstructs the input size for any patch size.
+#   "match" - only when 2 ** encoder_depth == patch_size, because the decoder
+#             rebuilds (H // patch_size) * 2 ** depth and must land back on H.
+#             U-Net escapes this because its stem skip anchors the output.
+#   absent  - unsupported: DeepLabV3, DeepLabV3+ and PAN ask the encoder to
+#             dilate, which a fixed patch stride cannot do; FPN mis-sizes its
+#             output at every patch size; MA-Net rejects the depth.
+_DINO_SUPPORT = {
+    utils.ModelType.U_NET: "any",
+    # The Lightning trainer's checkpoint type, whatever the head count: its
+    # decoder is the U-Net body and it clamps a DINO encoder to depth 4 itself.
+    utils.ModelType.PIPELINE_MULTITASK_UNET: "any",
+    utils.ModelType.SEGFORMER: "any",
+    utils.ModelType.U_NET_PLUS_PLUS: "match",
+    utils.ModelType.LINKNET: "match",
+}
+
+
+def _check_dino_compatibility(model_type, encoder_name: str, depth: int) -> None:
+    """Refuse architecture/DINO pairings that would return the wrong shape.
+
+    These used to raise ``KeyError`` from smp because DINO encoders were never
+    registered. Now that they are, an unsupported pairing would build happily
+    and emit predictions at the wrong resolution, so the refusal has to be
+    explicit.
+    """
+    support = _DINO_SUPPORT.get(model_type)
+    if support is None:
+        raise ValueError(
+            f"{model_type.name} does not support DINO encoders "
+            f"({encoder_name}). Supported: "
+            f"{', '.join(sorted(m.name for m in _DINO_SUPPORT))}."
+        )
+    if support == "match":
+        patch = DINOEncoder.DINO_MODELS[encoder_name].get("patch_size", 14)
+        if 2 ** depth != patch:
+            raise ValueError(
+                f"{model_type.name} with {encoder_name} (patch size {patch}) "
+                f"at encoder_depth={depth} would output (H // {patch}) * "
+                f"{2 ** depth} pixels, not H. Use a patch-{2 ** depth} DINO "
+                f"encoder (e.g. dinov3_vitl16 at depth 4), or U_NET, which is "
+                f"unaffected."
+            )
+
+
+#: What a checkpoint's state dict carries for each encoder family.
+_DINO_STATE_PREFIX = "encoder.dino_model."
+_CNN_STATE_PREFIXES = (
+    "encoder.conv1.", "encoder.layer1.", "encoder.features.",   # torchvision-style CNNs
+    "encoder.model.", "encoder.stages.", "encoder.stem.",       # timm / ConvNeXt
+)
+
+
+def _is_dino_name(encoder_name) -> bool:
+    return str(encoder_name or "").startswith(DINO_ENCODER_PREFIXES)
+
+
+def verify_built_encoder(model: torch.nn.Module, encoder_name, *, context: str = "") -> None:
+    """Refuse a built model whose encoder class contradicts ``encoder_name``.
+    """
+    inner = model.module if isinstance(model, DataParallel) else model
+    encoder = getattr(inner, "encoder", None)
+    if encoder is None:  # e.g. VanillaUNet: no smp-style encoder to check
+        return
+    built_is_dino = type(encoder).__name__ == "DINOEncoder"
+    if _is_dino_name(encoder_name) != built_is_dino:
+        raise RuntimeError(
+            f"Encoder mismatch{context}: encoder_name={encoder_name!r} was requested but "
+            f"the built model carries a {type(encoder).__name__}. Refusing to continue "
+            f"with the wrong backbone."
+        )
+
+
+def check_checkpoint_encoder_family(state_dict, encoder_name, *, context: str = "") -> None:
+    """Refuse a checkpoint whose weights contradict its declared encoder.
+
+    ``model_struc_dict.encoder_name`` is a claim; the state-dict keys are the
+    evidence. A checkpoint that declares a DINO encoder must carry
+    ``encoder.dino_model.*`` tensors, and one that declares a CNN must not.
+    """
+    where = f" ({context})" if context else ""
+    sd = state_dict
+    if isinstance(sd, dict) and "student" in sd and isinstance(sd["student"], dict):
+        sd = sd["student"]
+    keys = [k[len("module."):] if k.startswith("module.") else k for k in sd]
+    has_dino = any(k.startswith(_DINO_STATE_PREFIX) for k in keys)
+    has_cnn = any(k.startswith(_CNN_STATE_PREFIXES) for k in keys)
+    if _is_dino_name(encoder_name) and not has_dino:
+        raise RuntimeError(
+            f"Checkpoint{where} declares encoder_name={encoder_name!r} but carries no DINO "
+            f"(ViT) encoder weights" + (" and does carry CNN encoder weights" if has_cnn else "") +
+            "this is a mislabelled CNN checkpoint; retrain it with this version."
+        )
+    if not _is_dino_name(encoder_name) and has_dino:
+        raise RuntimeError(
+            f"Checkpoint{where} declares encoder_name={encoder_name!r} but carries DINO (ViT) "
+            f"encoder weights; the descriptor and the weights disagree."
+        )
+
 
 def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.Module:
     struct_dict_copy = model_struc_dict.copy()
@@ -378,6 +479,17 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
     in_channels_requested = struct_dict_copy.get("in_channels", cfg.MODEL_INPUT_CHANNELS)
     encoder_weights = struct_dict_copy.get("encoder_weights", None)
 
+    # One check for every architecture, before the dispatch below.
+    _encoder_name = struct_dict_copy.get("encoder_name", "") or ""
+    if _encoder_name.startswith(DINO_ENCODER_PREFIXES):
+        _check_dino_compatibility(
+            model_type, _encoder_name, struct_dict_copy.get("encoder_depth", 4),
+        )
+        # The checkpoint carries every ViT tensor, so the backbone is built
+        # without hub weights; a weights path an older run stored never reaches
+        # the encoder, which refuses checkpoint paths.
+        struct_dict_copy["encoder_weights"] = None
+
     if model_type == utils.ModelType.U_NET:
         encoder_name = struct_dict_copy.get('encoder_name', '')
         is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
@@ -387,49 +499,23 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
                 decoder_channels=(256, 128, 64, 32),
                 head_upsampling=2,)
         elif is_dino:
-            # DINO encoders: use depth=4 and adjust decoder channels
-            # If registration failed, create encoder directly and pass it
-            dino_depth = struct_dict_copy.get('encoder_depth', 4)
-            encoder_weights_param = struct_dict_copy.get('encoder_weights', 'dinov2')
-            in_channels_param = struct_dict_copy.get('in_channels', 3)
-            # Remove encoder_depth from struct_dict_copy to avoid duplicate keyword argument
-            struct_dict_copy.pop('encoder_depth', None)
-
-            # Determine DINO version from encoder name
-            if encoder_name.startswith('dinov3_'):
-                weights_source = 'dinov3' if encoder_weights_param in ['dinov3', None, 'None'] else encoder_weights_param
-            else:
-                weights_source = 'dinov2' if encoder_weights_param in ['dinov2', None, 'None'] else encoder_weights_param
-
-            # Try to create model with encoder_name first (if registration worked)
-            try:
-                model = smp.Unet(**struct_dict_copy, encoder_depth=dino_depth,
-                    decoder_channels=(256, 128, 64, 32) if dino_depth == 4 else (256, 128, 64, 32, 16),
-                    head_upsampling=2,)
-            except (ValueError, KeyError, AttributeError) as e:
-                # Registration failed, create encoder directly
-                if DINO_AVAILABLE:
-                    logging.info(f"DINO encoder not registered with smp, creating directly: {e}")
-                    dino_encoder = DINOEncoder(
-                        model_name=encoder_name,
-                        in_channels=in_channels_param,
-                        depth=dino_depth,
-                        weights=weights_source,
-                        pretrained=(encoder_weights_param not in [None, 'None', False])
-                    )
-                    # Create model with encoder parameter instead of encoder_name
-                    struct_dict_copy_no_encoder = struct_dict_copy.copy()
-                    struct_dict_copy_no_encoder.pop('encoder_name', None)
-                    struct_dict_copy_no_encoder.pop('encoder_weights', None)
-                    model = smp.Unet(
-                        encoder=dino_encoder,
-                        encoder_depth=dino_depth,
-                        decoder_channels=(256, 128, 64, 32) if dino_depth == 4 else (256, 128, 64, 32, 16),
-                        head_upsampling=2,
-                        **struct_dict_copy_no_encoder
-                    )
-                else:
-                    raise RuntimeError(f"DINO encoder not available and registration failed: {e}")
+            # DINO encoders are registered with smp by
+            # dino_encoder.register_dino_encoders(), so encoder_name resolves
+            # and the decoder is sized from the DINO feature pyramid.
+            #
+            # encoder_weights must be None here: smp's loader expects HF-Hub
+            # entries, while DINOEncoder fetches its pretrained backbone via
+            # torch.hub while constructing. Passing 'dinov2' through would
+            # raise from smp's pretrained_settings lookup.
+            dino_depth = struct_dict_copy.pop('encoder_depth', 4)
+            struct_dict_copy['encoder_weights'] = None
+            model = smp.Unet(
+                **struct_dict_copy,
+                encoder_depth=dino_depth,
+                decoder_channels=(256, 128, 64, 32) if dino_depth == 4
+                else (256, 128, 64, 32, 16),
+                head_upsampling=2,
+            )
         else:
             model = smp.Unet(**struct_dict_copy)
         logging.info(f"Sending the U-Net model to device {device_num}")
@@ -442,47 +528,23 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
                 decoder_channels=(256, 128, 64, 32),
                 head_upsampling=2,)
         elif is_dino:
-            dino_depth = struct_dict_copy.get('encoder_depth', 4)
-            encoder_weights_param = struct_dict_copy.get('encoder_weights', 'dinov2')
-            in_channels_param = struct_dict_copy.get('in_channels', 3)
-            # Remove encoder_depth from struct_dict_copy to avoid duplicate keyword argument
-            struct_dict_copy.pop('encoder_depth', None)
-
-            # Determine DINO version from encoder name
-            if encoder_name.startswith('dinov3_'):
-                weights_source = 'dinov3' if encoder_weights_param in ['dinov3', None, 'None'] else encoder_weights_param
-            else:
-                weights_source = 'dinov2' if encoder_weights_param in ['dinov2', None, 'None'] else encoder_weights_param
-
-            # Try to create model with encoder_name first (if registration worked)
-            try:
-                model = smp.UnetPlusPlus(**struct_dict_copy, encoder_depth=dino_depth,
-                    decoder_channels=(256, 128, 64, 32) if dino_depth == 4 else (256, 128, 64, 32, 16),
-                    head_upsampling=2,)
-            except (ValueError, KeyError, AttributeError) as e:
-                # Registration failed, create encoder directly
-                if DINO_AVAILABLE:
-                    logging.info(f"DINO encoder not registered with smp, creating directly: {e}")
-                    dino_encoder = DINOEncoder(
-                        model_name=encoder_name,
-                        in_channels=in_channels_param,
-                        depth=dino_depth,
-                        weights=weights_source,
-                        pretrained=(encoder_weights_param not in [None, 'None', False])
-                    )
-                    # Create model with encoder parameter instead of encoder_name
-                    struct_dict_copy_no_encoder = struct_dict_copy.copy()
-                    struct_dict_copy_no_encoder.pop('encoder_name', None)
-                    struct_dict_copy_no_encoder.pop('encoder_weights', None)
-                    model = smp.UnetPlusPlus(
-                        encoder=dino_encoder,
-                        encoder_depth=dino_depth,
-                        decoder_channels=(256, 128, 64, 32) if dino_depth == 4 else (256, 128, 64, 32, 16),
-                        head_upsampling=2,
-                        **struct_dict_copy_no_encoder
-                    )
-                else:
-                    raise RuntimeError(f"DINO encoder not available and registration failed: {e}")
+            # DINO encoders are registered with smp by
+            # dino_encoder.register_dino_encoders(), so encoder_name resolves
+            # and the decoder is sized from the DINO feature pyramid.
+            #
+            # encoder_weights must be None here: smp's loader expects HF-Hub
+            # entries, while DINOEncoder fetches its pretrained backbone via
+            # torch.hub while constructing. Passing 'dinov2' through would
+            # raise from smp's pretrained_settings lookup.
+            dino_depth = struct_dict_copy.pop('encoder_depth', 4)
+            struct_dict_copy['encoder_weights'] = None
+            model = smp.UnetPlusPlus(
+                **struct_dict_copy,
+                encoder_depth=dino_depth,
+                decoder_channels=(256, 128, 64, 32) if dino_depth == 4
+                else (256, 128, 64, 32, 16),
+                head_upsampling=2,
+            )
         else:
             model = smp.UnetPlusPlus(**struct_dict_copy)
         logging.info(f"Sending the U-Net++ model to device {device_num}")
@@ -641,6 +703,8 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
     # Skip this for DINO encoders as they handle channel adaptation internally
     encoder_name = struct_dict_copy.get('encoder_name', '')
     is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
+    # What was built must be what was asked for (see verify_built_encoder).
+    verify_built_encoder(model, encoder_name, context=f" ({model_type.name})")
 
     try:
         if encoder_weights and encoder_weights != "None" and in_channels_requested > 3 and not is_dino:
@@ -926,6 +990,11 @@ def create_model_from_file(
     # This avoids a failure mode where parameters are instantiated on CUDA even
     # when gpu=False, then load_state_dict keeps them on CUDA.
     device_for_model = device_num if gpu else "cpu"
+    # The weights must corroborate the declared encoder before anything is built.
+    check_checkpoint_encoder_family(
+        model_dict["model_state_dict"], model_dict["model_struc_dict"].get("encoder_name"),
+        context=str(weights_fn),
+    )
     model = create_model_on_device(device_for_model, model_dict["model_struc_dict"])
     logging.info("Loading in the saved weights.")
     state_dict = model_dict["model_state_dict"]
@@ -982,8 +1051,11 @@ def create_model_from_file_full_weights(
     logging.info("Loading model dictionary from file.")
 
 
-    model = create_model_on_device(device_num, model_struc_dict)
     model_dict = torch.load(weights_fn, map_location=map_location, weights_only=False)
+    check_checkpoint_encoder_family(
+        model_dict, model_struc_dict.get("encoder_name"), context=str(weights_fn),
+    )
+    model = create_model_on_device(device_num, model_struc_dict)
 
     logging.info("Loading in the saved weights.")
     _load_state_dict_checked(model, model_dict, context=str(weights_fn))

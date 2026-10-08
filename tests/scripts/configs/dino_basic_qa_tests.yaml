@@ -7,13 +7,11 @@ settings_templates:
 output_root: tmp/dino_basic_qa
 global_overrides:
   train:
-    image_size: 512
+    image_size: 256
     num_cyc_frozen: 8
     num_cyc_unfrozen: 5
     patience: 4
     starting_lr: 5.0e-05
-    end_lr: 0.001
-    plot_lr_graph: false
     use_multitask: false
     use_semi_supervised: false
     use_pseudo_labeling: false
@@ -51,6 +49,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_s_unet_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_s_unet}
 - name: qa_predict_dino_s_medium
   type: predict
   model_key: qa_dino_s_unet
@@ -61,6 +64,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_predict_dino_s_medium
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_basic_qa/qa_predict_dino_s_medium/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_predict_dino_s_high
   type: predict
   model_key: qa_dino_s_unet
@@ -68,6 +80,15 @@ tests:
     predict:
       quality: high
       output_probs: true
+- name: dice_qa_predict_dino_s_high
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_basic_qa/qa_predict_dino_s_high/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_predict_dino_s_entropy
   type: predict
   model_key: qa_dino_s_unet
@@ -79,6 +100,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_entropy.*'
+- name: dice_qa_predict_dino_s_entropy
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_basic_qa/qa_predict_dino_s_entropy/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_dino_b_unet
   type: train
   model_key: qa_dino_b_unet
@@ -93,6 +123,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_b_unet_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_b_unet}
 - name: qa_predict_dino_b_medium
   type: predict
   model_key: qa_dino_b_unet
@@ -103,6 +138,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_predict_dino_b_medium
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_basic_qa/qa_predict_dino_b_medium/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_predict_dino_b_entropy
   type: predict
   model_key: qa_dino_b_unet
@@ -114,3 +158,12 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_entropy.*'
+- name: dice_qa_predict_dino_b_entropy
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_basic_qa/qa_predict_dino_b_entropy/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"

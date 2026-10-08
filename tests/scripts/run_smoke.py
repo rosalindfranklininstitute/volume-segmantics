@@ -208,13 +208,21 @@ def main() -> None:
         )
         sys.exit(1)
 
+    failures: List[str] = []
     for config_path in configs_to_run:
-        run_harness(
-            config_path,
-            dry_run=args.dry_run,
-            path_overrides=path_overrides,
-            output_suffix=output_suffix,
+        failures.extend(
+            f"{config_path.name} :: {f}" for f in run_harness(
+                config_path,
+                dry_run=args.dry_run,
+                path_overrides=path_overrides,
+                output_suffix=output_suffix,
+            )
         )
+    if failures:
+        print(f"\n{len(failures)} quality assertion(s) failed across the run:", file=sys.stderr)
+        for failure in failures:
+            print(f"  - {failure}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

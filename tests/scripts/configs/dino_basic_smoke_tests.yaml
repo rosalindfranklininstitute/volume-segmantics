@@ -46,6 +46,13 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_encoder_dino_s_unet
+  type: pipeline_assert
+  subcommand: encoder-family
+  args:
+  - ${model:dino_s_unet}
+  - --expect
+  - dinov2_vits14
 - name: predict_dino_s_low
   type: predict
   model_key: dino_s_unet
@@ -87,6 +94,13 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_encoder_dino_b_unet
+  type: pipeline_assert
+  subcommand: encoder-family
+  args:
+  - ${model:dino_b_unet}
+  - --expect
+  - dinov2_vitb14
 - name: predict_dino_b_low
   type: predict
   model_key: dino_b_unet

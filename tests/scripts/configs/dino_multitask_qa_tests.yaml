@@ -7,19 +7,14 @@ settings_templates:
 output_root: tmp/dino_multitask_qa
 global_overrides:
   train:
-    image_size: 512
+    image_size: 256
     num_cyc_frozen: 8
     num_cyc_unfrozen: 5
     patience: 4
     starting_lr: 5.0e-05
-    end_lr: 0.001
-    plot_lr_graph: false
     use_semi_supervised: false
     use_pseudo_labeling: false
     use_multitask: true
-    num_tasks: 2
-    seg_loss_weight: 1.0
-    boundary_loss_weight: 1.0
     encoder_lr_multiplier: 0.1
     model:
       type: Multitask_Unet
@@ -78,6 +73,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_s_single_task_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_s_single}
 - name: qa_dino_s_2task_shared
   type: train
   model_key: qa_dino_s_2task
@@ -87,8 +87,6 @@ tests:
   overrides:
     train:
       model_output_fn: qa_dino_s_2task_shared
-      decoder_sharing: shared
-      boundary_loss_type: bce
       loss_criterion: CombinedCEDiceLoss
       model:
         encoder_name: dinov2_vits14
@@ -97,6 +95,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_s_2task_shared_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_s_2task}
 - name: qa_dino_s_predict_medium
   type: predict
   model_key: qa_dino_s_2task
@@ -107,6 +110,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_dino_s_predict_medium
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_multitask_qa/qa_dino_s_predict_medium/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_dino_s_predict_entropy
   type: predict
   model_key: qa_dino_s_2task
@@ -118,6 +130,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_entropy.*'
+- name: dice_qa_dino_s_predict_entropy
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_multitask_qa/qa_dino_s_predict_entropy/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_dino_s_3task_sdf
   type: train
   model_key: qa_dino_s_3task
@@ -129,12 +150,6 @@ tests:
   overrides:
     train:
       model_output_fn: qa_dino_s_3task_sdf
-      num_tasks: 3
-      decoder_sharing: shared
-      boundary_loss_type: bce
-      task3_loss_weight: 10.0
-      task3_loss_type: regression
-      task3_activation: null
       loss_criterion: CombinedCEDiceLoss
       model:
         encoder_name: dinov2_vits14
@@ -143,6 +158,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_s_3task_sdf_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_s_3task}
 - name: qa_dino_b_2task_shared
   type: train
   model_key: qa_dino_b_2task_shared
@@ -152,8 +172,6 @@ tests:
   overrides:
     train:
       model_output_fn: qa_dino_b_2task_shared
-      decoder_sharing: shared
-      boundary_loss_type: bce
       loss_criterion: CombinedCEDiceLoss
       model:
         encoder_name: dinov2_vitb14
@@ -162,6 +180,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_b_2task_shared_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_b_2task_shared}
 - name: qa_dino_b_2task_separate
   type: train
   model_key: qa_dino_b_2task_sep
@@ -171,8 +194,6 @@ tests:
   overrides:
     train:
       model_output_fn: qa_dino_b_2task_separate
-      decoder_sharing: separate
-      boundary_loss_type: bce
       loss_criterion: CombinedCEDiceLoss
       model:
         encoder_name: dinov2_vitb14
@@ -181,6 +202,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_b_2task_separate_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_b_2task_sep}
 - name: qa_dino_b_predict_medium
   type: predict
   model_key: qa_dino_b_2task_shared
@@ -191,6 +217,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_dino_b_predict_medium
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_multitask_qa/qa_dino_b_predict_medium/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_dino_b_predict_high
   type: predict
   model_key: qa_dino_b_2task_shared
@@ -198,6 +233,15 @@ tests:
     predict:
       quality: high
       output_probs: true
+- name: dice_qa_dino_b_predict_high
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_multitask_qa/qa_dino_b_predict_high/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_dino_b_predict_entropy
   type: predict
   model_key: qa_dino_b_2task_shared
@@ -209,6 +253,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_entropy.*'
+- name: dice_qa_dino_b_predict_entropy
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_multitask_qa/qa_dino_b_predict_entropy/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_dino_b_3task_sdf
   type: train
   model_key: qa_dino_b_3task_sdf
@@ -220,12 +273,6 @@ tests:
   overrides:
     train:
       model_output_fn: qa_dino_b_3task_sdf
-      num_tasks: 3
-      decoder_sharing: shared
-      boundary_loss_type: bce
-      task3_loss_weight: 10.0
-      task3_loss_type: regression
-      task3_activation: null
       loss_criterion: CombinedCEDiceLoss
       model:
         encoder_name: dinov2_vitb14
@@ -234,6 +281,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_b_3task_sdf_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_b_3task_sdf}
 - name: qa_dino_b_3task_edt
   type: train
   model_key: qa_dino_b_3task_edt
@@ -245,12 +297,6 @@ tests:
   overrides:
     train:
       model_output_fn: qa_dino_b_3task_edt
-      num_tasks: 3
-      decoder_sharing: separate
-      boundary_loss_type: bce
-      task3_loss_weight: 10.0
-      task3_loss_type: regression
-      task3_activation: null
       loss_criterion: CombinedCEDiceLoss
       model:
         encoder_name: dinov2_vitb14
@@ -259,6 +305,11 @@ tests:
     - '*_loss_plot.png'
     - '*_train_stats.csv'
     - '*_prediction_image.png'
+- name: assert_qa_dino_b_3task_edt_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_dino_b_3task_edt}
 - name: qa_dino_b_predict_3task_sdf
   type: predict
   model_key: qa_dino_b_3task_sdf
@@ -268,6 +319,15 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_dino_b_predict_3task_sdf
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_multitask_qa/qa_dino_b_predict_3task_sdf/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
 - name: qa_dino_b_predict_3task_edt
   type: predict
   model_key: qa_dino_b_3task_edt
@@ -277,3 +337,12 @@ tests:
   assert_outputs:
     should_exist_globs:
     - '*_vol_pred.*'
+- name: dice_qa_dino_b_predict_3task_edt
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - tmp/dino_multitask_qa/qa_dino_b_predict_3task_edt/*_vol_pred.*
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - "0.9"
