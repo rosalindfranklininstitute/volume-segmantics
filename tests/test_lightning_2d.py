@@ -386,7 +386,7 @@ def test_epoch_history_collects_metrics(lightning_module):
         "val_loss": torch.tensor(0.5),
         "train_loss": torch.tensor(0.4),
     }
-    cb.on_validation_epoch_end(trainer, lightning_module)
+    cb.on_train_epoch_end(trainer, lightning_module)
     assert len(lightning_module.epoch_history) == 1
     row = lightning_module.epoch_history[0]
     assert row["epoch"] == 0
@@ -400,7 +400,7 @@ def test_epoch_history_skips_sanity_check(lightning_module):
     trainer = MagicMock()
     trainer.global_rank = 0
     trainer.sanity_checking = True
-    cb.on_validation_epoch_end(trainer, lightning_module)
+    cb.on_train_epoch_end(trainer, lightning_module)
     assert lightning_module.epoch_history == []
 
 
@@ -471,6 +471,13 @@ def test_end_to_end_lightning_fit(
     # epoch_history has at least one entry.
     assert len(pl_module.epoch_history) >= 1
     assert "val_loss" in pl_module.epoch_history[-1]
+    # One row per epoch, each with *its own* aggregated train loss and its own
+    # epoch's Dice: no one-epoch shift and no zero-padded last row.
+    assert [row["epoch"] for row in pl_module.epoch_history] == [0, 1]
+    assert all(row["train_loss"] > 0 for row in pl_module.epoch_history)
+    assert pl_module.epoch_history[-1]["train_loss"] == pytest.approx(float(trainer.callback_metrics["train_loss"]))
+    assert all("val_seg_dice" in row for row in pl_module.epoch_history)
+    assert 0.0 < pl_module.epoch_history[0]["val_seg_dice"] <= 1.0
     # Checkpoint written to disk.
     assert ckpt_path.exists()
     loaded = torch.load(ckpt_path, weights_only=False)
@@ -549,3 +556,13 @@ def test_end_to_end_bn_stats_moved_from_random_init(
     assert len(bn_tracked) > 0
     # At least one BN should have tracked > 0 batches.
     assert max(int(v) for v in bn_tracked) > 0
+
+
+def test_history_bridge_renames_per_class_dice_for_the_csv(tmp_path):
+    from volume_segmantics.model.operations.lightning2d import VolSegDiagnosticsCallback
+    cb = VolSegDiagnosticsCallback(tmp_path / "m.pytorch", num_classes=2, head_names=("semantic",))
+    history = [{"epoch": 0, "train_loss": 0.6, "val_loss": 0.5, "val_seg_dice": 0.7, "val_dice_class_0": 0.9, "val_dice_class_1": 0.5},
+               {"epoch": 1, "train_loss": 0.4, "val_loss": 0.3, "val_seg_dice": 0.8, "val_dice_class_0": 0.95, "val_dice_class_1": 0.65}]
+    legacy = cb._transpose_history(history)
+    assert legacy["train_total"] == [0.6, 0.4] and legacy["seg_dice"] == [0.7, 0.8]
+    assert legacy["dice_class_0"] == [0.9, 0.95] and legacy["dice_class_1"] == [0.5, 0.65]

@@ -20,6 +20,30 @@ from matplotlib import pyplot as plt
 import volume_segmantics.utilities.base_data_utils as utils
 
 
+# The epoch_history keys behind the CSV columns, in the order the header lists
+# them. 
+_MULTITASK_STAT_KEYS = (
+    "train_total", "train_seg", "train_boundary", "train_task3",
+    "valid_total", "valid_seg", "valid_boundary", "valid_task3",
+    "seg_dice", "boundary_dice",
+)
+_SINGLE_TASK_STAT_KEYS = ("train_total", "valid_total", "seg_dice")
+
+
+def _stat_at(epoch_history, key: str, i: int):
+    """One series' value at an epoch, or 0 where the series does not reach it.
+
+    Rows are counted from ``train_total``, but the trainers initialise every
+    series to ``[]`` and fill only the ones a given run produces: a two-task model
+    never fills ``train_task3``, and the Lightning bridge zero-fills a fixed set
+    of keys that excludes the per-class Dice ones. Indexing those directly raised
+    IndexError, or KeyError for an absent key, and took the end of training
+    down with it, after the figure had already been written.
+    """
+    values = epoch_history.get(key)
+    return values[i] if values is not None and i < len(values) else 0
+
+
 class TrainingVisualizer:
     """
     Handles visualization of training progress and predictions.
@@ -310,34 +334,14 @@ class TrainingVisualizer:
             
             writer.writerow(header)
             
+            stat_keys = _MULTITASK_STAT_KEYS if self.use_multitask else _SINGLE_TASK_STAT_KEYS
+            dice_keys = [f"dice_class_{c}" for c in range(self.num_classes)]
             # Write data rows
             for i, epoch in enumerate(epochs):
                 row = [epoch]
                 
-                if self.use_multitask:
-                    row.extend([
-                        epoch_history["train_total"][i],
-                        epoch_history["train_seg"][i],
-                        epoch_history["train_boundary"][i],
-                        epoch_history["train_task3"][i],
-                        epoch_history["valid_total"][i],
-                        epoch_history["valid_seg"][i],
-                        epoch_history["valid_boundary"][i],
-                        epoch_history["valid_task3"][i],
-                        epoch_history["seg_dice"][i],
-                        epoch_history["boundary_dice"][i],
-                    ])
-                else:
-                    row.extend([
-                        epoch_history["train_total"][i],
-                        epoch_history["valid_total"][i],
-                        epoch_history["seg_dice"][i],
-                    ])
-                
-                # Per-class Dice
-                for c in range(self.num_classes):
-                    key = f"dice_class_{c}"
-                    row.append(epoch_history[key][i] if key in epoch_history else 0)
+                row.extend(_stat_at(epoch_history, key, i) for key in stat_keys)
+                row.extend(_stat_at(epoch_history, key, i) for key in dice_keys)
                 
                 writer.writerow(row)
         

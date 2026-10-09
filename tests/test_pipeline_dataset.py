@@ -222,6 +222,49 @@ def test_build_aug_unknown_transform_raises():
         )
 
 
+def test_the_packaged_default_pipeline_builds_its_albumentations_transforms():
+    """pipeline.default.yaml names ``border_mode: reflect``, which Albumentations
+    refuses as a string; starting from the shipped default crashed at dataloader
+    setup before any training."""
+    from volume_segmantics.data.pipeline_loader import load_pipeline_yaml
+    from volume_segmantics.settings import PIPELINE_DEFAULT_PATH
+
+    config = load_pipeline_yaml(PIPELINE_DEFAULT_PATH)
+    spatial, _, _ = build_pipeline_augmentations(
+        config.augmentations,
+        enabled_head_names={"semantic": True, "boundary": True,
+                            "distance": True, "sdm": True},
+        img_size=64,
+    )
+    rotate = next(t for t in spatial.transforms if t.__class__.__name__ == "Rotate")
+    assert rotate.border_mode == cv2.BORDER_REFLECT
+
+
+@pytest.mark.parametrize("name, code", [
+    ("constant", cv2.BORDER_CONSTANT), ("replicate", cv2.BORDER_REPLICATE),
+    ("reflect", cv2.BORDER_REFLECT), ("wrap", cv2.BORDER_WRAP),
+    ("reflect_101", cv2.BORDER_REFLECT_101), ("REFLECT", cv2.BORDER_REFLECT),
+    (cv2.BORDER_REFLECT_101, cv2.BORDER_REFLECT_101),
+])
+def test_border_mode_names_resolve_to_opencv_constants(name, code):
+    aug_cfg = AugmentationsConfig(train_transforms=[
+        TransformSpec(name="Rotate", params={"limit": 30, "p": 1.0, "border_mode": name}),
+    ])
+    spatial, _, _ = build_pipeline_augmentations(
+        aug_cfg, enabled_head_names={"semantic": True}, img_size=64,
+    )
+    rotate = next(t for t in spatial.transforms if t.__class__.__name__ == "Rotate")
+    assert rotate.border_mode == code
+
+
+def test_an_unknown_border_mode_name_is_refused_by_name():
+    aug_cfg = AugmentationsConfig(train_transforms=[
+        TransformSpec(name="Rotate", params={"limit": 30, "border_mode": "mirror"}),
+    ])
+    with pytest.raises(ValueError, match="unknown border_mode 'mirror'.*reflect"):
+        build_pipeline_augmentations(aug_cfg, enabled_head_names={"semantic": True})
+
+
 def test_build_aug_returns_none_when_no_transforms():
     aug_cfg = AugmentationsConfig(train_transforms=[])
     spatial, photo, addl = build_pipeline_augmentations(

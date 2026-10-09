@@ -402,3 +402,50 @@ def test_consistency_loss_matching_shapes():
     teacher = torch.randn(2, 3, 8, 8)
     out = loss_fn(student, teacher)
     assert out.dim() == 0
+
+
+from volume_segmantics.model.operations.trainer_losses import (  # noqa: E402
+    ClassWeightedDiceLoss as _CWDice,
+    CombinedCEDiceLoss as _CombinedCEDice,
+)
+
+
+def test_binary_bce_scores_the_foreground_that_dice_and_argmax_read():
+    target = torch.zeros(2, 8, 8, dtype=torch.long)
+    target[:, :, 4:] = 1
+    foreground = target.float() * 8.0 - 4.0
+    correct = torch.stack([-foreground, foreground], dim=1)  # channel 1 high on foreground
+    bce_only = _CombinedCEDice(2, alpha=1.0, beta=0.0)
+    assert bce_only.use_bce
+    assert bce_only(correct, target) < 0.01 < bce_only(correct.flip(1), target)
+    # Both logits positive, channel 0 larger: argmax and softmax say background,
+    # so a background target is predicted correctly and costs almost nothing.
+    background_wins = torch.stack([torch.full((2, 8, 8), 10.0), torch.full((2, 8, 8), 5.0)], dim=1)
+    assert bce_only(background_wins, torch.zeros_like(target)) < 0.01
+
+
+def _batch_missing_class(num_classes=4, absent=3):
+    """Class indices using every class but ``absent``, and logits that predict them confidently."""
+    target = torch.randint(0, num_classes - 1, (2, 16, 16))
+    target[target >= absent] += 1
+    good = 8.0 * F.one_hot(target, num_classes).movedim(-1, 1).float()
+    return good, target
+
+
+@pytest.mark.parametrize("mode", ["inverse_freq", "inverse_sqrt_freq"])
+def test_a_class_absent_from_the_batch_gets_no_weight(mode):
+    loss_fn = _CWDice(4, weight_mode=mode)
+    _, target = _batch_missing_class()
+    weights = loss_fn._compute_weights_from_batch(F.one_hot(target, 4).movedim(-1, 1).float())
+    assert weights[3].item() == 0.0
+    assert (weights[:3] > 0).all()
+
+
+@pytest.mark.parametrize("mode", ["inverse_freq", "inverse_sqrt_freq"])
+def test_an_absent_class_does_not_leave_the_dice_loss_flat(mode):
+    """Before the fix the absent class took ~all the weight, and the loss sat at ~1 for any prediction."""
+    loss_fn = _CWDice(4, weight_mode=mode)
+    good, target = _batch_missing_class()
+    wrong = torch.roll(good, shifts=1, dims=1)
+    assert loss_fn(good, target).item() < 0.05
+    assert loss_fn(wrong, target).item() > 0.5

@@ -397,3 +397,41 @@ def test_plot_pseudo_labeling_visualization_saves_png_and_uses_teacher(monkeypat
     assert expected.exists()
     assert pseudo_gen.last_use_teacher is True
 
+
+def _read_csv(path):
+    with path.open("r", newline="") as f:
+        return list(csv.reader(f))
+
+
+def test_stats_csv_tolerates_a_series_shorter_than_the_epoch_count(tmp_path):
+    """A present-but-short series must not take the CSV down."""
+    vis = tv.TrainingVisualizer(num_classes=2, label_codes=None, use_multitask=False)
+    epoch_history = {
+        "train_total": [2.0, 1.0, 0.5],
+        "valid_total": [2.2, 1.1, 0.6],
+        "seg_dice": [0.1, 0.5, 0.7],
+        "dice_class_0": [],          # never filled: the trainers' initial state
+        "dice_class_1": [0.2],       # filled for one epoch only
+    }
+    vis.save_training_stats_csv(epoch_history, tmp_path, "run")
+    rows = _read_csv(tmp_path / "run_train_stats.csv")
+    assert len(rows) == 4  # header + three epochs
+    assert rows[1][-2:] == ["0", "0.2"]
+    assert rows[2][-2:] == ["0", "0"]
+    assert rows[3][-2:] == ["0", "0"]
+
+
+def test_stats_csv_tolerates_a_missing_multitask_series(tmp_path):
+    """An absent key is written as 0, as the per-class columns already did."""
+    vis = tv.TrainingVisualizer(num_classes=1, label_codes=None, use_multitask=True)
+    epoch_history = {
+        "train_total": [2.0, 1.0], "valid_total": [2.2, 1.1], "seg_dice": [0.1, 0.5],
+        "train_seg": [1.5, 0.9], "valid_seg": [1.6, 1.0],
+    }
+    vis.save_training_stats_csv(epoch_history, tmp_path, "run")
+    rows = _read_csv(tmp_path / "run_train_stats.csv")
+    assert len(rows) == 3
+    header = rows[0]
+    assert rows[1][header.index("Train_Task3")] == "0"
+    assert rows[1][header.index("Boundary_Dice")] == "0"
+    assert rows[1][header.index("Train_Total")] == "2.0"

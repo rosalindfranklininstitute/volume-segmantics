@@ -24,6 +24,43 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
+def _gpu_count(devices) -> int:
+    """How many GPUs ``devices`` asks for, in Lightning's own spellings."""
+    if devices == "auto":
+        return torch.cuda.device_count()
+    if isinstance(devices, (list, tuple)):
+        return len(devices)
+    return int(devices)
+
+
+def _resolve_lightning_devices(settings, accelerator: str):
+    """The Lightning ``devices`` and ``strategy`` for this run.
+
+    Without an explicit ``--devices`` the job trains on the one GPU the
+    settings file names in ``cuda_device``, the key the legacy trainer and the
+    predictor honour, rather than on every visible GPU. Multi-GPU is opt-in
+    (``--devices auto`` or a count). When more than one GPU is requested under
+    the "auto" strategy, the permissive DDP variant is selected, because the
+    frozen-encoder phase leaves tracked parameters without gradients on some
+    steps, which DDP rejects in its default strict mode. An explicit strategy
+    still wins.
+    """
+    strategy = getattr(settings, "lightning_strategy", None) or "auto"
+    devices = getattr(settings, "lightning_devices", None)
+    if devices is None:
+        devices = [int(getattr(settings, "cuda_device", 0) or 0)] if accelerator == "gpu" else "auto"
+    elif isinstance(devices, str) and devices != "auto":
+        devices = int(devices)
+    if strategy == "auto" and accelerator == "gpu" and _gpu_count(devices) > 1:
+        strategy = "ddp_find_unused_parameters_true"
+        logging.info(
+            "Multi-GPU training requested (%d devices); defaulting strategy to "
+            "'ddp_find_unused_parameters_true'. Override with --strategy.",
+            _gpu_count(devices),
+        )
+    return devices, strategy
+
+
 def _resolve_unlabeled_dir(settings) -> Optional[Path]:
     """The unlabeled slice directory the Lightning trainer feeds into training.
 
@@ -587,6 +624,7 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
             output_path=model_out,
             model_struc_dict=model_struc_dict,
             label_codes={},
+            image_size=int(getattr(settings, "image_size", 0) or 0) or None,
         ),
         VolSegDiagnosticsCallback(
             output_path=model_out,
@@ -614,37 +652,8 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
             EarlyStopping(monitor="val_loss", patience=patience, mode="min")
         )
 
-    # Strategy + devices: respect explicit overrides, else 'auto'.
-    strategy = getattr(settings, "lightning_strategy", None) or "auto"
-    devices_arg = getattr(settings, "lightning_devices", None)
-    if devices_arg is None:
-        devices = "auto"
-    else:
-        try:
-            devices = int(devices_arg)
-        except (TypeError, ValueError):
-            devices = devices_arg
-
     accelerator = "gpu" if torch.cuda.is_available() else "cpu"
-
-    # Multi-GPU defaults to DDP under Lightning's "auto" strategy. The
-    # frozen-encoder phase plus the multi-head model surface means
-    # there are tracked params that don't always receive gradients on
-    # every step, which DDP rejects in its default strict mode. Switch
-    # the default to ``ddp_find_unused_parameters_true`` when DDP
-    # would be auto-selected. An explicit ``--strategy`` override
-    # still wins.
-    if (
-        strategy == "auto"
-        and accelerator == "gpu"
-        and torch.cuda.device_count() > 1
-    ):
-        strategy = "ddp_find_unused_parameters_true"
-        logging.info(
-            "Multi-GPU detected (%d devices); defaulting strategy to "
-            "'ddp_find_unused_parameters_true'. Override with --strategy.",
-            torch.cuda.device_count(),
-        )
+    devices, strategy = _resolve_lightning_devices(settings, accelerator)
 
     tb_logger = TensorBoardLogger(
         save_dir=str(root_path), name="lightning_logs",

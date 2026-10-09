@@ -955,9 +955,10 @@ def _load_state_dict_checked(module, state_dict, *, context=""):
 
 def create_model_from_file(
     weights_fn: Path, gpu: bool = True, device_num: int = 0, settings=None,
-) -> Tuple[torch.nn.Module, int, dict]:
-    """Creates and returns a model and the number of segmentation labels
-    that are predicted by the model.
+) -> Tuple[torch.nn.Module, int, dict, Optional[int]]:
+    """Creates and returns a model, the number of segmentation labels it
+    predicts, its label codes, and the ``image_size`` it was trained at
+    (``None`` for checkpoints written before that was recorded).
 
     Args:
         weights_fn: Path to model weights file
@@ -1033,7 +1034,12 @@ def create_model_from_file(
         # Use .to(device) to be explicit even if the underlying module is on CUDA.
         model = getattr(model, "module", model)
         model = model.to(torch.device("cpu"))
-    return model, model_dict["model_struc_dict"]["classes"], model_dict["label_codes"]
+    # The square the training slices were resized to (None for checkpoints
+    # written before it was recorded); the predictor resizes to it.
+    return (
+        model, model_dict["model_struc_dict"]["classes"], model_dict["label_codes"],
+        model_dict.get("image_size"),
+    )
 
 
 def create_model_from_file_full_weights(

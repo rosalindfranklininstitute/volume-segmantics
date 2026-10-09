@@ -148,6 +148,15 @@ def get_rampup_ratio(
             return (current_iter - rampup_start) / (rampup_end - rampup_start)
 
 
+def _present_classes_only(weights: torch.Tensor, class_counts: torch.Tensor) -> torch.Tensor:
+    """Zero the frequency weight of every class absent from the batch.
+    """
+    present = class_counts > 0
+    if not bool(present.any()):
+        return weights
+    return torch.where(present, weights, torch.zeros_like(weights))
+
+
 class ClassWeightedDiceLoss(nn.Module):
     """
     Dice loss with per-class weighting for multi-class segmentation.
@@ -245,6 +254,8 @@ class ClassWeightedDiceLoss(nn.Module):
             # uniform - ensure on correct device
             weights = torch.ones(self.num_classes, device=target.device, dtype=torch.float32)
         
+        if self.weight_mode in ("inverse_freq", "inverse_sqrt_freq"):
+            weights = _present_classes_only(weights, class_counts)
         # Normalize weights to sum to num_classes
         weight_sum = weights.sum()
 
@@ -428,9 +439,10 @@ class CombinedCEDiceLoss(nn.Module):
             # Binary segmentation: BCE expects (B, 1, H, W) or (B, H, W) predictions
             # and (B, 1, H, W) or (B, H, W) targets
             if pred.shape[1] == 2:
-                # Convert from 2-channel to single channel for BCE
-                # Use sigmoid on first channel (foreground probability)
-                pred_bce = pred[:, 0:1, :, :]  # (B, 1, H, W)
+                # The softmax's foreground logit, which the Dice term and argmax
+                # read. Channel 0 is the background logit; scoring it against a
+                # foreground target made the BCE and Dice terms pull apart.
+                pred_bce = pred[:, 1:2, :, :] - pred[:, 0:1, :, :]  # (B, 1, H, W)
             else:
                 pred_bce = pred  # Already single channel
             

@@ -14,6 +14,9 @@ from volume_segmantics.model.operations.vol_seg_2d_predictor import VolSeg2dImag
 
 import cv2
 
+#: The formats predict_volume_to_path can write (cfg.OUTPUT_FORMAT).
+_OUTPUT_FORMATS = ("tif", "hdf", "mrc")
+
 
 def _smooth_probs_along_axis(probs, sigma, spatial_axis=0, axis_name="Z"):
     """Apply Gaussian smoothing along a spatial axis to softmax probabilities.
@@ -132,8 +135,15 @@ class VolSeg2DPredictionManager(BaseDataManager):
         probs = None
         logits = None
         entropy = None
+        votes = None
 
         one_hot = self.settings.one_hot
+        # Validate the output format before any prediction runs.
+        if output_path is not None and cfg.OUTPUT_FORMAT not in _OUTPUT_FORMATS:
+            raise ValueError(
+                f"Unknown output format {cfg.OUTPUT_FORMAT!r} in config.py. "
+                f"Supported: {', '.join(_OUTPUT_FORMATS)}."
+            )
         output_probs = self.settings.output_probs
         output_entropy = self.settings.output_entropy
         z_smooth = getattr(self.settings, 'z_smooth', False)
@@ -167,11 +177,11 @@ class VolSeg2DPredictionManager(BaseDataManager):
                     self.data_vol, z_smooth_sigma=_smooth_sigma
                 )
             elif output_entropy and not output_probs:
-                prediction, _, entropy = self.predictor._prediction_estimate_entropy(
+                prediction, _, entropy, votes = self.predictor._prediction_estimate_entropy(
                     self.data_vol
                 )
             elif output_entropy and output_probs:
-                prediction, probs, entropy = self.predictor._prediction_estimate_entropy(
+                prediction, probs, entropy, votes = self.predictor._prediction_estimate_entropy(
                     self.data_vol
                 )
             else:
@@ -187,11 +197,11 @@ class VolSeg2DPredictionManager(BaseDataManager):
                     self.data_vol
                 )
             elif output_entropy and not output_probs:
-                prediction, _, entropy = self.predictor._prediction_estimate_entropy(
+                prediction, _, entropy, votes = self.predictor._prediction_estimate_entropy(
                     self.data_vol
                 )
             elif output_entropy and output_probs:
-                prediction, probs, entropy = self.predictor._prediction_estimate_entropy(
+                prediction, probs, entropy, votes = self.predictor._prediction_estimate_entropy(
                     self.data_vol
                 )
             else:
@@ -250,6 +260,16 @@ class VolSeg2DPredictionManager(BaseDataManager):
                     # Check a non-trivial slice for alignment
                     mid = prediction.shape[0] // 2
                     seg_slice = (prediction[mid] > 0).astype(int)
+                    # A Y/X transpose is only shape-compatible on a square slice.
+                    # On a non-square one the comparison below cannot broadcast,
+                    # and applying the transpose would hand back a volume whose
+                    # shape no longer matches the segmentation.
+                    if seg_slice.shape[0] != seg_slice.shape[1]:
+                        logging.info(
+                            f"[DIAG] {task_name}: mid-slice is {seg_slice.shape}, "
+                            f"not square -- skipping the Y/X alignment check."
+                        )
+                        continue
                     tsk_slice = (task_labels[mid] > 0).astype(int)
                     tsk_transposed = (task_labels[mid].T > 0).astype(int)
                     from scipy import ndimage

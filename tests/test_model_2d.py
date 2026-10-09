@@ -162,7 +162,7 @@ def test_create_model_on_device_encoders(binary_model_struc_dict, encoder_type):
 @pytest.mark.gpu
 def test_create_model_from_file(model_path):
     """Load model from volseg .pytorch checkpoint; check model, device, classes, codes."""
-    model, classes, codes = create_model_from_file(model_path)
+    model, classes, codes, _ = create_model_from_file(model_path)
     assert isinstance(model, torch.nn.Module)
     device = next(model.parameters()).device
     assert device.type == "cuda"
@@ -174,7 +174,7 @@ def test_create_model_from_file(model_path):
 @pytest.mark.gpu
 def test_create_model_from_file_returns_label_codes(model_path):
     """create_model_from_file returns (model, num_classes, label_codes)."""
-    model, classes, codes = create_model_from_file(model_path)
+    model, classes, codes, _ = create_model_from_file(model_path)
     assert classes == 4  # from model_path fixture
     assert codes == {}   # fixture saves empty label_codes
 
@@ -268,7 +268,7 @@ def test_create_model_from_file_cpu(tmp_path, model_struc_vanilla_unet):
         },
         path,
     )
-    loaded, classes, codes = create_model_from_file(path, gpu=False, device_num=0)
+    loaded, classes, codes, _ = create_model_from_file(path, gpu=False, device_num=0)
     assert isinstance(loaded, torch.nn.Module)
     assert next(loaded.parameters()).device.type == "cpu"
     assert classes == model_struc_vanilla_unet["classes"]

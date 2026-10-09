@@ -160,3 +160,18 @@ class TestVolseg2DPredictor:
         assert np.sum(counts_matrix[0]) == np.sum(labels_vol == label_sorted[0])
         assert np.sum(counts_matrix[1]) == np.sum(labels_vol == label_sorted[1])
         assert np.sum(counts_matrix[2]) == np.sum(labels_vol == label_sorted[2])
+
+
+@pytest.mark.gpu
+def test_a_real_model_predicts_the_same_volume_at_its_own_scale(volseg_2d_predictor, rand_int_volume):
+    """A checkpoint without a recorded size, and one whose size equals the
+    slice, take the same path; a larger recorded size changes the model's
+    view but not the output's shape."""
+    assert volseg_2d_predictor.training_image_size is None
+    reference, _, _ = volseg_2d_predictor._predict_single_axis(rand_int_volume, output_probs=False)
+    volseg_2d_predictor.training_image_size = max(rand_int_volume.shape[1:])
+    same, _, _ = volseg_2d_predictor._predict_single_axis(rand_int_volume, output_probs=False)
+    assert np.array_equal(reference, same)
+    volseg_2d_predictor.training_image_size = 2 * max(rand_int_volume.shape[1:])
+    labels, probs, logits = volseg_2d_predictor._predict_single_axis(rand_int_volume, output_probs=True)
+    assert labels.shape == rand_int_volume.shape and probs.shape[:3] == rand_int_volume.shape and logits.shape[:3] == rand_int_volume.shape

@@ -129,6 +129,32 @@ def compute_pipeline_targets(
 #  Augmentation builder 
 
 
+#: OpenCV border modes by name. Albumentations' ``border_mode`` takes OpenCV's
+#: integer constants and refuses a string, so pipeline.yaml's
+#: ``border_mode: reflect`` is translated here; an integer passes through.
+_CV2_BORDER_MODES: Dict[str, int] = {
+    "constant": cv2.BORDER_CONSTANT,
+    "replicate": cv2.BORDER_REPLICATE,
+    "reflect": cv2.BORDER_REFLECT,
+    "wrap": cv2.BORDER_WRAP,
+    "reflect_101": cv2.BORDER_REFLECT_101,
+}
+
+
+def _albumentations_params(spec: TransformSpec) -> Dict[str, Any]:
+    """``spec.params`` with a named ``border_mode`` resolved to its OpenCV constant."""
+    params = dict(spec.params)
+    mode = params.get("border_mode")
+    if isinstance(mode, str):
+        if mode.lower() not in _CV2_BORDER_MODES:
+            raise ValueError(
+                f"{spec.name}: unknown border_mode {mode!r}; use one of "
+                f"{sorted(_CV2_BORDER_MODES)} or an OpenCV integer constant."
+            )
+        params["border_mode"] = _CV2_BORDER_MODES[mode.lower()]
+    return params
+
+
 def _spec_to_albumentations(spec: TransformSpec) -> A.BasicTransform:
     """Resolve a :class:`TransformSpec` to a concrete Albumentations object.
 
@@ -143,8 +169,9 @@ def _spec_to_albumentations(spec: TransformSpec) -> A.BasicTransform:
             f"Unknown Albumentations transform: {spec.name!r}. Names are "
             f"resolved against the `albumentations` namespace."
         )
+    params = _albumentations_params(spec)
     try:
-        return cls(**spec.params)
+        return cls(**params)
     except TypeError as exc:
         raise ValueError(
             f"Failed to construct {spec.name}({spec.params}): {exc}"

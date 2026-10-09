@@ -73,6 +73,8 @@ class EarlyStopping:
         # Add glob_it if provided (for semi-supervised learning)
         if glob_it is not None:
             model_dict["glob_it"] = glob_it
+        if getattr(self, "image_size", None):
+            model_dict["image_size"] = int(self.image_size)  # the training scale, for the predictor
         
         atomic_torch_save(model_dict, self.path)
         self.val_loss_min = val_loss

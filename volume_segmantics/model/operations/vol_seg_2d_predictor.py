@@ -17,6 +17,7 @@ from tqdm import tqdm
 
 from monai.inferers import sliding_window_inference
 from volume_segmantics.data.dataloaders import get_2d_prediction_dataloader, get_2d_image_dir_prediction_dataloader
+from volume_segmantics.data.augmentations import get_padded_dimension
 from volume_segmantics.model.model_2d import create_model_from_file, MultitaskSegmentationModel
 from volume_segmantics.utilities.base_data_utils import Axis
 from volume_segmantics.data import get_settings_data
@@ -44,7 +45,10 @@ class VolSeg2dPredictor:
         model_tuple = create_model_from_file(
             self.model_file_path, device_num=self.model_device_num, settings=settings
         )
-        self.model, self.num_labels, self.label_codes = model_tuple
+        self.model, self.num_labels, self.label_codes, self.training_image_size = model_tuple
+        # native_scale: predict a crop-trained model at the volume's own size
+        # instead of resizing every slice to the recorded training size.
+        self.native_scale = bool(getattr(settings, "native_scale", False))
 
         self.use_2_5d_prediction = getattr(settings, 'use_2_5d_prediction', False)
 
@@ -183,6 +187,38 @@ class VolSeg2dPredictor:
 
         return cropped
 
+    def _to_training_scale(self, slice_tensor, yx_dims):
+        """Resize a batch so its longest side is the training ``image_size``
+        (what ``LongestMaxSize`` did to every training slice) and pad to the
+        network's divisor. Returns the batch and the frame to undo it with, or
+        ``None`` when the checkpoint recorded no size, the scale is 1, or
+        ``native_scale`` is set."""
+        if self.training_image_size is None or getattr(self, "native_scale", False):
+            return slice_tensor, None
+        scale = self.training_image_size / max(yx_dims)
+        if abs(scale - 1.0) < 1e-6:
+            return slice_tensor, None
+        h, w = slice_tensor.shape[-2:]
+        hs, ws = int(round(h * scale)), int(round(w * scale))
+        scaled = nn.functional.interpolate(slice_tensor, size=(hs, ws), mode="bilinear", align_corners=False)
+        pad_h, pad_w = get_padded_dimension(hs) - hs, get_padded_dimension(ws) - ws
+        return nn.functional.pad(scaled, (0, pad_w, 0, pad_h), mode="reflect"), (h, w, hs, ws)
+
+    def _at_native_scale(self, output, additional_outputs, frame):
+        """Every head's logits back at the native slice size."""
+        return (
+            self._from_training_scale(output, frame),
+            {name: self._from_training_scale(out, frame) for name, out in additional_outputs.items()},
+        )
+
+    @staticmethod
+    def _from_training_scale(tensor, frame):
+        """Undo :meth:`_to_training_scale` on an output: drop the padding, resize to the native size."""
+        if frame is None:
+            return tensor
+        h, w, hs, ws = frame
+        return nn.functional.interpolate(tensor[..., :hs, :ws], size=(h, w), mode="bilinear", align_corners=False)
+
     def _predict_slice_sliding_window(self, slice_tensor, yx_dims):
         """
         Predict a single slice using sliding window inference.
@@ -195,6 +231,7 @@ class VolSeg2dPredictor:
             labels, probs, logits for this slice (primary segmentation)
             If multi-task model, also returns additional_task_outputs dict
         """
+        slice_tensor, frame = self._to_training_scale(slice_tensor, yx_dims)
         B, C, H, W = slice_tensor.shape
         is_multitask = self._is_multitask_model()
         additional_outputs = {}
@@ -227,6 +264,7 @@ class VolSeg2dPredictor:
         else:
             model_output = self.model(slice_tensor)
             output, additional_outputs = self._get_model_outputs(model_output)
+        output, additional_outputs = self._at_native_scale(output, additional_outputs, frame)
 
         # Process primary segmentation output
         s_max = nn.Softmax(dim=1)
@@ -833,7 +871,7 @@ class VolSeg2dImageDirPredictor:
         model_tuple = create_model_from_file(
             self.model_file_path, device_num=self.model_device_num, settings=settings
         )
-        self.model, self.num_labels, self.label_codes = model_tuple
+        self.model, self.num_labels, self.label_codes, _ = model_tuple
 
         self._last_additional_tasks = None
 

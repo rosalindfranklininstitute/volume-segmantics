@@ -120,5 +120,5 @@ def test_create_model_from_file_full_weights_refuses_a_mislabelled_checkpoint(tm
 
 def test_create_model_from_file_still_loads_a_consistent_cnn_checkpoint(tmp_path):
     path = _write(tmp_path, _struct("resnet18"), _resnet().state_dict())
-    model, classes, codes = create_model_from_file(path, gpu=False)
+    model, classes, codes, _ = create_model_from_file(path, gpu=False)
     assert type(model.encoder).__name__ == "ResNetEncoder" and classes == 2

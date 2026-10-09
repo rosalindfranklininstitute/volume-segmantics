@@ -887,7 +887,10 @@ class EpochHistoryCallback(pl.Callback if pl is not None else object):
     pick it up after ``trainer.fit`` returns.
     """
 
-    def on_validation_epoch_end(self, trainer, pl_module) -> None:
+    def on_train_epoch_end(self, trainer, pl_module) -> None:
+        # on_train_epoch_end, after validation has run inside the epoch: the
+        # epoch's train_loss is aggregated by then and val_seg_dice is this
+        # epoch's. 
         if trainer.global_rank != 0:
             return
         if getattr(trainer, "sanity_checking", False):
@@ -928,7 +931,10 @@ class LegacyEpochSummaryCallback(pl.Callback if pl is not None else object):
     def on_train_epoch_start(self, trainer, pl_module) -> None:
         self._tic = time.perf_counter()
 
-    def on_validation_epoch_end(self, trainer, pl_module) -> None:
+    def on_validation_end(self, trainer, pl_module) -> None:
+        # on_validation_end, not on_validation_epoch_end: Lightning runs the
+        # callbacks' epoch-end hook *before* the module's, so at that point
+        # val_seg_dice is still the previous epoch's (and absent on epoch 0).
         if trainer.global_rank != 0:
             return
         if getattr(trainer, "sanity_checking", False):
@@ -1043,10 +1049,14 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
         *,
         label_codes: Optional[Mapping[int, str]] = None,
         head_metadata: Optional[Mapping[str, Any]] = None,
+        image_size: Optional[int] = None,
     ) -> None:
         self.output_path = Path(output_path)
         self.model_struc_dict = dict(model_struc_dict)
         self.label_codes = dict(label_codes or {})
+        # The square the training slices were resized to; prediction resizes
+        # its slices to the same scale. 
+        self.image_size = int(image_size) if image_size else None
         self.head_metadata = (
             dict(head_metadata) if head_metadata is not None else None
         )
@@ -1101,6 +1111,8 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
         }
         if self.head_metadata is not None:
             model_dict["head_metadata"] = self.head_metadata
+        if self.image_size is not None:
+            model_dict["image_size"] = self.image_size
 
         # Route through the Rich progress console so the message
         # doesn't get clobbered by the next-epoch progress redraw.
@@ -1301,7 +1313,9 @@ class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
             for src_key, value in row.items():
                 if src_key == "epoch":
                     continue
-                dst_key = renames.get(src_key, src_key)
+                # val_dice_class_<c> -> dice_class_<c>: the per-class columns
+                # the CSV writer reads
+                dst_key = renames.get(src_key, src_key.replace("val_dice_class_", "dice_class_"))
                 out.setdefault(dst_key, []).append(float(value))
 
         # Pad shorter columns with zeros so the visualizer's parallel-

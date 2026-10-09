@@ -136,8 +136,9 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help=(
-            "Lightning strategy override (e.g. 'ddp', 'auto'). Default "
-            "depends on the device count auto-detected by Lightning."
+            "Lightning strategy override (e.g. 'ddp', 'auto'). Default is "
+            "'auto', which becomes permissive DDP when --devices asks for "
+            "more than one GPU."
         ),
     )
     parser.add_argument(
@@ -146,8 +147,8 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Lightning devices override (e.g. 'auto', '1', '2'). Default "
-            "is 'auto'. Replaces the legacy USE_ALL_GPUS flag in "
-            "config.py."
+            "is the single GPU named by cuda_device in the settings file; "
+            "pass 'auto' to train on every visible GPU."
         ),
     )
     parser.add_argument(

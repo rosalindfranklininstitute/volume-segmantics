@@ -1,9 +1,10 @@
 # Settings for prediction of a 3d volume using a 2d model
 quality: medium # One of [low, medium, high]. low = Single axis, medium = 3 axis, high = 12 ways, z_only = Single (z) axis with 4 rotations
 output_probs: False # If set to True a separate volume of probabilty values for the predictions will be saved alongside the labels. 
-output_entropy: False # If set to True a separate volume of entropy values for the predictions will be saved alongside the labels. Only works with z_only.
+output_entropy: False # If set to True, separate volumes of entropy and voting-count values will be saved alongside the labels. Requires quality medium, high or z_only.
 cuda_device: 0 # Change this if you would like to run the prediction on a different GPU
 downsample: False # If True, data will be downsampled by 2 and segmentation will be upsampled by 2
+native_scale: False # If True, predict at the volume's own slice size instead of resizing each slice to the image_size the model was trained at (for a model trained on crops of a larger volume)
 one_hot: False # Output one-hot encoded data
 prediction_axis: Z # One of [Z, Y, X]. Specify axis along which to predict if doing single-axis prediction.
 output_size: 512 # Only for predict imagedir 

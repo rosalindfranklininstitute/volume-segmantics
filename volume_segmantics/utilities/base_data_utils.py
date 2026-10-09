@@ -121,9 +121,9 @@ def get_batch_size(settings: SimpleNamespace, prediction: bool = False) -> int:
         return cfg.SMALL_CUDA_BATCH
 
     cuda_device_num = settings.cuda_device
-    total_gpu_mem = torch.cuda.get_device_properties(cuda_device_num).total_memory
-    allocated_gpu_mem = torch.cuda.memory_allocated(cuda_device_num)
-    free_gpu_mem = (total_gpu_mem - allocated_gpu_mem) / 1024**3
+    # What the driver has free, not total minus this process's own allocation:
+    # on a shared card another job's memory is just as unavailable.
+    free_gpu_mem = torch.cuda.mem_get_info(cuda_device_num)[0] / 1024**3
 
     if free_gpu_mem < cfg.BIG_CUDA_THRESHOLD:
         batch_size = cfg.SMALL_CUDA_BATCH

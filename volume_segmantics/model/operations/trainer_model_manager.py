@@ -575,13 +575,16 @@ class ModelManager:
         Returns:
             EarlyStopping instance
         """
-        return EarlyStopping(
+        stopper = EarlyStopping(
             patience=patience,
             verbose=True,
             path=output_path,
             model_dict=model_struc_dict,
             best_score=best_score,
         )
+        # The training scale, recorded in the checkpoint for the predictor.
+        stopper.image_size = int(getattr(self.settings, "image_size", 0) or 0) or None
+        return stopper
     
     def load_model_weights(
         self,
