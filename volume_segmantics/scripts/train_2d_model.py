@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+import time
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -253,7 +254,22 @@ def main():
         if label_vols is None:
             logging.error("Labels are required for training. Use --labels to provide label volumes.")
             sys.exit(1)
-        slicer, max_label_no = run_slicer(data_vols, label_vols, data_im_out_dir, seg_im_out_dir, settings, task2_vols, task3_vols, task2_im_out_dir, task3_im_out_dir)
+        # Under multi-GPU DDP, Lightning's launcher re-runs this script for
+        # every non-zero rank. Only rank 0 slices; the other ranks wait for
+        # it to finish (a sentinel file in the run directory) and then derive
+        # max_label_no from the slices on disk, as ``--mode trainer`` does.
+        if _is_ddp_relaunched_worker():
+            _wait_for_slicing_complete(root_path)
+            max_label_no = _calculate_max_label_no_from_slices(seg_im_out_dir)
+            logging.info(
+                "DDP worker (LOCAL_RANK=%d) using max_label_no=%d from "
+                "rank-0 slices; skipping re-slice.", _local_rank(), max_label_no,
+            )
+            slicer = None
+        else:
+            _clear_slicing_sentinel(root_path)  # drop any stale sentinel
+            slicer, max_label_no = run_slicer(data_vols, label_vols, data_im_out_dir, seg_im_out_dir, settings, task2_vols, task3_vols, task2_im_out_dir, task3_im_out_dir)
+            _mark_slicing_complete(root_path)  # release any waiting workers
         run_trainer(data_im_out_dir, seg_im_out_dir, max_label_no, settings, root_path)
         # Clean up all the saved slices. Under DDP each rank runs
         # this script independently — if a non-zero rank reaches the
@@ -263,10 +279,78 @@ def main():
         # would crash trying to load already-deleted files. So:
         # only rank 0 deletes, and we synchronise with a barrier
         # first so rank 0's callback has definitely finished.
-        _rank0_cleanup_slices(slicer)
+        _rank0_cleanup_slices(slicer, root_path)
 
 
-def _rank0_cleanup_slices(slicer) -> None:
+_SLICING_SENTINEL_NAME = ".volseg_slicing_complete"
+
+
+def _local_rank() -> int:
+    """This process's node-local rank.
+
+    Under Lightning's DDP subprocess launcher, worker processes are spawned
+    with ``LOCAL_RANK`` set in the environment from the very start of the
+    re-run script; the original (rank 0) process has it unset until later.
+    """
+    try:
+        return int(os.environ.get("LOCAL_RANK", "0") or "0")
+    except ValueError:
+        return 0
+
+
+def _is_ddp_relaunched_worker() -> bool:
+    """True if this is a non-zero DDP rank re-running the training script."""
+    return _local_rank() != 0
+
+
+def _slicing_sentinel_path(root_path) -> Path:
+    return Path(root_path) / _SLICING_SENTINEL_NAME
+
+
+def _mark_slicing_complete(root_path) -> None:
+    """Rank 0: signal that slices are fully written and safe to read."""
+    try:
+        _slicing_sentinel_path(root_path).write_text("done")
+    except OSError as exc:  # noqa: BLE001
+        logging.warning("Could not write slicing sentinel: %s", exc)
+
+
+def _clear_slicing_sentinel(root_path) -> None:
+    """Remove the slicing sentinel (stale from a previous run, or on cleanup)."""
+    try:
+        _slicing_sentinel_path(root_path).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:  # noqa: BLE001
+        logging.warning("Could not remove slicing sentinel: %s", exc)
+
+
+def _wait_for_slicing_complete(
+    root_path, timeout_s: float = 3600.0, poll_s: float = 2.0
+) -> None:
+    """Worker ranks: block until rank 0 has finished slicing.
+
+    Rank 0 slices before it reaches ``trainer.fit()`` (which is what spawns
+    the workers), so in practice the sentinel usually already exists and this
+    returns immediately; the bounded poll only guards against filesystem lag.
+    Raises ``TimeoutError`` if rank 0 never signals (e.g. it crashed while
+    slicing) so the worker fails loudly instead of hanging forever.
+    """
+    sentinel = _slicing_sentinel_path(root_path)
+    waited = 0.0
+    while not sentinel.exists():
+        if waited >= timeout_s:
+            raise TimeoutError(
+                f"DDP worker (LOCAL_RANK={_local_rank()}) timed out after "
+                f"{timeout_s:.0f}s waiting for rank 0 to finish slicing "
+                f"(sentinel {sentinel} not found). Rank 0 may have crashed "
+                f"during slicing."
+            )
+        time.sleep(poll_s)
+        waited += poll_s
+
+
+def _rank0_cleanup_slices(slicer, root_path=None) -> None:
     """Delete the per-run slice PNGs exactly once, on rank 0 only.
 
     DDP-safe: barriers in so rank 0's :class:`VolSegDiagnosticsCallback`
@@ -277,7 +361,7 @@ def _rank0_cleanup_slices(slicer) -> None:
         import torch.distributed as dist
     except ImportError:
         dist = None  # type: ignore[assignment]
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    local_rank = _local_rank()
     is_distributed = bool(
         dist is not None and dist.is_available() and dist.is_initialized()
     )
@@ -291,7 +375,12 @@ def _rank0_cleanup_slices(slicer) -> None:
             )
     if local_rank != 0:
         return
-    slicer.clean_up_slices()
+    # Worker ranks skip slicing, so they never hold a slicer; only rank 0
+    # owns one and is responsible for cleaning the slices + the sentinel.
+    if root_path is not None:
+        _clear_slicing_sentinel(root_path)
+    if slicer is not None:
+        slicer.clean_up_slices()
 
 def run_unlabeled_slicer(data_vols, unlabeled_output_dir: Path, settings):
     """

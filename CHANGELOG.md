@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 * `model-predict-pipeline` console script exposing the pipeline prediction CLI (`volume_segmantics.scripts.predict_pipeline`) with Zarr output and instance assembly.
 * DINOv2 encoders with registers (`dinov2_vits14_reg`, `dinov2_vitb14_reg`, `dinov2_vitl14_reg`, `dinov2_vitg14_reg`).
+* Multi-GPU slicing guard: under DDP only rank 0 slices the training volumes; re-launched worker ranks wait for its sentinel in the run directory, derive the class count from the slices on disk, and never re-slice or delete them.
 * MONAI as the pipeline augmentation backend: `augmentations.backend: monai` in `pipeline.yaml` (or `auto` with `augmentation_library: monai` in the train settings) translates the configured transforms to MONAI dictionary transforms applied consistently across the image and every head target, accepts MONAI-only transforms by name, and seeds MONAI's shared random state per process. Falls back to Albumentations when MONAI is absent. Applies to the labeled and the unlabeled pipeline datasets.
 
 ### Changed

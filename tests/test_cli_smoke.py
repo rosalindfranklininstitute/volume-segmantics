@@ -113,3 +113,26 @@ def test_cli_train_then_predict_smoke(cli_data_dir):
     # Prediction output is "{date}_{stem}_2d_model_vol_pred.{ext}".
     outputs = list(data_dir.glob("*vol_pred*"))
     assert outputs, f"no prediction output written; dir contents: {[p.name for p in data_dir.iterdir()]}"
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_a_relaunched_ddp_worker_trains_without_reslicing(cli_data_dir):
+    """Rank 0 slices and plants the sentinel before ``trainer.fit`` spawns the
+    workers; a worker (``LOCAL_RANK`` != 0) must train on those slices, never
+    re-slice, and leave the slices and the sentinel for rank 0 to clean up."""
+    data_dir, img, lbl = cli_data_dir
+    common = ["--data", str(img), "--labels", str(lbl), "--data_dir", str(data_dir)]
+    res = _run("volume_segmantics.scripts.train_2d_model", [*common, "--mode", "slicer"], cwd=data_dir)
+    assert res.returncode == 0, f"slicer failed:\nSTDOUT{res.stdout[-2000:]}\nSTDERR{res.stderr[-2000:]}"
+    before = {p.name: p.stat().st_mtime_ns for p in (data_dir / "data").iterdir()}
+    assert before, "slicer mode wrote no slices"
+    sentinel = data_dir / ".volseg_slicing_complete"
+    sentinel.write_text("done")
+
+    res = _run("volume_segmantics.scripts.train_2d_model", common, cwd=data_dir, extra_env={"LOCAL_RANK": "1"})
+    assert res.returncode == 0, f"worker train failed:\nSTDOUT{res.stdout[-2000:]}\nSTDERR{res.stderr[-2000:]}"
+    assert "skipping re-slice" in res.stdout + res.stderr
+    assert list(data_dir.glob("*.pytorch")), "the worker did not train"
+    assert sentinel.exists(), "only rank 0 may clear the sentinel"
+    assert {p.name: p.stat().st_mtime_ns for p in (data_dir / "data").iterdir()} == before, "the worker touched the slices"
