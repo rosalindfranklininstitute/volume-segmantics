@@ -720,6 +720,7 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
             model_struc_dict=model_struc_dict,
             label_codes={},
             image_size=int(getattr(settings, "image_size", 0) or 0) or None,
+            input_stack=cfg.input_stack_from_settings(settings),
         ),
         VolSegDiagnosticsCallback(
             output_path=model_out,

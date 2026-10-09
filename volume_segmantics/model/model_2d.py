@@ -785,6 +785,10 @@ def _adapt_first_conv_for_channels(model: torch.nn.Module, old_channels: int, ne
                 # Multiple channels: average existing channels and repeat
                 mean_weight = current_weight.mean(dim=1, keepdim=True)  # Average across input channels
                 new_weight = mean_weight.repeat(1, new_channels, 1, 1)
+        elif new_channels == 1:
+            # Folding to grayscale: an input replicated across the old channels
+            # sees sum_c(w_c * x) = (sum_c w_c) * x, so the sum is exact.
+            new_weight = current_weight.sum(dim=1, keepdim=True)
         else:
             # Decrease channels: take first N channels
             new_weight = current_weight[:, :new_channels, :, :]
@@ -953,6 +957,78 @@ def _load_state_dict_checked(module, state_dict, *, context=""):
     return incompatible
 
 
+def check_input_stack(
+    *, use_2_5d: bool, num_slices: int,
+    model_in_channels: Optional[int] = None, model_stack: Optional[dict] = None,
+) -> Optional[str]:
+    """Why the predict settings' 2.5D stack cannot be fed to the model, or ``None``.
+
+    ``use_2_5d_slicing`` / ``num_slices`` at training and ``use_2_5d_prediction``
+    / ``num_slices`` at prediction are two settings that must be changed
+    together. A checkpoint that recorded its ``input_stack`` is compared
+    exactly; an older one is compared on its first conv's channel count.
+    """
+    if use_2_5d and (num_slices < 3 or num_slices % 2 == 0):
+        return (
+            f"2.5D needs an odd num_slices of at least 3 (a centre slice with equal "
+            f"context on each side); got num_slices={num_slices}."
+        )
+    if model_stack is not None:
+        trained_2_5d = bool(model_stack.get("use_2_5d", False))
+        trained_slices = int(model_stack.get("num_slices", 1))
+        if trained_2_5d == use_2_5d and (not use_2_5d or trained_slices == num_slices):
+            return None
+        return (
+            f"the checkpoint was trained with use_2_5d_slicing={trained_2_5d}, "
+            f"num_slices={trained_slices} but the predict settings say "
+            f"use_2_5d_prediction={use_2_5d}, num_slices={num_slices}. Set them to "
+            f"match the training run."
+        )
+    expected = num_slices if use_2_5d else 1
+    if model_in_channels is None or model_in_channels == expected:
+        return None
+    return (
+        f"the checkpoint's first conv takes {model_in_channels} input channels but "
+        f"the predict settings describe {expected} (use_2_5d_prediction={use_2_5d}, "
+        f"num_slices={num_slices}). Set them to match the training run."
+    )
+
+
+def _check_input_stack(model_dict: dict, settings) -> bool:
+    """Refuse a 2.5D stack the checkpoint was not trained on.
+
+    Returns True in the one case that is folded rather than refused: a
+    checkpoint with no ``input_stack`` record and three input channels asked
+    to predict 2D. Such checkpoints predate the record and were trained on
+    grayscale replicated to three channels, so summing the first conv over
+    its input channels is exact.
+    """
+    if settings is None:
+        return False
+    saved = int(model_dict["model_struc_dict"].get("in_channels", 1))
+    use_2_5d = bool(
+        getattr(settings, "use_2_5d_prediction", False)
+        or getattr(settings, "use_2_5d_slicing", False)
+    )
+    num_slices = int(getattr(settings, "num_slices", 3) or 3)
+    requested = num_slices if use_2_5d else 1
+    stack = model_dict.get("input_stack")
+    if stack is None and saved == 3 and requested == 1:
+        logging.warning(
+            "Checkpoint predates the input_stack record and has 3 input channels; "
+            "treating them as replicated grayscale and folding the first conv to 1 "
+            "channel for 2D prediction."
+        )
+        return True
+    problem = check_input_stack(
+        use_2_5d=use_2_5d, num_slices=num_slices,
+        model_in_channels=saved, model_stack=stack,
+    )
+    if problem is not None:
+        raise ValueError(f"2.5D input stack: {problem}")
+    return False
+
+
 def create_model_from_file(
     weights_fn: Path, gpu: bool = True, device_num: int = 0, settings=None,
 ) -> Tuple[torch.nn.Module, int, dict, Optional[int]]:
@@ -964,7 +1040,8 @@ def create_model_from_file(
         weights_fn: Path to model weights file
         gpu: Whether to use GPU
         device_num: GPU device number
-        settings: Optional settings object to override input channels for prediction
+        settings: The predict settings; their 2.5D stack is checked against the
+            checkpoint's (see ``_check_input_stack``) rather than adapted to.
     """
     if gpu and torch.cuda.is_available():
         map_location = f"cuda:{device_num}"
@@ -980,11 +1057,9 @@ def create_model_from_file(
 
     model_dict = raw_dict
 
-    saved_in_channels = model_dict["model_struc_dict"].get("in_channels", 1)
-
-    requested_in_channels = saved_in_channels
-    if settings is not None:
-        requested_in_channels = cfg.get_model_input_channels(settings)
+    # Refuse a 2.5D stack the checkpoint was not trained on, or fold a legacy
+    # three-channel checkpoint to grayscale, before anything is built.
+    fold_legacy_rgb = _check_input_stack(model_dict, settings)
 
     # Create model with saved channels first so we can load the saved weights
     # Always create the model on the correct target device up-front.
@@ -1018,16 +1093,9 @@ def create_model_from_file(
             state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
         _load_state_dict_checked(model, state_dict, context=str(weights_fn))
 
-    # Adapt first conv layer if input channels changed
-    if requested_in_channels != saved_in_channels:
-        logging.info(
-            f"Adapting model input channels from {saved_in_channels} to {requested_in_channels} "
-            f"based on prediction settings (2.5D mode: {getattr(settings, 'use_2_5d_prediction', False)})"
-        )
-        _adapt_first_conv_for_channels(model, saved_in_channels, requested_in_channels)
-
-        # Update in_channels in model structure dict for future reference
-        model_dict["model_struc_dict"]["in_channels"] = requested_in_channels
+    if fold_legacy_rgb:
+        _adapt_first_conv_for_channels(model, 3, 1)
+        model_dict["model_struc_dict"]["in_channels"] = 1
 
     if not gpu:
         # Unwrap DataParallel if present, then ensure model is on CPU.

@@ -581,6 +581,7 @@ class ModelManager:
             path=output_path,
             model_dict=model_struc_dict,
             best_score=best_score,
+            input_stack=cfg.input_stack_from_settings(self.settings),
         )
         # The training scale, recorded in the checkpoint for the predictor.
         stopper.image_size = int(getattr(self.settings, "image_size", 0) or 0) or None

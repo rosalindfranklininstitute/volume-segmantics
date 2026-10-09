@@ -9,7 +9,7 @@ from volume_segmantics.utilities.atomic_io import atomic_torch_save
 class EarlyStopping:
     """Early stops the training if validation loss doesn't improve after a given patience."""
 
-    def __init__(self, patience=7, verbose=False, delta=0, path='checkpoint.pt', model_dict={}, best_score=None):
+    def __init__(self, patience=7, verbose=False, delta=0, path='checkpoint.pt', model_dict={}, best_score=None, input_stack=None):
         """
         Args:
             patience (int): How long to wait after last time validation loss improved.
@@ -30,6 +30,8 @@ class EarlyStopping:
         self.delta = delta
         self.path = path
         self.model_struc_dict = model_dict # Dictionary with parameters controlling architecture
+        # The 2.5D stack trained on, a sibling key of model_struc_dict.
+        self.input_stack = input_stack
 
     def __call__(self, val_loss, model, optimizer, label_codes, glob_it=None):
 
@@ -75,6 +77,8 @@ class EarlyStopping:
             model_dict["glob_it"] = glob_it
         if getattr(self, "image_size", None):
             model_dict["image_size"] = int(self.image_size)  # the training scale, for the predictor
+        if getattr(self, "input_stack", None) is not None:
+            model_dict["input_stack"] = dict(self.input_stack)
         
         atomic_torch_save(model_dict, self.path)
         self.val_loss_min = val_loss

@@ -72,6 +72,16 @@ def get_model_input_channels(settings=None):
         return getattr(settings, 'num_slices', 3)  # 2.5D: multiple channels
     return 1  # 2D: single channel (do not use MODEL_INPUT_CHANNELS here)
 
+
+def input_stack_from_settings(settings=None) -> dict:
+    """The 2.5D stack a training run feeds the model: ``use_2_5d`` (from
+    ``use_2_5d_slicing``) and ``num_slices``. Recorded in the checkpoint so
+    prediction can be checked against it exactly."""
+    return {
+        "use_2_5d": bool(getattr(settings, "use_2_5d_slicing", False)) if settings else False,
+        "num_slices": int(getattr(settings, "num_slices", 3) or 3) if settings else 3,
+    }
+
 def get_imagenet_normalization(settings=None):
     if settings and getattr(settings, 'use_2_5d_slicing', False):
         num_channels = getattr(settings, 'num_slices', 3)

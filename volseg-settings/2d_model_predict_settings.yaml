@@ -20,8 +20,8 @@ use_imagenet_norm: True # If True, applies ImageNet mean/std normalisation to in
 augmentation_library: albumentations # Choose augmentation library: "albumentations" or "monai"
 
 # 2.5D prediction settings
-use_2_5d_prediction: False # If True, uses 2.5D prediction with configurable number of slices
-num_slices: 3 # Number of slices to use (must match training configuration)
+use_2_5d_prediction: False # If True, uses 2.5D prediction. Must match the training run's use_2_5d_slicing: the checkpoint records its stack and a mismatch is refused.
+num_slices: 3 # Number of slices to use. Must match the training run's num_slices (recorded in the checkpoint and checked at prediction)
 prediction_padding_factor: 1.0 # Multiplier for padding amount (1.0 = num_slices//2, 2.0 = num_slices, etc.)
 
 # Sliding window inference 

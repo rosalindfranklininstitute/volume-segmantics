@@ -1105,6 +1105,7 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
         label_codes: Optional[Mapping[int, str]] = None,
         head_metadata: Optional[Mapping[str, Any]] = None,
         image_size: Optional[int] = None,
+        input_stack: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.output_path = Path(output_path)
         self.model_struc_dict = dict(model_struc_dict)
@@ -1112,6 +1113,9 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
         # The square the training slices were resized to; prediction resizes
         # its slices to the same scale.
         self.image_size = int(image_size) if image_size else None
+        # The 2.5D stack trained on, written as a sibling of model_struc_dict
+        # so prediction can check its settings against it exactly.
+        self.input_stack = dict(input_stack) if input_stack is not None else None
         self.head_metadata = (
             dict(head_metadata) if head_metadata is not None else None
         )
@@ -1177,6 +1181,8 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
             model_dict["head_metadata"] = self.head_metadata
         if self.image_size is not None:
             model_dict["image_size"] = self.image_size
+        if self.input_stack is not None:
+            model_dict["input_stack"] = self.input_stack
 
         path = Path(path)
         # Route through the Rich progress console so the message
