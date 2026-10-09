@@ -154,7 +154,7 @@ A seperate copy of these settings has also been copeid to your indiviual user sp
 
 As the training is running, you will observe the data being sliced, a training epoch being run, and then a set of 8 frozen and 5 unfrozen training epochs working. When the training has completed, the model will be saved to the volume-segmantics folder you are currently located in; this will contain 4 files, of which you should cut and paste into a suitably named (no spaces) directory in an easily accessible place. 
 
-> **1** *.pytorch file*; the segmentation model created by the train command,
+> **1** *.pytorch file*; the segmentation model created by the train command (the epoch with the best validation foreground Dice; the final epoch's weights are also kept beside it in a *_final.pth* file),
 > **2** *model_loss-Plot.png*; a graph showing the training and validation loss over the course of the training epochs (a graphical representation of the model's success),
 > **3** *model_prediction_image.png*; showing specific slices of the image and labels used within the model, and the resultant prediction test outcomes for that slice (a visual representation model's success),
 > and **4** *stats.csv*; a record of the training loss, validation loss and evaluation score; accuracy of the test prediction generated versus the original label per epoch.

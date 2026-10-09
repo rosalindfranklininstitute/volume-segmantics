@@ -34,10 +34,13 @@ from volume_segmantics.data.pipeline_loader import (
 )
 from volume_segmantics.model.heads import build_head_modules
 from volume_segmantics.model.operations.lightning2d import (
+    CHECKPOINT_MONITOR,
     EpochHistoryCallback,
     UnfreezeEncoderCallback,
     VolSeg2dLightningModule,
     VolSegCheckpointCallback,
+    _SemanticDiceAccumulator,
+    final_checkpoint_path,
 )
 from volume_segmantics.model.pipeline_multitask_unet import PipelineMultitaskUnet
 from volume_segmantics.model.training.multitask_calculator import (
@@ -278,82 +281,89 @@ def _make_checkpoint_callback(tmp_path: Path) -> VolSegCheckpointCallback:
     )
 
 
-def test_checkpoint_skips_save_during_sanity_check(
-    lightning_module, tmp_path,
-):
-    """**v0.5 Bug 2 fix #1**: sanity-check phase must not lock in a
-    random-init checkpoint as 'best'."""
-    cb = _make_checkpoint_callback(tmp_path)
+def _trainer(score=None, *, val_loss=0.5, sanity=False, epoch=0):
     trainer = MagicMock()
-    trainer.sanity_checking = True
+    trainer.sanity_checking = sanity
     trainer.global_rank = 0
-    trainer.callback_metrics = {"val_loss": torch.tensor(0.5)}
-    cb.on_validation_epoch_end(trainer, lightning_module)
-    assert cb.best_val_loss == float("inf")
+    trainer.current_epoch = epoch
+    trainer.callback_metrics = {"val_loss": torch.tensor(val_loss)}
+    if score is not None:
+        trainer.callback_metrics[CHECKPOINT_MONITOR] = torch.tensor(score)
+    return trainer
+
+
+def test_checkpoint_skips_save_during_sanity_check(lightning_module, tmp_path):
+    """Sanity-check phase must not lock in a random-init checkpoint as 'best'."""
+    cb = _make_checkpoint_callback(tmp_path)
+    cb.on_validation_end(_trainer(0.5, sanity=True), lightning_module)
+    assert cb.best_epoch is None
     assert not (tmp_path / "ckpt.pytorch").exists()
 
 
-def test_checkpoint_saves_when_val_loss_improves(
-    lightning_module, tmp_path,
-):
+def test_checkpoint_saves_when_the_monitored_dice_improves(lightning_module, tmp_path):
     cb = _make_checkpoint_callback(tmp_path)
-    trainer = MagicMock()
-    trainer.sanity_checking = False
-    trainer.global_rank = 0
-    trainer.callback_metrics = {"val_loss": torch.tensor(0.7)}
-    cb.on_validation_epoch_end(trainer, lightning_module)
-    assert cb.best_val_loss == pytest.approx(0.7)
+    cb.on_validation_end(_trainer(0.4, epoch=0), lightning_module)
+    assert cb.best_score == pytest.approx(0.4) and cb.best_epoch == 0
     assert (tmp_path / "ckpt.pytorch").exists()
-    # Better val_loss -> overwrites.
-    trainer.callback_metrics = {"val_loss": torch.tensor(0.3)}
-    cb.on_validation_epoch_end(trainer, lightning_module)
-    assert cb.best_val_loss == pytest.approx(0.3)
+    cb.on_validation_end(_trainer(0.6, epoch=1), lightning_module)
+    assert cb.best_score == pytest.approx(0.6) and cb.best_epoch == 1
+    saved = torch.load(tmp_path / "ckpt.pytorch", weights_only=False)
+    assert saved[CHECKPOINT_MONITOR] == pytest.approx(0.6)
 
 
-def test_checkpoint_does_not_save_when_val_loss_worsens(
-    lightning_module, tmp_path,
-):
+def test_checkpoint_does_not_save_when_the_monitored_dice_worsens(lightning_module, tmp_path):
     cb = _make_checkpoint_callback(tmp_path)
-    trainer = MagicMock()
-    trainer.sanity_checking = False
-    trainer.global_rank = 0
-    trainer.callback_metrics = {"val_loss": torch.tensor(0.3)}
-    cb.on_validation_epoch_end(trainer, lightning_module)
+    cb.on_validation_end(_trainer(0.6, epoch=0), lightning_module)
     saved_mtime = (tmp_path / "ckpt.pytorch").stat().st_mtime_ns
-    # Worse -> no save.
-    trainer.callback_metrics = {"val_loss": torch.tensor(0.8)}
-    cb.on_validation_epoch_end(trainer, lightning_module)
+    cb.on_validation_end(_trainer(0.5, epoch=1), lightning_module)
+    cb.on_validation_end(_trainer(0.6, epoch=2), lightning_module)  # a tie is not an improvement
     assert (tmp_path / "ckpt.pytorch").stat().st_mtime_ns == saved_mtime
+    assert cb.best_epoch == 0
 
 
-def test_checkpoint_on_train_end_always_saves(lightning_module, tmp_path):
-    """**v0.5 Bug 2 fix #2**: always save on fit completion, even if
-    val_loss is worse than the running best."""
+def test_checkpoint_selects_on_dice_not_on_val_loss(lightning_module, tmp_path):
+    """A lower loss with a worse Dice is not a better checkpoint."""
     cb = _make_checkpoint_callback(tmp_path)
-    trainer = MagicMock()
-    trainer.sanity_checking = False
-    trainer.global_rank = 0
-    # Simulate: best-val saw val_loss=0.3 earlier; final epoch's
-    # val_loss is 0.7. The on_train_end fix overwrites with the final.
-    cb.best_val_loss = 0.3
-    trainer.callback_metrics = {"val_loss": torch.tensor(0.7)}
-    cb.on_train_end(trainer, lightning_module)
-    assert (tmp_path / "ckpt.pytorch").exists()
-    # Loaded checkpoint records the final val_loss, not the earlier best.
-    loaded = torch.load(tmp_path / "ckpt.pytorch", weights_only=False)
-    assert loaded["loss_val"] == pytest.approx(0.7)
+    cb.on_validation_end(_trainer(0.6, val_loss=0.5, epoch=0), lightning_module)
+    cb.on_validation_end(_trainer(0.5, val_loss=0.2, epoch=1), lightning_module)
+    assert cb.best_epoch == 0
+    assert torch.load(tmp_path / "ckpt.pytorch", weights_only=False)["loss_val"] == pytest.approx(0.5)
 
 
-def test_checkpoint_on_train_end_skips_during_sanity_check(
-    lightning_module, tmp_path,
-):
+def test_checkpoint_ignores_a_missing_monitored_metric(lightning_module, tmp_path):
     cb = _make_checkpoint_callback(tmp_path)
-    trainer = MagicMock()
-    trainer.sanity_checking = True
-    trainer.global_rank = 0
-    trainer.callback_metrics = {"val_loss": torch.tensor(0.5)}
-    cb.on_train_end(trainer, lightning_module)
+    cb.on_validation_end(_trainer(None), lightning_module)
+    assert cb.best_epoch is None
     assert not (tmp_path / "ckpt.pytorch").exists()
+
+
+def test_the_final_weights_go_beside_the_best_not_over_it(lightning_module, tmp_path):
+    """The best epoch stays at output_path; the final epoch is always written to *_final.pth."""
+    cb = _make_checkpoint_callback(tmp_path)
+    cb.on_validation_end(_trainer(0.7, val_loss=0.3, epoch=0), lightning_module)
+    cb.on_train_end(_trainer(0.5, val_loss=0.9, epoch=3), lightning_module)
+    best = torch.load(tmp_path / "ckpt.pytorch", weights_only=False)
+    final = torch.load(final_checkpoint_path(tmp_path / "ckpt.pytorch"), weights_only=False)
+    assert (best["loss_val"], best[CHECKPOINT_MONITOR]) == pytest.approx((0.3, 0.7))
+    assert (final["loss_val"], final[CHECKPOINT_MONITOR]) == pytest.approx((0.9, 0.5))
+    assert final_checkpoint_path(tmp_path / "ckpt.pytorch").name == "ckpt_final.pth"
+    # Callers that take the *.pytorch in the directory still get the best.
+    assert sorted(p.name for p in tmp_path.glob("*.pytorch")) == ["ckpt.pytorch"]
+
+
+def test_with_no_best_the_final_weights_also_go_to_output_path(lightning_module, tmp_path):
+    """A checkpoint always exists at output_path."""
+    cb = _make_checkpoint_callback(tmp_path)
+    cb.on_train_end(_trainer(None, val_loss=0.7), lightning_module)
+    assert torch.load(tmp_path / "ckpt.pytorch", weights_only=False)["loss_val"] == pytest.approx(0.7)
+    assert final_checkpoint_path(tmp_path / "ckpt.pytorch").exists()
+
+
+def test_checkpoint_on_train_end_skips_during_sanity_check(lightning_module, tmp_path):
+    cb = _make_checkpoint_callback(tmp_path)
+    cb.on_train_end(_trainer(0.5, sanity=True), lightning_module)
+    assert not (tmp_path / "ckpt.pytorch").exists()
+    assert not final_checkpoint_path(tmp_path / "ckpt.pytorch").exists()
 
 
 def test_checkpoint_carries_head_metadata(lightning_module, tmp_path):
@@ -363,13 +373,26 @@ def test_checkpoint_carries_head_metadata(lightning_module, tmp_path):
         model_struc_dict={"type": "PIPELINE_MULTITASK_UNET"},
         head_metadata=head_meta,
     )
-    trainer = MagicMock()
-    trainer.sanity_checking = False
-    trainer.global_rank = 0
-    trainer.callback_metrics = {"val_loss": torch.tensor(0.5)}
-    cb.on_validation_epoch_end(trainer, lightning_module)
+    cb.on_validation_end(_trainer(0.5), lightning_module)
     loaded = torch.load(tmp_path / "ckpt.pytorch", weights_only=False)
     assert loaded["head_metadata"] == head_meta
+
+
+def test_foreground_dice_averages_only_the_foreground_classes_present():
+    acc = _SemanticDiceAccumulator(num_classes=4)
+    targets = torch.tensor([[0, 1, 1, 2, 2, 2]])       # class 3 absent from the targets
+    preds = torch.tensor([[0, 1, 0, 2, 2, 3]])
+    acc.update(preds, targets)
+    per_class = acc.compute()
+    assert per_class[3] == 0.0                          # counted in val_seg_dice's mean
+    assert acc.foreground_present_mean() == pytest.approx((per_class[1] + per_class[2]) / 2)
+
+
+def test_foreground_dice_falls_back_to_present_classes_then_zero():
+    only_background = _SemanticDiceAccumulator(num_classes=3)
+    only_background.update(torch.zeros(1, 4, dtype=torch.long), torch.zeros(1, 4, dtype=torch.long))
+    assert only_background.foreground_present_mean() == pytest.approx(1.0)
+    assert _SemanticDiceAccumulator(num_classes=3).foreground_present_mean() == 0.0
 
 
 #  EpochHistoryCallback 
@@ -468,6 +491,7 @@ def test_end_to_end_lightning_fit(
     # callback_metrics has train_loss + val_loss.
     assert "train_loss" in trainer.callback_metrics
     assert "val_loss" in trainer.callback_metrics
+    assert CHECKPOINT_MONITOR in trainer.callback_metrics
     # epoch_history has at least one entry.
     assert len(pl_module.epoch_history) >= 1
     assert "val_loss" in pl_module.epoch_history[-1]
@@ -477,9 +501,11 @@ def test_end_to_end_lightning_fit(
     assert all(row["train_loss"] > 0 for row in pl_module.epoch_history)
     assert pl_module.epoch_history[-1]["train_loss"] == pytest.approx(float(trainer.callback_metrics["train_loss"]))
     assert all("val_seg_dice" in row for row in pl_module.epoch_history)
+    assert all(0.0 <= row[CHECKPOINT_MONITOR] <= 1.0 for row in pl_module.epoch_history)
     assert 0.0 < pl_module.epoch_history[0]["val_seg_dice"] <= 1.0
     # Checkpoint written to disk.
     assert ckpt_path.exists()
+    assert final_checkpoint_path(ckpt_path).exists()
     loaded = torch.load(ckpt_path, weights_only=False)
     assert "model_state_dict" in loaded
     assert "model_struc_dict" in loaded

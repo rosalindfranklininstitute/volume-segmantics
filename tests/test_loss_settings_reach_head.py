@@ -1,7 +1,7 @@
 """The train settings' loss options reach the default trainer's semantic head loss.
 
 ``ce_weight``, ``dice_weight``, ``dice_weight_mode`` and
-``exclude_background_from_dice`` were read by the deleted raw-torch trainer
+``exclude_background_from_dice`` were read by the legacy raw-torch trainer (`--legacy-trainer`)
 only; the Lightning trainer resolved ``CombinedCEDiceLoss`` to a factory that
 took ``alpha`` / ``beta`` alone and received neither, so it trained with the
 loss's own 0.5 / 0.5 and default Dice weighting whatever the settings said.

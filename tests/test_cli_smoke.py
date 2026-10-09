@@ -100,6 +100,8 @@ def test_cli_train_then_predict_smoke(cli_data_dir):
     models = list(data_dir.glob("*.pytorch"))
     assert models, "no model checkpoint written by model-train-2d"
     model_path = models[0]
+    # The best epoch is the *.pytorch; the final epoch's weights sit beside it.
+    assert model_path.with_name(f"{model_path.stem}_final.pth").exists(), "final epoch weights not written beside the best"
     # Training actually ran (not just a checkpoint of an untrained model).
     assert_checkpoint_trained(model_path)
 

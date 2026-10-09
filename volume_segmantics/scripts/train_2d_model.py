@@ -625,6 +625,7 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
 
     from volume_segmantics.data.lightning_dataloaders import VolSeg2dDataModule
     from volume_segmantics.model.operations.lightning2d import (
+        CHECKPOINT_MONITOR,
         EpochHistoryCallback,
         LegacyEpochSummaryCallback,
         NoVNumProgressBar,
@@ -633,6 +634,7 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         VolSegCheckpointCallback,
         VolSegDiagnosticsCallback,
         VolSegSSLVizCallback,
+        final_checkpoint_path,
     )
 
     pipeline_config = settings.pipeline_config
@@ -742,7 +744,8 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
     patience = int(getattr(settings, "patience", 4) or 4)
     if patience > 0:
         callbacks.append(
-            EarlyStopping(monitor="val_loss", patience=patience, mode="min")
+            # The same metric the checkpoint callback keeps the best epoch by.
+            EarlyStopping(monitor=CHECKPOINT_MONITOR, patience=patience, mode="max")
         )
 
     accelerator = "gpu" if torch.cuda.is_available() else "cpu"
@@ -768,7 +771,10 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         f"steps_per_epoch={steps_per_epoch}, total_steps={total_steps}"
     )
     trainer.fit(pl_module, datamodule=data_module)
-    logging.info("Lightning fit complete. Final checkpoint at %s", model_out)
+    logging.info(
+        "Lightning fit complete. Best checkpoint (by %s) at %s; final epoch "
+        "weights at %s", CHECKPOINT_MONITOR, model_out, final_checkpoint_path(model_out),
+    )
 
 
 

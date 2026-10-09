@@ -23,7 +23,7 @@ training_set_proportion: 0.85 # Proportion of images to use the training, rest a
 cuda_device: 0 # The graphics card to use (between 0 and 3 for a machine with 4 GPUs)
 num_cyc_frozen: 8 # Number of training epochs on frozen model
 num_cyc_unfrozen: 5 # Number of training epochs on unfrozen model
-patience: 4 # Number of epochs to wait before early stopping if validation loss does not improve
+patience: 4 # Number of epochs to wait before early stopping if the validation foreground Dice (val_fg_dice, which also selects the saved checkpoint) does not improve
 
 # Parameters to control Model Architecture
 model:

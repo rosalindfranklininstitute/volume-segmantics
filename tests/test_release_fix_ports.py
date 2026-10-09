@@ -87,15 +87,15 @@ def test_checkpoint_records_the_training_image_size_and_the_loader_returns_it(tm
     model = smp.Unet("resnet18", encoder_weights=None, in_channels=1, classes=2)
     struct = {"type": "U_NET", "encoder_name": "resnet18", "encoder_weights": None,
               "in_channels": 1, "classes": 2, "encoder_depth": 5}
-    trainer = SimpleNamespace(callbacks=[], global_rank=0, sanity_checking=False)
+    trainer = SimpleNamespace(callbacks=[], global_rank=0, sanity_checking=False, callback_metrics={})
     pl_module = SimpleNamespace(get_model_state_dict_for_volseg=model.state_dict)
     sized = VolSegCheckpointCallback(tmp_path / "m.pytorch", struct, label_codes={0: "bg", 1: "fg"}, image_size=96)
-    sized._save_volseg_checkpoint(trainer, pl_module, 0.25)
+    sized._save_volseg_checkpoint(trainer, pl_module, sized.output_path)
     assert torch.load(tmp_path / "m.pytorch", weights_only=False)["image_size"] == 96
     _, classes, _, image_size = create_model_from_file(tmp_path / "m.pytorch", gpu=False)
     assert (classes, image_size) == (2, 96)
     unsized = VolSegCheckpointCallback(tmp_path / "n.pytorch", struct)
-    unsized._save_volseg_checkpoint(trainer, pl_module, 0.25)
+    unsized._save_volseg_checkpoint(trainer, pl_module, unsized.output_path)
     assert create_model_from_file(tmp_path / "n.pytorch", gpu=False)[3] is None
 
 

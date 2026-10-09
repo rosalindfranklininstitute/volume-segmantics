@@ -80,7 +80,7 @@ Run the following command. Input files can be in HDF5 or multi-page TIFF format 
 model-train-2d --data path/to/image/data.tiff --labels path/to/corresponding/segmentation/labels.tiff
 ```
 
-Paths to multiple data and label volumes can be added after the `--data` and `--labels` flags respectively. A model will be trained according to the settings defined in `/volseg-settings/2d_model_train_settings.yaml` and saved to your working directory. In addition, a figure showing "ground truth" segmentation vs model segmentation for some images in the validation set will be saved. 
+Paths to multiple data and label volumes can be added after the `--data` and `--labels` flags respectively. A model will be trained according to the settings defined in `/volseg-settings/2d_model_train_settings.yaml` and saved to your working directory (the epoch with the best validation foreground Dice; the final epoch's weights are also saved beside it with a `_final.pth` suffix). In addition, a figure showing "ground truth" segmentation vs model segmentation for some images in the validation set will be saved. 
 
 ### For 3d volume segmentation prediction using a 2d model
 Run the following command. Input image files can be in HDF5 or multi-page TIFF format or MRC format.

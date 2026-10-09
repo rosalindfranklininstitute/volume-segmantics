@@ -101,6 +101,12 @@ def _emit_via_progress_console(trainer: Any, line: str) -> None:
 
 # Per-class Dice accumulator (legacy-trainer parity) 
 
+#: The logged metric the best checkpoint and early stopping select on
+#: (higher is better): mean Dice over the foreground classes present in the
+#: validation targets. See ``_SemanticDiceAccumulator.foreground_present_mean``.
+CHECKPOINT_MONITOR = "val_fg_dice"
+
+
 class _SemanticDiceAccumulator:
     """Per-class Dice over the semantic head's argmax predictions.
 
@@ -148,6 +154,21 @@ class _SemanticDiceAccumulator:
             denom = 2 * self.tp[c] + self.fp[c] + self.fn[c]
             out.append(2 * self.tp[c] / denom if denom > 0 else 0.0)
         return out
+
+    def foreground_present_mean(self) -> float:
+        """Mean Dice over the foreground classes present in the targets.
+
+        The checkpoint-selection metric (:data:`CHECKPOINT_MONITOR`).
+        ``compute``'s plain mean also averages the background and scores a
+        class absent from the validation targets as 0.0, which adds a
+        constant (or noise) that says nothing about the model. With no
+        foreground class present it falls back to the classes that are
+        present, and to 0.0 when there are none.
+        """
+        per_class = self.compute()
+        present = [c for c in range(self.num_classes) if self.tp[c] + self.fn[c] > 0]
+        scored = [c for c in present if c != 0] or present
+        return sum(per_class[c] for c in scored) / len(scored) if scored else 0.0
 
 
 class _BinaryDiceAccumulator:
@@ -711,6 +732,12 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
                     f"val_dice_class_{c}", float(val),
                     on_epoch=True, sync_dist=True,
                 )
+            # What VolSegCheckpointCallback and EarlyStopping select on.
+            self.log(
+                CHECKPOINT_MONITOR,
+                self._val_dice_accumulator.foreground_present_mean(),
+                on_epoch=True, sync_dist=True,
+            )
         boundary_dice = self._val_boundary_dice_accumulator.compute()
         if not sanity and boundary_dice is not None:
             self.log(
@@ -1033,14 +1060,42 @@ class NoVNumProgressBar(_PB_BASE):  # type: ignore[misc,valid-type]
         return items
 
 
+def final_checkpoint_path(output_path: Path) -> Path:
+    """Where :class:`VolSegCheckpointCallback` writes the final epoch's weights.
+
+    ``<stem>_final.pth`` beside the best checkpoint: a ``.pth`` so that
+    callers taking the ``*.pytorch`` in a directory still get the best
+    (``model-predict-2d`` loads either suffix).
+    """
+    output_path = Path(output_path)
+    return output_path.with_name(f"{output_path.stem}_final.pth")
+
+
+def _metric(metrics: Mapping[str, Any], name: str) -> float:
+    """A logged metric as a float; NaN when it is absent or not a number."""
+    try:
+        return float(metrics[name])
+    except (KeyError, TypeError, ValueError):
+        return float("nan")
+
+
 class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
     """Vol-seg-compatible ``.pytorch`` checkpoint writer.
 
-    Saves alongside Lightning's :class:`ModelCheckpoint`. The
-    vol-seg ``.pytorch`` format is what v0.4's prediction scripts
-    (``model-predict-2d``) load — Lightning's ``.ckpt`` is not
+    Saves alongside Lightning's :class:`ModelCheckpoint`. The vol-seg
+    ``.pytorch`` format is what v0.4's prediction scripts
+    (``model-predict-2d``) load; Lightning's ``.ckpt`` is not
     interoperable.
-  """
+
+    ``output_path`` holds the best epoch by :data:`CHECKPOINT_MONITOR`
+    (higher is better; saved on a strict improvement, so a tie keeps the
+    earlier epoch). The final epoch's weights are always written to
+    :func:`final_checkpoint_path` as well, and to ``output_path`` too when
+    no epoch ever produced a best, so a checkpoint always exists there.
+    Before this the best was chosen by the lowest ``val_loss`` and the final
+    epoch was then written over it, so the kept weights were whatever the
+    last epoch happened to be.
+    """
 
     def __init__(
         self,
@@ -1055,58 +1110,67 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
         self.model_struc_dict = dict(model_struc_dict)
         self.label_codes = dict(label_codes or {})
         # The square the training slices were resized to; prediction resizes
-        # its slices to the same scale. 
+        # its slices to the same scale.
         self.image_size = int(image_size) if image_size else None
         self.head_metadata = (
             dict(head_metadata) if head_metadata is not None else None
         )
-        self.best_val_loss = float("inf")
+        self.best_score = float("-inf")
+        self.best_epoch: Optional[int] = None
 
-    def on_validation_epoch_end(self, trainer, pl_module) -> None:
-        # v0.5 Bug 2 fix #1: skip sanity-check phase.
+    def on_validation_end(self, trainer, pl_module) -> None:
+        # on_validation_end, not on_validation_epoch_end: the module logs the
+        # monitored Dice in its own on_validation_epoch_end, which runs after
+        # the callbacks' hook of that name, so only here is it this epoch's
+        # value rather than the previous epoch's.
         if getattr(trainer, "sanity_checking", False):
-            return
+            return  # the sanity check must not lock in random weights as best
         if trainer.global_rank != 0:
             return
-        metrics = trainer.callback_metrics
-        if "val_loss" not in metrics:
+        score = _metric(trainer.callback_metrics, CHECKPOINT_MONITOR)
+        if math.isnan(score):
             return
-        try:
-            current_val = float(metrics["val_loss"])
-        except (TypeError, ValueError):
-            return
-        if math.isnan(current_val):
-            return
-        if current_val < self.best_val_loss:
-            self.best_val_loss = current_val
-            self._save_volseg_checkpoint(trainer, pl_module, current_val)
+        if score > self.best_score:
+            self.best_score = score
+            self.best_epoch = int(getattr(trainer, "current_epoch", 0))
+            self._save_volseg_checkpoint(
+                trainer, pl_module, self.output_path,
+                note=f" ({CHECKPOINT_MONITOR}={score:.4f}, epoch {self.best_epoch})",
+            )
 
     def on_train_end(self, trainer, pl_module) -> None:
-        # v0.5 Bug 2 fix #2: always-save-final.
         if trainer.global_rank != 0:
             return
         if getattr(trainer, "sanity_checking", False):
             return
-        try:
-            current_val = float(
-                trainer.callback_metrics.get("val_loss", float("nan"))
+        # Always save the final weights, beside the best rather than over it.
+        self._save_volseg_checkpoint(
+            trainer, pl_module, final_checkpoint_path(self.output_path),
+            note=" (final epoch)",
+        )
+        if self.best_epoch is None:
+            self._save_volseg_checkpoint(
+                trainer, pl_module, self.output_path,
+                note=" (no epoch produced a best; final weights)",
             )
-        except (TypeError, ValueError):
-            current_val = float("nan")
-        self._save_volseg_checkpoint(trainer, pl_module, current_val)
 
     def _save_volseg_checkpoint(
         self,
         trainer: Any,
         pl_module: VolSeg2dLightningModule,
-        val_loss: float,
+        path: Path,
+        *,
+        note: str = "",
     ) -> None:
+        metrics = getattr(trainer, "callback_metrics", None) or {}
         state_dict = pl_module.get_model_state_dict_for_volseg()
         model_dict: Dict[str, Any] = {
             "model_state_dict": state_dict,
             "model_struc_dict": self.model_struc_dict,
             "optimizer_state_dict": {},  # Lightning owns the optimiser.
-            "loss_val": val_loss,
+            "loss_val": _metric(metrics, "val_loss"),
+            # The selection metric these weights scored (NaN if not logged).
+            CHECKPOINT_MONITOR: _metric(metrics, CHECKPOINT_MONITOR),
             "label_codes": self.label_codes,
         }
         if self.head_metadata is not None:
@@ -1114,13 +1178,14 @@ class VolSegCheckpointCallback(pl.Callback if pl is not None else object):
         if self.image_size is not None:
             model_dict["image_size"] = self.image_size
 
+        path = Path(path)
         # Route through the Rich progress console so the message
         # doesn't get clobbered by the next-epoch progress redraw.
         _emit_via_progress_console(
-            trainer, f"Saving vol-seg checkpoint to {self.output_path}"
+            trainer, f"Saving vol-seg checkpoint to {path}{note}"
         )
-        self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_torch_save(model_dict, self.output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_torch_save(model_dict, path)
 
 
 def _ensure_tuple_output(output: Any) -> Tuple[Any, ...]:
@@ -1174,6 +1239,7 @@ class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
     | ``train_distance_loss``| ``train_task3``    |
     | ``val_distance_loss``  | ``valid_task3``    |
     | ``val_seg_dice``       | ``seg_dice``       |
+    | ``val_fg_dice``        | ``fg_dice``        |
     | ``val_dice_class_<c>`` | ``dice_class_<c>`` |
     +-------------------------+--------------------+
     """
@@ -1191,6 +1257,7 @@ class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
         "train_distance_loss": "train_task3",
         "val_distance_loss": "valid_task3",
         "val_seg_dice": "seg_dice",
+        "val_fg_dice": "fg_dice",
         "val_boundary_dice": "boundary_dice",
     }
     _SDM_FALLBACK_RENAMES: Dict[str, str] = {
@@ -1609,10 +1676,12 @@ def _resolve_device_num_from_module(pl_module: Any) -> Any:
 
 
 __all__ = [
+    "CHECKPOINT_MONITOR",
     "EpochHistoryCallback",
     "UnfreezeEncoderCallback",
     "VolSeg2dLightningModule",
     "VolSegCheckpointCallback",
     "VolSegDiagnosticsCallback",
     "VolSegSSLVizCallback",
+    "final_checkpoint_path",
 ]
