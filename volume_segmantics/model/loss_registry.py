@@ -213,10 +213,18 @@ def _make_combined_ce_dice(
     num_classes: int = 2,
     alpha: float = 0.5,
     beta: float = 0.5,
+    dice_weight_mode: str = "inverse_sqrt_freq",
+    exclude_background: bool = False,
+    use_bce_for_binary: bool = True,
     **_extra: Any,
 ) -> nn.Module:
+    """The head's ``alpha`` / ``beta`` (CE / Dice weights), ``dice_weight_mode``
+    and ``exclude_background`` reach the loss."""
     return CombinedCEDiceLoss(
         num_classes=int(num_classes), alpha=float(alpha), beta=float(beta),
+        dice_weight_mode=str(dice_weight_mode),
+        exclude_background=bool(exclude_background),
+        use_bce_for_binary=bool(use_bce_for_binary),
     )
 
 
@@ -225,11 +233,13 @@ def _make_class_weighted_dice(
     num_classes: int = 2,
     weight_mode: str = "inverse_sqrt_freq",
     exclude_background: bool = False,
+    dice_weight_mode: Optional[str] = None,
     **_extra: Any,
 ) -> nn.Module:
+    # ``dice_weight_mode`` is the settings-file spelling of ``weight_mode``.
     return ClassWeightedDiceLoss(
         num_classes=int(num_classes),
-        weight_mode=weight_mode,
+        weight_mode=str(dice_weight_mode) if dice_weight_mode is not None else weight_mode,
         exclude_background=bool(exclude_background),
     )
 

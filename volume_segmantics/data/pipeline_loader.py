@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
@@ -637,6 +637,73 @@ def load_pipeline_yaml(path: Union[str, Path]) -> PipelineConfig:
 #  Legacy SimpleNamespace -> PipelineConfig adapter 
 
 
+#: Semantic losses that take the CE / Dice weights ``alpha`` and ``beta`` and
+#: the Dice weighting options.
+CE_DICE_LOSSES = ("dice_ce", "combined_ce_dice")
+#: Semantic losses that take the Dice weighting options only.
+CLASS_WEIGHTED_LOSSES = ("class_weighted_dice",)
+DICE_WEIGHT_MODES = ("uniform", "inverse_freq", "inverse_sqrt_freq", "custom")
+
+
+def semantic_loss_options_from_settings(settings: Any, loss_name: str) -> Dict[str, Any]:
+    """The semantic head's loss options the legacy settings file documents,
+    in the head-option vocabulary the loss factories take.
+
+    ``ce_weight`` / ``dice_weight`` become ``alpha`` / ``beta`` (``alpha`` /
+    ``beta`` themselves when ``loss_criterion`` is the deprecated
+    ``BCEDiceLoss``); ``dice_weight_mode`` and ``exclude_background_from_dice``
+    become ``dice_weight_mode`` and ``exclude_background`` (``weight_mode`` for
+    ``class_weighted_dice``). Only keys the settings actually set are
+    returned, so the loss keeps its own defaults for the rest.
+    """
+    options: Dict[str, Any] = {}
+    if settings is None:
+        return options
+    get = lambda key: getattr(settings, key, None)  # noqa: E731
+    if loss_name in CE_DICE_LOSSES:
+        if str(get("loss_criterion") or "") == "BCEDiceLoss":
+            ce, dice = get("alpha"), get("beta")
+        else:
+            ce, dice = get("ce_weight"), get("dice_weight")
+        if ce is not None:
+            options["alpha"] = float(ce)
+        if dice is not None:
+            options["beta"] = float(dice)
+        if any(v < 0 for v in (options.get("alpha", 0.0), options.get("beta", 0.0))):
+            raise PipelineConfigError(
+                f"ce_weight and dice_weight must be non-negative; got "
+                f"{options.get('alpha')}, {options.get('beta')}"
+            )
+    if loss_name in CE_DICE_LOSSES or loss_name in CLASS_WEIGHTED_LOSSES:
+        mode = get("dice_weight_mode")
+        if mode is not None:
+            if str(mode) not in DICE_WEIGHT_MODES:
+                raise PipelineConfigError(
+                    f"dice_weight_mode must be one of {DICE_WEIGHT_MODES}; got {mode!r}"
+                )
+            options["weight_mode" if loss_name in CLASS_WEIGHTED_LOSSES else "dice_weight_mode"] = str(mode)
+        exclude = get("exclude_background_from_dice")
+        if exclude is not None:
+            options["exclude_background"] = bool(exclude)
+    return options
+
+
+def with_semantic_loss_settings(config: "PipelineConfig", settings: Any) -> "PipelineConfig":
+    """``config`` with the settings file's loss options beneath the semantic
+    head's own: a value the head states in ``pipeline.yaml`` wins, a value only
+    the settings file states fills in. Unchanged when there is nothing to add.
+    """
+    semantic = config.heads.get("semantic") if config is not None else None
+    if semantic is None:
+        return config
+    loss_name = semantic.loss or "dice_ce"
+    options = semantic_loss_options_from_settings(settings, loss_name)
+    if not options:
+        return config
+    extra = {**options, **(semantic.extra or {})}
+    return replace(config, heads={**config.heads, "semantic": replace(semantic, extra=extra)})
+
+
 def _legacy_loss_name(loss_criterion: str) -> str:
     """Map the legacy loss_criterion string to a registry name.
     """
@@ -669,12 +736,16 @@ def legacy_settings_to_pipeline_config(
     settings: SimpleNamespace,
 ) -> PipelineConfig:
     
-    # Semantic head from legacy loss_criterion.
+    # Semantic head from legacy loss_criterion, with the settings file's loss
+    # options (ce_weight, dice_weight, dice_weight_mode,
+    # exclude_background_from_dice) as the head's options.
     loss_criterion = getattr(settings, "loss_criterion", "CombinedCEDiceLoss")
+    loss_name = _legacy_loss_name(loss_criterion)
     semantic = HeadConfig(
         enabled=True,
-        loss=_legacy_loss_name(loss_criterion),
+        loss=loss_name,
         loss_weight=1.0,
+        extra=semantic_loss_options_from_settings(settings, loss_name),
     )
 
     # SSL knobs from the legacy settings. The EMA teacher is built for

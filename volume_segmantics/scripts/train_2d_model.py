@@ -15,6 +15,7 @@ from volume_segmantics.data.pipeline_loader import (
     PipelineConfig,
     legacy_settings_to_pipeline_config,
     load_pipeline_yaml,
+    with_semantic_loss_settings,
 )
 from volume_segmantics.model import VolSeg2dTrainer
 from volume_segmantics.utilities import get_2d_training_parser
@@ -101,7 +102,10 @@ def _resolve_pipeline_config(
     pipeline_yaml_path = root_path / cfg.SETTINGS_DIR / "pipeline.yaml"
     if pipeline_yaml_path.exists():
         logging.info(f"Loading pipeline config from {pipeline_yaml_path}")
-        return load_pipeline_yaml(pipeline_yaml_path)
+        # The settings file's ce_weight / dice_weight / dice_weight_mode /
+        # exclude_background_from_dice fill in beneath the semantic head's
+        # own options; a value the head states in pipeline.yaml wins.
+        return with_semantic_loss_settings(load_pipeline_yaml(pipeline_yaml_path), settings)
     logging.info(
         "No pipeline.yaml found; synthesising semantic-only pipeline "
         "config from legacy settings"

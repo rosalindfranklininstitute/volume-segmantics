@@ -148,6 +148,10 @@ def get_rampup_ratio(
             return (current_iter - rampup_start) / (rampup_end - rampup_start)
 
 
+#: The Dice weightings ClassWeightedDiceLoss applies.
+DICE_WEIGHT_MODES = ("uniform", "inverse_freq", "inverse_sqrt_freq", "custom")
+
+
 def _present_classes_only(weights: torch.Tensor, class_counts: torch.Tensor) -> torch.Tensor:
     """Zero the frequency weight of every class absent from the batch.
     """
@@ -186,6 +190,8 @@ class ClassWeightedDiceLoss(nn.Module):
         softmax: bool = True,
     ):
         super().__init__()
+        if weight_mode not in DICE_WEIGHT_MODES:
+            raise ValueError(f"weight_mode must be one of {DICE_WEIGHT_MODES}; got {weight_mode!r}")
         self.num_classes = num_classes
         self.weight_mode = weight_mode
         self.exclude_background = exclude_background

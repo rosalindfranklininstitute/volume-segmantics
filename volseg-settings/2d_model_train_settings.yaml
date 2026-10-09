@@ -80,7 +80,7 @@ loss_criterion: "CombinedCEDiceLoss"
 alpha: 0.5 # When BCEDiceLoss selected, weighting for BCELoss
 beta: 0.5 # When BCEDiceLoss selected, weighting for DiceLoss
  
-# Parameters for advanced losses (CombinedCEDiceLoss and ClassWeightedDiceLoss)
+# Parameters for advanced losses (CombinedCEDiceLoss and ClassWeightedDiceLoss).
 # Dice weighting mode for class-weighted losses
 dice_weight_mode: "inverse_sqrt_freq"  # Options: "inverse_sqrt_freq", "inverse_freq", "uniform"
 exclude_background_from_dice: False   # Usually true for foreground structures

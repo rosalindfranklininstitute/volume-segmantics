@@ -10,6 +10,11 @@ heads:
     out_channels: null              # null -> infer from label classes
     loss: dice_ce                   # name from the loss registry
     loss_weight: 1.0
+    # Optional loss options for dice_ce / combined_ce_dice: alpha (CE weight),
+    # beta (Dice weight), dice_weight_mode (uniform | inverse_freq |
+    # inverse_sqrt_freq), exclude_background. Unset ones come from the train
+    # settings' ce_weight / dice_weight / dice_weight_mode /
+    # exclude_background_from_dice.
 
   boundary:
     enabled: false
