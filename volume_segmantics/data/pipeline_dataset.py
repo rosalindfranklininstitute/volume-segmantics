@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -178,12 +179,27 @@ def _spec_to_albumentations(spec: TransformSpec) -> A.BasicTransform:
         ) from exc
 
 
+def resolve_augmentation_backend(aug_cfg: AugmentationsConfig, settings: Any) -> str:
+    """Which augmentation backend the pipeline dataset builds.
+
+    ``pipeline.yaml``'s ``augmentations.backend`` wins when it names one
+    (``albumentations`` or ``monai``); ``auto`` defers to the train settings'
+    ``augmentation_library``, which defaults to albumentations.
+    """
+    backend = str(getattr(aug_cfg, "backend", "auto") or "auto").lower()
+    if backend in ("albumentations", "monai"):
+        return backend
+    library = str(getattr(settings, "augmentation_library", "albumentations") or "albumentations")
+    return "monai" if library.lower() == "monai" else "albumentations"
+
+
 def build_pipeline_augmentations(
     aug_cfg: AugmentationsConfig,
     *,
     enabled_head_names: Mapping[str, bool],
     img_size: Optional[int] = None,
-) -> Tuple[Optional[A.Compose], Optional[A.Compose], Dict[str, str]]:
+    augmentation_library: str = "albumentations",
+) -> Tuple[Optional[Any], Optional[A.Compose], Dict[str, str]]:
     """Build spatial + photometric Albumentations Compose objects.
 
     Splits the transform list:
@@ -231,6 +247,18 @@ def build_pipeline_augmentations(
             additional_targets["sdm"] = "image"
         # Future heads land here with the right kind.
 
+    # Optional MONAI path: swap the training spatial augmentation for a
+    # MONAI multi-key Compose. Photometric augs are folded into it (image
+    # only), so photometric_aug is None. Falls back to albumentations if
+    # MONAI is unavailable or img_size is unset.
+    if str(augmentation_library).lower() == "monai":
+        monai_aug = _try_build_monai_pipeline_aug(
+            enabled_head_names, additional_targets, img_size,
+            train_transforms=aug_cfg.train_transforms,
+        )
+        if monai_aug is not None:
+            return monai_aug, None, additional_targets
+
     # Convert TransformSpec list to Albumentations transforms.
     raw_transforms: List[Tuple[A.BasicTransform, bool]] = [
         (_spec_to_albumentations(spec), _is_photometric(spec.name))
@@ -264,6 +292,115 @@ def build_pipeline_augmentations(
 
 
 #  Dataset 
+
+
+#  MONAI augmentation path (optional; albumentations is the default)
+
+
+class _MonaiPipelineAug:
+    """Runs a MONAI multi-key ``Compose`` behind the Albumentations spatial
+    call interface, i.e. ``aug(**sample) -> dict``.
+
+    The pipeline dataset builds an Albumentations-style ``sample`` of HWC/HW/
+    HWK numpy arrays; MONAI wants channel-first arrays. This adapter converts
+    in, applies the transforms across every present key (geometric ops stay
+    consistent across image + targets, intensity ops touch the image only),
+    then converts back to the exact layout ``_sample_to_tensors`` expects, so
+    the rest of ``__getitem__`` is unchanged. The image is scaled to ``[0, 1]``
+    here (mirroring ``_apply_imagenet_norm``'s ``/255``) so intensity
+    transforms and the subsequent normalisation see a consistent range.
+    """
+
+    def __init__(self, compose, keys: List[str], image_key: str = "image"):
+        self._compose = compose
+        self._keys = list(keys)
+        self._image_key = image_key
+        self._pid = None
+        self._seed_once_per_process()
+
+    def _seed_once_per_process(self) -> None:
+        """MONAI transforms otherwise share one class-level ``RandomState``, which
+        neither ``set_seed`` nor a DataLoader worker touches. Seeding from the global
+        NumPy RNG reproduces a seeded run, and seeding again on the first call in a
+        new process keeps workers from repeating each other's draws."""
+        if self._pid != os.getpid():
+            self._pid = os.getpid()
+            self._compose.set_random_state(seed=int(np.random.randint(0, 2**31 - 1)))
+
+    def __call__(self, **sample: Any) -> Dict[str, Any]:
+        self._seed_once_per_process()
+        data: Dict[str, Any] = {}
+        ndims: Dict[str, int] = {}
+        for key in self._keys:
+            if key not in sample:
+                continue
+            arr = np.asarray(sample[key])
+            ndims[key] = arr.ndim
+            cf = arr[np.newaxis, ...] if arr.ndim == 2 else np.transpose(arr, (2, 0, 1))
+            cf = cf.astype(np.float32)
+            if key == self._image_key and np.issubdtype(arr.dtype, np.integer):
+                cf = cf / 255.0
+            data[key] = torch.as_tensor(np.ascontiguousarray(cf))
+
+        out = self._compose(data)
+
+        result = dict(sample)
+        for key, nd in ndims.items():
+            val = out[key]
+            val = val.detach().cpu().numpy() if torch.is_tensor(val) else np.asarray(val)
+            if key == self._image_key:
+                val = np.clip(val, 0.0, 1.0)
+            # Channel-first -> Albumentations layout: (1,H,W)->(H,W); (C,H,W)->(H,W,C).
+            result[key] = val[0] if nd == 2 else np.transpose(val, (1, 2, 0))
+        return result
+
+
+def _try_build_monai_pipeline_aug(
+    enabled_head_names: Mapping[str, bool],
+    additional_targets: Dict[str, str],
+    img_size: Optional[int],
+    train_transforms: Optional[List[TransformSpec]] = None,
+) -> Optional[_MonaiPipelineAug]:
+    """Build the MONAI spatial augmentation, or ``None`` to fall back.
+
+    Falls back (returns ``None``) when ``img_size`` is unset or MONAI is not
+    installed, so the ``monai`` backend degrades gracefully to albumentations
+    instead of failing the run.
+    """
+    if img_size is None:
+        logger.warning(
+            "augmentation backend 'monai' needs img_size for sizing; "
+            "falling back to albumentations augmentations."
+        )
+        return None
+    try:
+        from volume_segmantics.data.augmentations_monai import (
+            build_pipeline_monai_transforms,
+        )
+    except ImportError as exc:  # noqa: BLE001
+        logger.warning(
+            "MONAI unavailable (%s); falling back to albumentations "
+            "augmentations for the pipeline.", exc,
+        )
+        return None
+
+    # Keys + per-key interpolation modes: image + semantic mask + each head
+    # target. additional_targets already classifies heads as "mask" (nearest)
+    # or "image" (bilinear).
+    keys: List[str] = ["image"]
+    modes: List[str] = ["bilinear"]
+    if enabled_head_names.get("semantic"):
+        keys.append("mask")
+        modes.append("nearest")
+    for head_key, kind in additional_targets.items():
+        keys.append(head_key)
+        modes.append("nearest" if kind == "mask" else "bilinear")
+
+    compose = build_pipeline_monai_transforms(
+        int(img_size), keys, modes, train_transforms=train_transforms,
+    )
+    logger.info("Using MONAI augmentations for the pipeline (keys=%s).", keys)
+    return _MonaiPipelineAug(compose, keys)
 
 
 class PipelineMultiTaskDataset(BaseDataset):
@@ -372,6 +509,9 @@ class PipelineMultiTaskDataset(BaseDataset):
                         n: c.enabled for n, c in self.heads_cfg.items()
                     },
                     img_size=img_size,
+                    augmentation_library=resolve_augmentation_backend(
+                        pipeline_config.augmentations, settings,
+                    ),
                 )
             )
             self.preprocess = None
@@ -585,11 +725,16 @@ class UnlabeledPipelineDataset(BaseDataset):
         self.settings = settings
         self.use_2_5d_slicing = bool(use_2_5d_slicing)
         self.num_2_5d_slices = int(num_2_5d_slices)
-        # Student view: the labeled training set's own augmentations.
+        # Student view: the labeled training set's own augmentations, keyed
+        # for the image alone (an unlabeled sample carries no targets, and
+        # MONAI's dictionary transforms refuse a missing key).
         self.spatial_aug, self.photometric_aug, _ = build_pipeline_augmentations(
             pipeline_config.augmentations,
-            enabled_head_names={"semantic": True},
+            enabled_head_names={},
             img_size=img_size,
+            augmentation_library=resolve_augmentation_backend(
+                pipeline_config.augmentations, settings,
+            ),
         )
         # Teacher view: the validation-time resize/pad only.
         self.preprocess = (

@@ -43,6 +43,11 @@ targets:
 #  Augmentations 
 augmentations:
   backend: auto                     # auto | albumentations | monai
+                                    # auto -> the train settings' augmentation_library.
+                                    # monai translates the names below to MONAI dict
+                                    # transforms; MONAI-only transforms (e.g. RandBiasField)
+                                    # can be named directly (spatial: true applies one to
+                                    # the targets too).
   train_transforms:
     - { name: HorizontalFlip, p: 0.5 }
     - { name: VerticalFlip,   p: 0.5 }
