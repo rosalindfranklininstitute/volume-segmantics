@@ -52,23 +52,29 @@ def _make_synthetic_volume(path, label=False, seed=0):
         f.create_dataset("/data", data=data)
 
 
-@pytest.fixture()
-def cli_data_dir(tmp_path):
+def _make_cli_data_dir(tmp_path, *, downsample=False):
     settings_dir = tmp_path / "volseg-settings"
     settings_dir.mkdir()
+    train_settings = _fast_train_settings()
+    train_settings["downsample"] = downsample
     with open(settings_dir / "2d_model_train_settings.yaml", "w") as f:
-        yaml.safe_dump(_fast_train_settings(), f)
-    # Predict settings: copy the repo default unchanged.
+        yaml.safe_dump(train_settings, f)
+    # Predict settings: the repo default, with downsample matching training.
     with open(REPO_ROOT / "volseg-settings" / "2d_model_predict_settings.yaml") as f:
         predict_settings = yaml.safe_load(f)
+    predict_settings["downsample"] = downsample
     with open(settings_dir / "2d_model_predict_settings.yaml", "w") as f:
         yaml.safe_dump(predict_settings, f)
-
     img = tmp_path / "image.h5"
     lbl = tmp_path / "labels.h5"
     _make_synthetic_volume(img, label=False)
     _make_synthetic_volume(lbl, label=True)
     return tmp_path, img, lbl
+
+
+@pytest.fixture()
+def cli_data_dir(tmp_path):
+    return _make_cli_data_dir(tmp_path)
 
 
 def _run(module, args, cwd, extra_env=None):
@@ -138,3 +144,29 @@ def test_a_relaunched_ddp_worker_trains_without_reslicing(cli_data_dir):
     assert list(data_dir.glob("*.pytorch")), "the worker did not train"
     assert sentinel.exists(), "only rank 0 may clear the sentinel"
     assert {p.name: p.stat().st_mtime_ns for p in (data_dir / "data").iterdir()} == before, "the worker touched the slices"
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_cli_downsample_round_trip(tmp_path):
+    """``downsample: True`` trains on labels downsampled with the image and
+    predicts back at the input volume's shape."""
+    import volume_segmantics.utilities.base_data_utils as utils
+
+    data_dir, img, lbl = _make_cli_data_dir(tmp_path, downsample=True)
+    res = _run(
+        "volume_segmantics.scripts.train_2d_model",
+        ["--data", str(img), "--labels", str(lbl), "--data_dir", str(data_dir)],
+        cwd=data_dir,
+    )
+    assert res.returncode == 0, f"train failed:\nSTDOUT{res.stdout[-2000:]}\nSTDERR{res.stderr[-2000:]}"
+    model_path = next(iter(data_dir.glob("*.pytorch")))
+    res = _run(
+        "volume_segmantics.scripts.predict_2d_model",
+        [str(model_path), str(img), "--data_dir", str(data_dir)],
+        cwd=data_dir,
+    )
+    assert res.returncode == 0, f"predict failed:\nSTDOUT{res.stdout[-2000:]}\nSTDERR{res.stderr[-2000:]}"
+    out = next(iter(data_dir.glob("*vol_pred*")))
+    written = utils.get_numpy_from_path(out, internal_path="/data")[0]
+    assert written.shape == (40, 96, 96), f"prediction written at {written.shape}, not the input's shape"

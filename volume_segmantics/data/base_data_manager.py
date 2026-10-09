@@ -24,6 +24,9 @@ class BaseDataManager:
         elif isinstance(data_vol, np.ndarray):
             self.data_vol = data_vol
             self.input_data_chunking = True
+        # The volume's shape as given, before any downsampling: the shape
+        # prediction outputs are returned to.
+        self.input_shape = tuple(self.data_vol.shape)
         self._preprocess_data()
 
     def _preprocess_data(self):

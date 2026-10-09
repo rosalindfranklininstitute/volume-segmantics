@@ -268,3 +268,21 @@ def test_predict_uses_pipeline_config_inference_mode_when_unset(
         return_arrays=True,
     )
     assert result.manifest["inference_mode"] == "single_axis"
+
+
+def test_predict_with_downsample_returns_every_array_at_the_input_shape(
+    tiny_model_path, tiny_volume_path, tmp_path,
+):
+    """The model sees the volume at half scale; the arrays, the zarr and the
+    manifest are at the input volume's shape."""
+    settings = _make_settings()
+    settings.downsample = True
+    out = tmp_path / "down.zarr"
+    result = predict(
+        model_path=tiny_model_path, data_vol_path=tiny_volume_path, settings=settings,
+        inference_mode="single_axis", output_zarr=out, return_arrays=True,
+    )
+    assert result.arrays["teacher_argmax"].shape == (4, 64, 64)
+    assert result.arrays["teacher_probs"].shape == (3, 4, 64, 64)
+    assert result.manifest["volume_shape"] == [4, 64, 64]
+    assert zarr.open(str(out))["teacher_argmax"].shape == (4, 64, 64)

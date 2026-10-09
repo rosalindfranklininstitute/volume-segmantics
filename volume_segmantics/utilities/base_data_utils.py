@@ -324,6 +324,33 @@ def downsample_data(data, factor=2):
     return block_reduce(data, block_size=(factor, factor, factor), func=np.nanmean)
 
 
+def downsample_labels(labels: np.ndarray, factor: int = 2) -> np.ndarray:
+    """Every ``factor``-th voxel along each axis: the label volume at the scale
+    :func:`downsample_data` gives the image (the same shape, ceil(n / factor)
+    per axis). Labels are picked, never averaged, so no new classes appear."""
+    return labels[::factor, ::factor, ::factor]
+
+
+def upsample_to(array: np.ndarray, shape: tuple, factor: int = 2) -> np.ndarray:
+    """Nearest-neighbour upsampling of a prediction made on a downsampled
+    volume back to the input's ``shape``.
+    """
+    small = tuple(-(-n // factor) for n in shape)
+    if array.ndim == 4 and tuple(array.shape[1:]) == small and tuple(array.shape[:3]) != small:
+        axes = (1, 2, 3)
+    elif tuple(array.shape[:3]) == small:
+        axes = (0, 1, 2)
+    else:
+        raise ValueError(
+            f"upsample_to: an array of shape {array.shape} is not {small} on three "
+            f"axes, so it was not predicted from the downsampled input {shape}"
+        )
+    for axis, n in zip(axes, shape):
+        array = np.repeat(array, factor, axis=axis)
+        array = np.take(array, np.arange(n), axis=axis)
+    return array
+
+
 def numpy_from_tiff(path):
     """Returns a numpy array when given a path to an multipage TIFF file.
 

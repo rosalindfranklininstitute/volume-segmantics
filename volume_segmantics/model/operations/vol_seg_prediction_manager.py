@@ -291,6 +291,16 @@ class VolSeg2DPredictionManager(BaseDataManager):
                         if task_data.get('logits') is not None and task_data['logits'].ndim == 3:
                             task_data['logits'] = np.transpose(task_data['logits'], (0, 2, 1))
 
+        if getattr(self, "downsample", False):
+            arrays = {
+                "prediction": prediction, "probs": probs, "logits": logits,
+                "entropy": entropy, "votes": votes,
+            }
+            self._restore_input_scale(arrays, additional_tasks)
+            prediction, probs, logits, entropy, votes = (
+                arrays[k] for k in ("prediction", "probs", "logits", "entropy", "votes")
+            )
+
         if output_path is not None and cfg.OUTPUT_FORMAT == "hdf":
             # Save primary segmentation output
             utils.save_data_to_hdf5(
@@ -455,6 +465,14 @@ class VolSeg2DPredictionManager(BaseDataManager):
                 )
 
         return prediction
+
+    def _restore_input_scale(self, arrays: dict, additional_tasks) -> None:
+        """Nearest-neighbour upsample every array in ``arrays`` and in the
+        additional task outputs back to ``self.input_shape``, in place."""
+        for source in [arrays, *(additional_tasks or {}).values()]:
+            for key, value in list(source.items()):
+                if isinstance(value, np.ndarray):
+                    source[key] = utils.upsample_to(value, self.input_shape)
 
     def _get_task_suffix(self, task_name):
         """

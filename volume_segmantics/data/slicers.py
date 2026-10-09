@@ -79,6 +79,8 @@ class TrainingDataSlicer(BaseDataManager):
                 )
             elif isinstance(label_vol, np.ndarray):
                 self.seg_vol = label_vol
+            if self.downsample:
+                self.seg_vol = utils.downsample_labels(self.seg_vol)
             self._preprocess_labels()
         else:
             self.label_vol_path = None

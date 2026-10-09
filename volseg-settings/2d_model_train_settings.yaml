@@ -18,7 +18,7 @@ random_seed: # Optional integer seed. Leave blank for non-deterministic runs (de
 # Settings for Model Training
 training_axes: All # Specify axes/single axis to train on. Choose from [All, Z, X, Y].
 image_size: 512 # size of images used for training (must be multiple of 32)
-downsample: False # If True, data will be downsampled by 2
+downsample: False
 training_set_proportion: 0.85 # Proportion of images to use the training, rest are used for validation
 cuda_device: 0 # The graphics card to use (between 0 and 3 for a machine with 4 GPUs)
 num_cyc_frozen: 8 # Number of training epochs on frozen model

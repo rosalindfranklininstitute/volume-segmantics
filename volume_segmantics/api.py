@@ -78,6 +78,20 @@ class PredictionResult:
 #  Predict
 
 
+def _at_input_scale(
+    arrays: Dict[str, Any], settings: SimpleNamespace, input_shape: tuple,
+) -> Dict[str, Any]:
+    """With ``downsample`` on, every array back to the input's shape (nearest
+    neighbour), so the result and the store hold a segmentation of the volume
+    that was given. Unchanged otherwise."""
+    if not getattr(settings, "downsample", False):
+        return arrays
+    return {
+        key: utils.upsample_to(value, input_shape) if isinstance(value, np.ndarray) else value
+        for key, value in arrays.items()
+    }
+
+
 def _preprocess_prediction_volume(
     data_vol: np.ndarray, settings: SimpleNamespace
 ) -> np.ndarray:
@@ -234,6 +248,7 @@ def predict(
     # pipeline predict path would feed a raw e.g. uint16 volume straight to the
     # model at the wrong intensity scale -- a train/predict normalisation
     # mismatch that collapses the semantic output to near-empty foreground.
+    input_shape = tuple(data_vol.shape)  # before any downsampling
     data_vol = _preprocess_prediction_volume(data_vol, settings)
 
     predictor = VolSeg2dPredictor(str(model_path), settings)
@@ -296,6 +311,9 @@ def predict(
             f"yet wired through the api module. Use the legacy "
             f"`model-predict-2d` script for now."
         )
+    # With downsample on, the model saw the volume at half scale: every array
+    # returns to the input's shape before assembly, the zarr and the result.
+    arrays = _at_input_scale(arrays, settings, input_shape)
 
     #  Instance assembly dispatch  
     # kwarg overrides pipeline_config; both null -> no assembly.
@@ -316,7 +334,7 @@ def predict(
         written_zarr = volseg_write_prediction_zarr(
             arrays,
             output_path=Path(output_zarr),
-            volume_shape=tuple(data_vol.shape),
+            volume_shape=input_shape,
             inference_mode=inference_mode,
             class_metadata={"label_codes": predictor.label_codes},
             inference_config={
@@ -349,7 +367,7 @@ def predict(
         "heads_present": heads_present,
         "uncertainty_provider": uncertainty_provider,
         "instance_assembly_backend": effective_backend,
-        "volume_shape": list(data_vol.shape),
+        "volume_shape": list(input_shape),
         "voxel_size_nm": list(voxel_size),
         "class_metadata": {"label_codes": predictor.label_codes},
     }
