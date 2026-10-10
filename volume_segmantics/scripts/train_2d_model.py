@@ -360,6 +360,10 @@ def _rank0_cleanup_slices(slicer, root_path=None) -> None:
     DDP-safe: barriers in so rank 0's :class:`VolSegDiagnosticsCallback`
     has finished reading the validation slices before any rank
     attempts to delete them. Non-distributed runs short-circuit.
+
+    Setting the environment variable ``VOLSEG_KEEP_SLICES`` to ``1``,
+    ``true`` or ``yes`` keeps the slices on disk (the sentinel is still
+    cleared) so a run's intermediate images can be inspected afterwards.
     """
     try:
         import torch.distributed as dist
@@ -383,8 +387,20 @@ def _rank0_cleanup_slices(slicer, root_path=None) -> None:
     # owns one and is responsible for cleaning the slices + the sentinel.
     if root_path is not None:
         _clear_slicing_sentinel(root_path)
+    if _keep_slices_requested():
+        logging.info(
+            "VOLSEG_KEEP_SLICES is set: keeping the sliced images under %s.",
+            root_path,
+        )
+        return
     if slicer is not None:
         slicer.clean_up_slices()
+
+
+def _keep_slices_requested() -> bool:
+    """True when ``VOLSEG_KEEP_SLICES`` asks to keep the per-run slices."""
+    value = os.environ.get("VOLSEG_KEEP_SLICES", "")
+    return value.strip().lower() in ("1", "true", "yes")
 
 def run_unlabeled_slicer(data_vols, unlabeled_output_dir: Path, settings):
     """

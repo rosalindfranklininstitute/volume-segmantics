@@ -117,3 +117,26 @@ class TestRankZeroCleanup:
             _set_rank("0")
             m._rank0_cleanup_slices(None, root)  # worker-path slicer is None
             assert not m._slicing_sentinel_path(root).exists()
+
+    @pytest.mark.parametrize("value", ["1", "true", "YES"])
+    def test_rank_zero_keeps_slices_when_requested(self, restore_local_rank, monkeypatch, value):
+        monkeypatch.setenv("VOLSEG_KEEP_SLICES", value)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            m._mark_slicing_complete(root)
+            _set_rank("0")
+            slicer = _FakeSlicer()
+            m._rank0_cleanup_slices(slicer, root)
+            assert slicer.cleaned is False
+            assert not m._slicing_sentinel_path(root).exists()
+
+    @pytest.mark.parametrize("value", ["", "0", "no"])
+    def test_rank_zero_cleans_when_keep_not_requested(self, restore_local_rank, monkeypatch, value):
+        monkeypatch.setenv("VOLSEG_KEEP_SLICES", value)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            m._mark_slicing_complete(root)
+            _set_rank("0")
+            slicer = _FakeSlicer()
+            m._rank0_cleanup_slices(slicer, root)
+            assert slicer.cleaned is True

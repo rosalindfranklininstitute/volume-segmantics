@@ -64,8 +64,8 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/semantic_cell_qa/predict_semantic/*_vol_pred.tif
+  - ${artifact:predict_semantic_pred}
   - --gt-label
-  - training_data/platelet_50_cell_SEMANTIC.tif
+  - ${path:label}
   - --min-dice
   - '0.85'

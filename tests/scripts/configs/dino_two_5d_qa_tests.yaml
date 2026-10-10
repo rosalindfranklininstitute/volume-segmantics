@@ -68,7 +68,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_two_5d_qa/qa_predict_dino_3slice_medium/*_vol_pred.*
+  - ${artifact:qa_predict_dino_3slice_medium_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
@@ -90,7 +90,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_two_5d_qa/qa_predict_dino_3slice_entropy/*_vol_pred.*
+  - ${artifact:qa_predict_dino_3slice_entropy_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
@@ -130,7 +130,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_two_5d_qa/qa_predict_dino_5slice_medium/*_vol_pred.*
+  - ${artifact:qa_predict_dino_5slice_medium_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
@@ -152,7 +152,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_two_5d_qa/qa_predict_dino_5slice_entropy/*_vol_pred.*
+  - ${artifact:qa_predict_dino_5slice_entropy_pred}
   - --gt-label
   - ${path:label}
   - --min-dice

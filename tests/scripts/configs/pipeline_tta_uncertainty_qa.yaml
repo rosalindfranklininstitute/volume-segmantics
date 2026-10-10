@@ -83,7 +83,7 @@ tests:
   - --pred-key
   - teacher_argmax
   - --gt-label
-  - training_data/vessels_256cube_LABELS.h5
+  - ${path:label}
   - --min-dice
   - '0.5'
 - name: assert_variance_nonneg

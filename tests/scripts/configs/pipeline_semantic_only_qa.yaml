@@ -83,6 +83,6 @@ tests:
   - --pred-key
   - teacher_argmax
   - --gt-label
-  - training_data/platelet_50_cell_SEMANTIC.tif
+  - ${path:label}
   - --min-dice
   - '0.85'

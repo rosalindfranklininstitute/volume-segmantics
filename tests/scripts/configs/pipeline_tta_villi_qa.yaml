@@ -83,7 +83,7 @@ tests:
   - --pred-key
   - teacher_argmax
   - --gt-label
-  - training_data/sample_123761_VILLI_LABELS.tiff
+  - ${path:label}
   - --min-dice
   - '0.5'
 - name: assert_variance_nonneg

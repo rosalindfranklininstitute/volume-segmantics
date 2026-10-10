@@ -49,13 +49,22 @@ Tokens in step `args` are resolved automatically:
 - `${path:image}`, `${path:label}`, `${path:unlabeled}`, `${path:run_dir}`
 - `${path:unlabeled_all}` — expands to all configured unlabeled volumes
 - `${path:task2}`, `${path:task3}` — multitask label volumes
+- `${path:instance_label}` — instance ground truth (`paths.instance_label`); a step
+  that references it is skipped when the active data set has none
 - `${model:<model_key>}` — path to a model registered by a previous train step
 - `${artifact:<artifact_key>}` — path to an artifact from a previous step
+- `${artifact:<predict step>_pred}` — the volume a `predict` step wrote, as a glob
+  (`*_vol_pred.*`), registered automatically; `pred_key` on the step renames it
+
+Step args must use these tokens rather than literal `tmp/...` or
+`training_data/...` paths: a `--data-profile` moves every run directory to
+`<output_root>_<profile>` and swaps the volumes, and a literal path would keep
+pointing at the default data.
 
 
 ## Customizing data paths
 
-All configs default to `training_data/vessels_256cube_*.h5`. To use your own data, edit the `paths:` section:
+All configs default to `training_data/vessels_256cube_*.h5`. To use your own data, edit the `paths:` section (a `--data-profile` replaces this whole block with the profile's paths):
 
 ```yaml
 paths:

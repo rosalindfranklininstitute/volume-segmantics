@@ -505,38 +505,38 @@ def assert_loss_decreasing(
 
 
 def assert_val_dice_within(
-    ckpt_a: Path, ckpt_b: Path, *, max_drift: float = 0.03,
+    ckpt_a: Path, ckpt_b: Path, *, max_drift: float = 0.03, key: str = "loss_val",
 ) -> None:
-    """Read ``best_val_loss`` / ``best_val_dice`` / ``loss_val`` from two
-    checkpoints and assert |a - b| <= max_drift.
+    """Read the same metric ``key`` from two checkpoints and assert
+    |a - b| <= max_drift.
 
-    ``val_fg_dice`` is the checkpoint-selection Dice the Lightning trainer
-    records in every checkpoint it writes; ``loss_val`` is the key both it and
-    the legacy raw trainer persist; ``best_val_dice`` and ``best_val_loss``
-    are forward-compatible candidates for future trainer revisions.
+    The key defaults to ``loss_val``, the validation loss both the Lightning
+    and the legacy raw-torch trainer persist. Both checkpoints must expose the
+    chosen key: the two sides are never read from different keys, so a Dice
+    is never compared with a loss.
     """
     a = _load_torch_checkpoint(ckpt_a)
     b = _load_torch_checkpoint(ckpt_b)
-    candidates = ("best_val_dice", "val_fg_dice", "best_val_loss", "loss_val")
-    val_a = val_b = None
-    for k in candidates:
-        if k in a and val_a is None:
-            val_a = float(a[k])
-        if k in b and val_b is None:
-            val_b = float(b[k])
-    if val_a is None or val_b is None:
+    missing = [
+        f"{label}={path} (keys: {sorted(k for k in ckpt if not k.endswith('state_dict'))})"
+        for label, path, ckpt in (("a", ckpt_a, a), ("b", ckpt_b, b))
+        if key not in ckpt
+    ]
+    if missing:
         raise AssertionError(
-            f"val-dice-within: neither checkpoint exposes any of {candidates}; "
-            f"a-keys={list(a.keys())[:8]} b-keys={list(b.keys())[:8]}"
+            f"val-dice-within: checkpoint does not expose {key!r}: "
+            + "; ".join(missing)
         )
+    val_a = float(a[key])
+    val_b = float(b[key])
     drift = abs(val_a - val_b)
     if drift > max_drift:
         raise AssertionError(
-            f"val-dice-within: drift={drift:.4f} > {max_drift} "
+            f"val-dice-within: {key} drift={drift:.4f} > {max_drift} "
             f"(a={val_a:.4f}, b={val_b:.4f})"
         )
     print(
-        f"[OK] val-dice-within: a={val_a:.4f}, b={val_b:.4f}, drift={drift:.4f}"
+        f"[OK] val-dice-within: {key} a={val_a:.4f}, b={val_b:.4f}, drift={drift:.4f}"
     )
 
 
@@ -679,6 +679,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("ckpt_a", type=Path)
     sp.add_argument("ckpt_b", type=Path)
     sp.add_argument("--max-drift", type=float, default=0.03)
+    sp.add_argument(
+        "--key", default="loss_val",
+        help="Checkpoint metric compared on both sides (default: loss_val).",
+    )
 
     sp = sub.add_parser("segmentation-dice")
     sp.add_argument("pred", help="Predicted volume path (may be a glob; newest wins).")
@@ -750,7 +754,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         )
     elif args.cmd == "val-dice-within":
         assert_val_dice_within(
-            args.ckpt_a, args.ckpt_b, max_drift=args.max_drift,
+            args.ckpt_a, args.ckpt_b, max_drift=args.max_drift, key=args.key,
         )
     elif args.cmd == "encoder-family":
         assert_encoder_family(args.ckpt, expect_name=args.expect_name, name_only=args.name_only)

@@ -1,6 +1,7 @@
 paths:
   image: training_data/images_and_labels_rgba/platelet-em/images/50-images.tif
   label: training_data/platelet_50_cell_SEMANTIC.tif
+  instance_label: training_data/platelet_50_cell_INSTANCE.tif
 settings_templates:
   train: volseg-settings/2d_model_train_settings.yaml
   predict: volseg-settings/2d_model_predict_settings.yaml
@@ -110,7 +111,7 @@ tests:
   args:
   - ${artifact:dw_zarr}
   - --gt-label
-  - training_data/platelet_50_cell_INSTANCE.tif
+  - ${path:instance_label}
   - --iou-threshold
   - '0.5'
   - --min-f1

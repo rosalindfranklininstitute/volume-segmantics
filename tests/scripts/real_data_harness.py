@@ -7,6 +7,11 @@ Supports reusable step types:
 - predict        : run predict_2d_model with a registered model
 - unlabeled_slicer : slice unlabeled volumes into 2D images
 - pytest         : run targeted pytest checks
+
+Assertion steps address a predict step's volume as ``${artifact:<step>_pred}``
+and the config's volumes as ``${path:label}`` / ``${path:instance_label}``;
+literal ``tmp/...`` or ``training_data/...`` paths in step args do not follow a
+``--data-profile`` and are the one thing a config must never spell.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ class HarnessContext:
     global_pipeline_overrides: Dict[str, Any] = field(default_factory=dict)
     task2_path: Optional[Path] = None
     task3_path: Optional[Path] = None
+    instance_label_path: Optional[Path] = None
     dry_run: bool = False
     models: Dict[str, Path] = field(default_factory=dict)
     artifacts: Dict[str, Path] = field(default_factory=dict)
@@ -82,6 +88,10 @@ def _run_command(command: List[str], cwd: Path, root_dir: Path, dry_run: bool = 
         raise RuntimeError(
             f"Command failed with exit code {result.returncode}: {' '.join(command)}"
         )
+
+
+# Pattern of the volume ``predict_2d_model`` writes into a run directory.
+PREDICTION_GLOB = "*_vol_pred.*"
 
 
 def _write_settings_pair(
@@ -184,6 +194,7 @@ def _resolve_token(raw: str, ctx: HarnessContext, run_dir: Path) -> str:
             "unlabeled_all": ctx.unlabeled_paths,
             "task2": ctx.task2_path,
             "task3": ctx.task3_path,
+            "instance_label": ctx.instance_label_path,
             "run_dir": run_dir,
         }
         if key not in mapping or mapping[key] is None:
@@ -320,6 +331,15 @@ def _run_predict_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
         ctx.artifacts[key] = artifact_path
         status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
         print(f"{status} Registered artifact '{key}' -> {artifact_path}")
+    # The predicted volume's name carries the date and the input stem, so it is
+    # registered as a glob under ``<step name>_pred`` (or ``pred_key``); the
+    # assertion subcommands resolve globs. Assertions reference it as
+    # ``${artifact:<step>_pred}`` instead of spelling this run directory, which
+    # moves with the data profile.
+    pred_key = str(step_cfg.get("pred_key", f"{name}_pred"))
+    ctx.artifacts[pred_key] = run_dir / PREDICTION_GLOB
+    status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
+    print(f"{status} Registered artifact '{pred_key}' -> {ctx.artifacts[pred_key]}")
 
     assert_cfg = step_cfg.get("assert_outputs", {})
     _assert_globs(
@@ -328,7 +348,6 @@ def _run_predict_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
         should_not_exist=assert_cfg.get("should_not_exist_globs", []),
         dry_run=ctx.dry_run,
     )
-    status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
     print(f"{status} Assertions passed for '{name}'")
 
 
@@ -533,9 +552,13 @@ def _build_context(root_dir: Path, cfg: Dict[str, Any], dry_run: bool = False) -
     unlabeled_raw = paths.get("unlabeled")
     task2_raw = paths.get("task2")
     task3_raw = paths.get("task3")
+    instance_label_raw = paths.get("instance_label")
     label_path = (root_dir / label_raw).resolve() if label_raw else None
     task2_path = (root_dir / str(task2_raw)).resolve() if task2_raw else None
     task3_path = (root_dir / str(task3_raw)).resolve() if task3_raw else None
+    instance_label_path = (
+        (root_dir / str(instance_label_raw)).resolve() if instance_label_raw else None
+    )
     unlabeled_paths: List[Path] = []
     if isinstance(unlabeled_raw, list):
         unlabeled_paths = [(root_dir / str(item)).resolve() for item in unlabeled_raw]
@@ -568,6 +591,8 @@ def _build_context(root_dir: Path, cfg: Dict[str, Any], dry_run: bool = False) -
         raise FileNotFoundError(f"Task2 path not found: {task2_path}")
     if not dry_run and task3_path is not None and not task3_path.exists():
         raise FileNotFoundError(f"Task3 path not found: {task3_path}")
+    if not dry_run and instance_label_path is not None and not instance_label_path.exists():
+        raise FileNotFoundError(f"Instance label path not found: {instance_label_path}")
     if not train_template.exists():
         raise FileNotFoundError(f"Train template not found: {train_template}")
     if not pred_template.exists():
@@ -590,6 +615,7 @@ def _build_context(root_dir: Path, cfg: Dict[str, Any], dry_run: bool = False) -
         global_pipeline_overrides=global_overrides.get("pipeline", {}),
         task2_path=task2_path,
         task3_path=task3_path,
+        instance_label_path=instance_label_path,
         dry_run=dry_run,
     )
 
@@ -724,7 +750,31 @@ def _should_skip_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> bool:
             if f"${{artifact:{key}}}" in str(arg):
                 print(f"[SKIP] {name}: depends on skipped artifact '{key}'.")
                 return True
+
+    # A path the config's data set has but this data profile does not (an
+    # instance-label volume, say): the step that needs it is skipped rather
+    # than scored against the wrong volume.
+    for arg in step_cfg.get("args", []) or []:
+        missing = _missing_path_key(str(arg), ctx)
+        if missing is not None:
+            print(
+                f"[SKIP] {name}: no '{missing}' path for this data set, so "
+                f"${{path:{missing}}} cannot be resolved."
+            )
+            return True
     return False
+
+
+_OPTIONAL_PATH_KEYS = ("instance_label", "task2", "task3", "unlabeled")
+
+
+def _missing_path_key(arg: str, ctx: HarnessContext) -> Optional[str]:
+    """The optional ``${path:<key>}`` in ``arg`` that the context cannot
+    supply, or ``None``."""
+    for key in _OPTIONAL_PATH_KEYS:
+        if f"${{path:{key}}}" in arg and getattr(ctx, f"{key}_path", None) is None:
+            return key
+    return None
 
 QUALITY_STEP_TYPES = {"pipeline_assert"}
 
@@ -760,9 +810,15 @@ def _run_step(context: HarnessContext, test_cfg: Dict[str, Any]) -> Optional[str
 def _apply_profile(
     cfg: Dict[str, Any], path_overrides: Optional[Dict[str, Any]], output_suffix: Optional[str]
 ) -> None:
-    """Apply a data-profile's path overrides and keep its outputs separate."""
+    """Apply a data-profile's paths and keep its outputs separate.
+
+    The profile *is* the data set: its ``paths`` replace the config's block
+    wholesale, so a path the profile does not define (an instance-label
+    volume) is absent rather than silently left pointing at the config's own
+    data.
+    """
     if path_overrides:
-        _deep_update(cfg.setdefault("paths", {}), path_overrides)
+        cfg["paths"] = copy.deepcopy(path_overrides)
     if output_suffix:
         cfg["output_root"] = cfg.get("output_root", "tmp/smoke") + f"_{output_suffix}"
 

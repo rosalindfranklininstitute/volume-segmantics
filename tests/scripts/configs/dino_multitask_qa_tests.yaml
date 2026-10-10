@@ -114,7 +114,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_multitask_qa/qa_dino_s_predict_medium/*_vol_pred.*
+  - ${artifact:qa_dino_s_predict_medium_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
@@ -134,7 +134,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_multitask_qa/qa_dino_s_predict_entropy/*_vol_pred.*
+  - ${artifact:qa_dino_s_predict_entropy_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
@@ -221,7 +221,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_multitask_qa/qa_dino_b_predict_medium/*_vol_pred.*
+  - ${artifact:qa_dino_b_predict_medium_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
@@ -237,7 +237,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_multitask_qa/qa_dino_b_predict_high/*_vol_pred.*
+  - ${artifact:qa_dino_b_predict_high_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
@@ -257,7 +257,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_multitask_qa/qa_dino_b_predict_entropy/*_vol_pred.*
+  - ${artifact:qa_dino_b_predict_entropy_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
@@ -323,7 +323,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_multitask_qa/qa_dino_b_predict_3task_sdf/*_vol_pred.*
+  - ${artifact:qa_dino_b_predict_3task_sdf_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
@@ -341,7 +341,7 @@ tests:
   type: pipeline_assert
   subcommand: segmentation-dice
   args:
-  - tmp/dino_multitask_qa/qa_dino_b_predict_3task_edt/*_vol_pred.*
+  - ${artifact:qa_dino_b_predict_3task_edt_pred}
   - --gt-label
   - ${path:label}
   - --min-dice
