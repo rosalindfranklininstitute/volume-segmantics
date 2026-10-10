@@ -282,15 +282,20 @@ def _load_label_volume(path: Path) -> np.ndarray:
     raise ValueError(f"unsupported label volume extension: {suffix}")
 
 
+DEFAULT_MAX_MULTIPLIER = 3.0
+DEFAULT_MIN_MULTIPLIER = 1.0 / 3.0
+
+
 def assert_instance_count_plausible(
     zarr_path: Path,
     *,
     gt_label_path: Path,
     min_count: int = 2,
-    max_multiplier: float = 100.0,
-    min_multiplier: float = 0.0,
+    max_multiplier: float = DEFAULT_MAX_MULTIPLIER,
+    min_multiplier: float = DEFAULT_MIN_MULTIPLIER,
     gt_mode: str = "cc",
     instance_labels_key: str = "instance_labels",
+    structural_only: bool = False,
 ) -> None:
     """Predicted instance count vs a ground-truth reference count.
 
@@ -304,9 +309,19 @@ def assert_instance_count_plausible(
 
     The predicted count must lie in
     ``[min_multiplier * gt_count, max_multiplier * gt_count]`` (and be at
-    least ``min_count``). ``min_multiplier=0`` (default) imposes no lower bound,
-    preserving the original behaviour.
+    least ``min_count``). The defaults allow a factor of three either way; a
+    config that needs more must say so in its own numbers.
+
+    ``structural_only`` checks ``min_count`` alone and prints the ratio for
+    information: the mode for a smoke config whose one-epoch model cannot be
+    judged on counts. Instance *quality* is the job of ``instance-detection``
+    (matched-object F1), which the instance-cell QA config applies.
     """
+    if min_multiplier > max_multiplier:
+        raise ValueError(
+            f"instance-count: min_multiplier={min_multiplier} > "
+            f"max_multiplier={max_multiplier}"
+        )
     g = _open_zarr(zarr_path)
     inst_arr = np.asarray(g[instance_labels_key][:])
     pred_count = int(np.unique(inst_arr).size) - 1  # subtract bg.
@@ -326,6 +341,14 @@ def assert_instance_count_plausible(
         raise ValueError(f"gt_mode must be 'cc' or 'labels'; got {gt_mode!r}")
     gt_count = max(int(gt_count), 1)
 
+    if structural_only:
+        print(
+            f"[OK] instance-count (structural only): pred={pred_count} >= "
+            f"{min_count}; gt_count={gt_count} (mode={gt_mode}), ratio="
+            f"{pred_count / gt_count:.2f}x not gated"
+        )
+        return
+
     upper = int(max_multiplier * gt_count)
     if pred_count > upper:
         raise AssertionError(
@@ -335,7 +358,7 @@ def assert_instance_count_plausible(
             f"{max_multiplier}."
         )
     if min_multiplier > 0:
-        lower = math.floor(min_multiplier * gt_count)
+        lower = math.ceil(min_multiplier * gt_count)
         if pred_count < lower:
             raise AssertionError(
                 f"instance-count: zarr has {pred_count} instances; gt "
@@ -688,10 +711,20 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("zarr", type=Path)
     sp.add_argument("--gt-label", type=Path, required=True)
     sp.add_argument("--min-count", type=int, default=2)
-    sp.add_argument("--max-multiplier", type=float, default=100.0)
-    sp.add_argument("--min-multiplier", type=float, default=0.0)
+    sp.add_argument(
+        "--max-multiplier", type=float, default=DEFAULT_MAX_MULTIPLIER,
+        help="Predicted count may be at most this times the GT count (default 3).",
+    )
+    sp.add_argument(
+        "--min-multiplier", type=float, default=DEFAULT_MIN_MULTIPLIER,
+        help="Predicted count must be at least this times the GT count (default 1/3).",
+    )
     sp.add_argument("--gt-mode", choices=("cc", "labels"), default="cc")
     sp.add_argument("--instance-key", default="instance_labels")
+    sp.add_argument(
+        "--structural-only", action="store_true", dest="structural_only",
+        help="Check --min-count only and print the ratio; for smoke models that cannot be judged on counts.",
+    )
 
     sp = sub.add_parser("instance-detection")
     sp.add_argument("zarr", type=Path)
@@ -768,6 +801,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             min_multiplier=args.min_multiplier,
             gt_mode=args.gt_mode,
             instance_labels_key=args.instance_key,
+            structural_only=args.structural_only,
         )
     elif args.cmd == "instance-detection":
         assert_instance_detection_f1(

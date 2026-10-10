@@ -1,3 +1,11 @@
+# Instance-assembly smoke on the vessel volume: trains one epoch at 64 pixels,
+# then runs u-Segment3D through both per-axis producers (distance watershed and
+# semantic connected components) and checks the zarr layout.
+#
+# The instance-count gates are structural only: a one-epoch model over-segments
+# the vessel network by one to two orders of magnitude, so its count says
+# nothing about quality. Instance quality is gated by matched-object F1 in
+# pipeline_instance_cell_qa.yaml, on data whose objects are real instances.
 paths:
   image: training_data/vessels_256cube_DATA.h5
   label: training_data/vessels_256cube_LABELS.h5
@@ -114,8 +122,7 @@ tests:
   - ${artifact:dw_zarr}
   - --gt-label
   - ${path:label}
-  - --max-multiplier
-  - '6000'
+  - --structural-only
 - name: predict_semantic_cc
   type: pipeline_predict_zarr
   model_key: pipeline_instance_seg_model
@@ -143,5 +150,4 @@ tests:
   - ${artifact:cc_zarr}
   - --gt-label
   - ${path:label}
-  - --max-multiplier
-  - '6000'
+  - --structural-only
