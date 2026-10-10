@@ -85,8 +85,7 @@ tests:
   - tta_entropy_map
   - --min
   - '0.0'
-  - --max
-  - '0.7'
+  - --max-log-classes
 - name: assert_variance_low_max_prob
   type: pipeline_assert
   subcommand: variance-low-max-prob

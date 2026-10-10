@@ -2,7 +2,7 @@
 # vessel smoke (pipeline_tta_uncertainty_smoke.yaml) but on villi, so the
 # uncertainty/confidence-map path is exercised on both binary datasets.
 # Structural only (1 epoch): checks the 4 TTA arrays exist, variance>=0,
-# entropy in [0, ln2], and variance tracks low max-prob (loose Spearman).
+# entropy in [0, ln C], and variance tracks low max-prob (loose Spearman).
 paths:
   image: training_data/sample_123761_IMAGE.tiff
   label: training_data/sample_123761_VILLI_LABELS.tiff
@@ -90,8 +90,7 @@ tests:
   - tta_entropy_map
   - --min
   - '0.0'
-  - --max
-  - '0.7'
+  - --max-log-classes
 - name: assert_variance_low_max_prob
   # Smoke = 1-epoch model: only require a *positive* variance<->uncertainty
   # correlation (the path works); the QA config gates the stronger value.

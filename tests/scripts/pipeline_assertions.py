@@ -183,17 +183,47 @@ def assert_zarr_keys(zarr_path: Path, expected_keys: Sequence[str]) -> None:
 # zarr-array-range 
 
 
+def _zarr_item(group, key: str):
+    cur = group
+    for part in key.split("/"):
+        cur = cur[part]
+    return cur
+
+
 def assert_zarr_array_range(
     zarr_path: Path, *, key: str,
     minimum: Optional[float] = None,
     maximum: Optional[float] = None,
+    max_log_classes: bool = False,
+    classes_key: str = "teacher_probs",
     tol: float = 1e-5,
 ) -> None:
+    """Assert ``minimum - tol <= array <= maximum + tol``.
+
+    ``max_log_classes`` sets the maximum to ``ln C``, with ``C`` the class
+    count read from the first axis of ``classes_key`` in the same zarr: the
+    upper bound of a per-voxel entropy over ``C`` classes. A fixed ``--max``
+    of ln 2 only holds for binary output; three classes reach ln 3.
+    """
+    if max_log_classes and maximum is not None:
+        raise ValueError("zarr-array-range: give --max or --max-log-classes, not both")
     g = _open_zarr(zarr_path)
-    cur = g
-    for part in key.split("/"):
-        cur = cur[part]
-    arr = np.asarray(cur[:])
+    arr = np.asarray(_zarr_item(g, key)[:])
+    bound_label = ""
+    if max_log_classes:
+        if classes_key not in g:
+            raise AssertionError(
+                f"zarr-array-range: {classes_key!r} missing from zarr; cannot "
+                f"derive the class count for ln C."
+            )
+        n_classes = int(_zarr_item(g, classes_key).shape[0])
+        if n_classes < 2:
+            raise AssertionError(
+                f"zarr-array-range: {classes_key} has {n_classes} class channel(s); "
+                f"an entropy bound needs at least 2."
+            )
+        maximum = math.log(n_classes)
+        bound_label = f" (ln {n_classes} = {maximum:.4f})"
     arr_min = float(arr.min())
     arr_max = float(arr.max())
     if minimum is not None and arr_min < (minimum - tol):
@@ -202,10 +232,11 @@ def assert_zarr_array_range(
         )
     if maximum is not None and arr_max > (maximum + tol):
         raise AssertionError(
-            f"zarr-array-range: {key} max={arr_max} > {maximum} (tol={tol})"
+            f"zarr-array-range: {key} max={arr_max} > {maximum}{bound_label} (tol={tol})"
         )
     print(
         f"[OK] zarr-array-range: {key} min={arr_min:.4f} max={arr_max:.4f}"
+        + (f" <= ln {n_classes} = {maximum:.4f}" if max_log_classes else "")
     )
 
 
@@ -641,6 +672,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--key", required=True)
     sp.add_argument("--min", type=float, default=None, dest="minimum")
     sp.add_argument("--max", type=float, default=None, dest="maximum")
+    sp.add_argument(
+        "--max-log-classes", action="store_true", dest="max_log_classes",
+        help="Upper bound = ln C, C = class channels of --classes-key (an entropy map's ceiling).",
+    )
+    sp.add_argument("--classes-key", default="teacher_probs", dest="classes_key")
     sp.add_argument("--tol", type=float, default=1e-5)
 
     sp = sub.add_parser("zarr-array-shape")
@@ -715,6 +751,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             key=args.key,
             minimum=args.minimum,
             maximum=args.maximum,
+            max_log_classes=args.max_log_classes,
+            classes_key=args.classes_key,
             tol=args.tol,
         )
     elif args.cmd == "zarr-array-shape":
