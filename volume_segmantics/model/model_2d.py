@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from dataclasses import dataclass
 
 import segmentation_models_pytorch as smp
@@ -930,10 +930,19 @@ def _load_state_dict_checked(module, state_dict, *, context=""):
       sample) so partial loads are visible instead of silent.
     """
     where = f" ({context})" if context else ""
-    total_model_keys = len(module.state_dict())
-    incompatible = module.load_state_dict(state_dict, strict=False)
-    missing = list(incompatible.missing_keys)
-    unexpected = list(incompatible.unexpected_keys)
+    model_keys = list(module.state_dict().keys())
+    total_model_keys = len(model_keys)
+    module.load_state_dict(state_dict, strict=False)
+    # The comparison is made from the key sets rather than the call's return
+    # value: segmentation_models_pytorch overrides ``load_state_dict`` on its
+    # encoders and models (dropping ``fc.*``, renaming timm keys) and returns
+    # nothing, so the ``_IncompatibleKeys`` of a plain module is not reliable
+    # here. ``state_dict`` is read after the call, so an in-place rename by
+    # such an override counts as the keys it actually loaded.
+    provided = set(state_dict.keys())
+    missing = [k for k in model_keys if k not in provided]
+    unexpected = [k for k in provided if k not in set(model_keys)]
+    incompatible = torch.nn.modules.module._IncompatibleKeys(missing, unexpected)
     matched = total_model_keys - len(missing)
 
     if total_model_keys > 0 and matched == 0:
@@ -1125,14 +1134,163 @@ def create_model_from_file_full_weights(
     logging.info("Loading model dictionary from file.")
 
 
-    model_dict = torch.load(weights_fn, map_location=map_location, weights_only=False)
+    state_dict = _state_dict_from_file(weights_fn, map_location)
     check_checkpoint_encoder_family(
-        model_dict, model_struc_dict.get("encoder_name"), context=str(weights_fn),
+        state_dict, model_struc_dict.get("encoder_name"), context=str(weights_fn),
     )
     model = create_model_on_device(device_num, model_struc_dict)
 
     logging.info("Loading in the saved weights.")
-    _load_state_dict_checked(model, model_dict, context=str(weights_fn))
+    _load_state_dict_checked(model, state_dict, context=str(weights_fn))
     model.to(device=map_location)
     num_classes = 2 #not used
     return model, num_classes, None
+
+
+#  Pretrained-weight settings (``full_weights_path`` / ``encoder_weights_path``)
+
+_WEIGHT_PATH_UNSET = {"", "false", "none", "null", "no", "0"}
+
+
+def weight_path_setting(settings, name: str) -> Optional[Path]:
+    """The path a training setting names, or ``None`` when it is unset.
+
+    The settings files ship ``full_weights_path: False`` and
+    ``encoder_weights_path: False``; ``None``, ``False`` and the strings
+    ``False`` / ``None`` / ``null`` / empty all mean unset.
+    """
+    value = getattr(settings, name, None)
+    if value is None or value is False:
+        return None
+    text = str(value).strip()
+    if text.lower() in _WEIGHT_PATH_UNSET:
+        return None
+    return Path(text).expanduser()
+
+
+def _state_dict_from_file(weights_fn: Path, map_location) -> Dict[str, torch.Tensor]:
+    """The model state dict held in ``weights_fn``, whichever way it was saved.
+
+    Accepts a vol-seg checkpoint (``model_state_dict`` plus metadata), a
+    Lightning ``.ckpt`` (``state_dict``), a bare state dict, a pickled module,
+    and a Mean Teacher dict (``student``); ``module.`` prefixes from
+    ``DataParallel`` are dropped.
+    """
+    obj = torch.load(Path(weights_fn), map_location=map_location, weights_only=False)
+    if hasattr(obj, "state_dict") and not isinstance(obj, dict):
+        obj = obj.state_dict()
+    if not isinstance(obj, dict):
+        raise RuntimeError(f"{weights_fn} does not hold a state dict (got {type(obj).__name__}).")
+    sd = obj
+    for key in ("model_state_dict", "state_dict", "student"):
+        if key in sd and isinstance(sd[key], dict):
+            sd = sd[key]
+    return {
+        (k[len("module."):] if k.startswith("module.") else k): v
+        for k, v in sd.items()
+    }
+
+
+def _existing_weights_file(weights_fn: Path, setting: str) -> Path:
+    weights_fn = Path(weights_fn).expanduser().resolve()
+    if not weights_fn.is_file():
+        raise FileNotFoundError(f"{setting} names {weights_fn}, which does not exist.")
+    return weights_fn
+
+
+def load_full_weights_into(
+    model: nn.Module, weights_fn: Path, *, encoder_name: Optional[str] = None,
+    map_location="cpu",
+) -> None:
+    """Load a saved model's weights into ``model`` (``full_weights_path``).
+
+    The checkpoint's encoder family is checked against ``encoder_name`` and a
+    checkpoint that matches none of the model's parameters is refused.
+    """
+    weights_fn = _existing_weights_file(weights_fn, "full_weights_path")
+    state_dict = _state_dict_from_file(weights_fn, map_location)
+    if encoder_name is not None:
+        check_checkpoint_encoder_family(state_dict, encoder_name, context=str(weights_fn))
+    logging.info("Loading full model weights from %s.", weights_fn)
+    _load_state_dict_checked(model, state_dict, context=f"full_weights_path {weights_fn}")
+
+
+def _first_conv(encoder: nn.Module) -> Optional[Tuple[str, nn.Conv2d]]:
+    for name, module in encoder.named_modules():
+        if isinstance(module, nn.Conv2d):
+            return name, module
+    return None
+
+
+def _adapt_first_conv(encoder: nn.Module, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """Fit the saved first-conv filters to this encoder's input channel count.
+
+    ImageNet encoders are saved with three input channels; vol-seg trains on
+    one (grayscale) or ``num_slices`` (2.5D). One channel takes the sum of the
+    RGB filters, as the legacy trainer did; any other count takes the mean
+    filter repeated and rescaled so the response magnitude is kept.
+    """
+    found = _first_conv(encoder)
+    if found is None:
+        return state_dict
+    name, conv = found
+    key = f"{name}.weight" if name else "weight"
+    weight = state_dict.get(key)
+    if weight is None or weight.ndim != 4 or weight.shape[1] == conv.in_channels:
+        return state_dict
+    want, have = conv.in_channels, weight.shape[1]
+    adapted = dict(state_dict)
+    if want == 1:
+        adapted[key] = weight.sum(1, keepdim=True)
+    else:
+        adapted[key] = weight.mean(1, keepdim=True).repeat(1, want, 1, 1) * (have / want)
+    logging.info(
+        "Adapted %s from %d to %d input channel(s) for the encoder's first conv.",
+        key, have, want,
+    )
+    return adapted
+
+
+def load_encoder_weights_into(model: nn.Module, weights_fn: Path, *, map_location="cpu") -> None:
+    """Load saved encoder weights into ``model.encoder`` (``encoder_weights_path``).
+
+    The file may hold a bare encoder state dict or a whole model's checkpoint,
+    in which case only its ``encoder.`` tensors are used. The first conv is
+    adapted to the encoder's input channel count. A file that matches none of
+    the encoder's parameters is refused rather than loaded as nothing.
+    """
+    encoder = getattr(model, "encoder", None)
+    if not isinstance(encoder, nn.Module):
+        raise RuntimeError(
+            f"encoder_weights_path: {type(model).__name__} has no 'encoder' module to load into."
+        )
+    weights_fn = _existing_weights_file(weights_fn, "encoder_weights_path")
+    state_dict = _state_dict_from_file(weights_fn, map_location)
+    if any(k.startswith("encoder.") for k in state_dict):
+        state_dict = {
+            k[len("encoder."):]: v for k, v in state_dict.items() if k.startswith("encoder.")
+        }
+    state_dict = _adapt_first_conv(encoder, state_dict)
+    logging.info("Loading encoder weights from %s.", weights_fn)
+    _load_state_dict_checked(encoder, state_dict, context=f"encoder_weights_path {weights_fn}")
+
+
+def apply_weight_path_settings(
+    model: nn.Module, settings, *, encoder_name: Optional[str] = None, map_location="cpu",
+) -> List[str]:
+    """Apply ``full_weights_path`` then ``encoder_weights_path`` from ``settings``
+    to ``model``; returns a note per setting applied (empty when both are unset).
+
+    The order matches the legacy trainer: a full checkpoint first, then encoder
+    weights on top of it.
+    """
+    applied: List[str] = []
+    full = weight_path_setting(settings, "full_weights_path")
+    if full is not None:
+        load_full_weights_into(model, full, encoder_name=encoder_name, map_location=map_location)
+        applied.append(f"full_weights_path={full}")
+    enc = weight_path_setting(settings, "encoder_weights_path")
+    if enc is not None:
+        load_encoder_weights_into(model, enc, map_location=map_location)
+        applied.append(f"encoder_weights_path={enc}")
+    return applied

@@ -28,6 +28,7 @@ from volume_segmantics.model.operations.trainer_losses import (
     get_rampup_ratio,
     per_head_consistency_loss,
 )
+from volume_segmantics.model.model_2d import apply_weight_path_settings
 from volume_segmantics.model.pipeline_multitask_unet import PipelineMultitaskUnet
 from volume_segmantics.model.training.mean_teacher import (
     EMASchedule,
@@ -449,6 +450,11 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             in_channels=resolved_in_channels,
             decoder_channels=effective_decoder_channels,
         )
+        # ``full_weights_path`` / ``encoder_weights_path`` from the train
+        # settings, applied before the module wraps the model (so an EMA
+        # teacher starts from the loaded weights too).
+        for note in apply_weight_path_settings(model, settings, encoder_name=encoder_name):
+            logging.info("Lightning trainer: loaded %s", note)
 
         calculator = PipelineMultiTaskLossCalculator.from_pipeline_config(
             pipeline_config, num_classes=num_classes,
