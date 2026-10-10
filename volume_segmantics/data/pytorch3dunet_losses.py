@@ -589,10 +589,22 @@ class GeneralizedDiceLoss(_AbstractDiceLoss):
             input = torch.cat((input, 1 - input), dim=0)
             target = torch.cat((target, 1 - target), dim=0)
 
-        # GDL weighting: the contribution of each label is corrected by the inverse of its volume
+        # GDL weighting: the contribution of each label is corrected by the
+        # inverse of its squared volume. A class absent from the batch has no
+        # volume, so its weight is infinite; it takes the largest weight of the
+        # classes that are present (as MONAI's GeneralizedDiceLoss does)
+        # instead of 1 / epsilon.
         w_l = target.sum(-1)
-        w_l = 1 / (w_l * w_l).clamp(min=self.epsilon)
-        w_l.requires_grad = False
+        w_l = 1 / (w_l * w_l)
+        absent = torch.isinf(w_l)
+        if absent.all():
+            # No foreground of any class in the batch: weight the classes
+            # equally so the loss still penalises false positives.
+            w_l = torch.ones_like(w_l)
+        elif absent.any():
+            w_l = torch.where(absent, torch.zeros_like(w_l), w_l)
+            w_l = w_l + absent * w_l.max()
+        w_l = w_l.detach()
 
         intersect = (input * target).sum(-1)
         intersect = intersect * w_l
