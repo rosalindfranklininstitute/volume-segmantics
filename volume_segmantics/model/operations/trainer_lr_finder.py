@@ -18,6 +18,30 @@ from tqdm import tqdm
 import volume_segmantics.utilities.config as cfg
 
 
+# A selected rate below this cannot move the weights in a phase of a few epochs.
+MIN_USEFUL_LR = 1e-6
+
+
+def warn_if_learning_rate_too_low(lr: float, *, start_lr: float, end_lr: float, phase: str) -> bool:
+    """Log a warning when a phase's selected rate is below :data:`MIN_USEFUL_LR`.
+
+    The unfrozen phase searches ``starting_lr / lr_reduce_factor`` to
+    ``end_lr / lr_reduce_factor``; with the factor at 500 that range was
+    1e-7 to 2e-6 and the phase selected about 3e-7.
+    Returns ``True`` when the warning was raised.
+    """
+    if lr >= MIN_USEFUL_LR:
+        return False
+    logging.warning(
+        "The %s phase selected a learning rate of %.1e from a search range of "
+        "%.1e to %.1e, below %.0e; this phase will barely change the weights. "
+        "Check lr_reduce_factor (the unfrozen range is starting_lr / "
+        "lr_reduce_factor to end_lr / lr_reduce_factor) and starting_lr / end_lr.",
+        phase, lr, start_lr, end_lr, MIN_USEFUL_LR,
+    )
+    return True
+
+
 class LearningRateFinder:
     """
     Finds optimal learning rate using exponential LR scheduling.
@@ -83,6 +107,12 @@ class LearningRateFinder:
         # Find optimal LR from graph
         lr_to_use = self._find_lr_from_graph(lr_find_loss, lr_find_lr)
         logging.info(f"Selected learning rate: {lr_to_use:.6f}")
+        
+        warn_if_learning_rate_too_low(
+        
+            lr_to_use, start_lr=self.starting_lr, end_lr=self.end_lr, phase="current",
+        
+        )
         
         return lr_to_use
     

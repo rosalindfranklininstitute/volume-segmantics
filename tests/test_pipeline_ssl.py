@@ -63,6 +63,13 @@ from volume_segmantics.model.training.pseudo_labeling import (
 # EMASchedule 
 
 
+def _optimizer_of(configured):
+    """The optimizer from ``configure_optimizers``, which returns a bare
+    optimizer under ``lr_policy: constant`` and an optimizer-plus-schedule
+    dict under the default ``find_onecycle``."""
+    return configured["optimizer"] if isinstance(configured, dict) else configured
+
+
 def test_ema_schedule_defaults():
     s = EMASchedule()
     assert s.alpha_warmup == 0.99
@@ -557,7 +564,7 @@ def test_lightning_ssl_optimizer_only_sees_student_params():
         cfg, settings=settings, num_classes=3,
         in_channels=1, total_steps=10,
     )
-    opt = mod.configure_optimizers()
+    opt = _optimizer_of(mod.configure_optimizers())
     # Sum the param counts across groups.
     opt_param_count = sum(len(g["params"]) for g in opt.param_groups)
     student_param_count = len(list(mod._underlying_student.parameters()))

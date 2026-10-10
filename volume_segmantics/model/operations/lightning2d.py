@@ -315,6 +315,12 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         # Lightning calls ``self.train()`` at every epoch boundary.
         # ``freeze_encoder`` / ``unfreeze_encoder`` flip this.
         self._encoder_frozen: bool = False
+        # Keep the encoder's BatchNorm running statistics fixed after the
+        # unfreeze as well. 
+        self._freeze_encoder_bn_stats: bool = bool(
+            getattr(settings, "freeze_encoder_bn_stats", True)
+            if getattr(settings, "freeze_encoder_bn_stats", None) is not None else True
+        )
 
         # SSL: wrap the student in MeanTeacherModel iff the
         # pipeline.yaml ema_teacher block is enabled. The Mean Teacher
@@ -356,6 +362,9 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             settings, teacher_available=self._ssl_enabled,
         )
         self.total_steps = total_steps if total_steps is not None else 1
+        # A new module starts in training mode; pin the statistics now rather
+        # than waiting for the first ``train()`` call.
+        self._pin_encoder_bn_eval()
         self.label_codes: Dict[int, str] = dict(label_codes or {})
 
         # Hyperparameters that go into the Lightning checkpoint manifest.
@@ -756,6 +765,19 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
     #  Optimizer + scheduler 
 
     def configure_optimizers(self):
+        """AdamW under the settings' ``lr_policy``.
+
+        ``constant`` trains at ``starting_lr`` with no schedule. ``find_onecycle``
+        (the default, the legacy trainer's semantics) returns the same optimizer
+        with a placeholder OneCycle schedule; :class:`LRPolicyCallback` runs the
+        learning-rate sweep at the start of each phase and replaces the group
+        rates and the schedule with the ones it finds. Each encoder group
+        carries its ``lr_multiplier`` so the callback can scale it.
+        """
+        from volume_segmantics.model.operations.lightning_lr import (
+            lr_policy_from_settings, lr_search_settings, make_onecycle,
+        )
+        policy = lr_policy_from_settings(self.settings)
         starting_lr = float(getattr(self.settings, "starting_lr", 5e-5) or 5e-5)
         encoder_lr_mult = getattr(self.settings, "encoder_lr_multiplier", 1.0)
         # ``False`` / ``None`` / 1.0 -> no parameter-group split.
@@ -763,21 +785,33 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             optimizer = torch.optim.AdamW(
                 self._optimised_parameters(), lr=starting_lr,
             )
+        else:
+            encoder_lr_mult = float(encoder_lr_mult)
+            encoder_params, other_params = self._split_encoder_params()
+            if not encoder_params:
+                # No encoder found -> fall back to a single rate.
+                optimizer = torch.optim.AdamW(
+                    self._optimised_parameters(), lr=starting_lr,
+                )
+            else:
+                optimizer = torch.optim.AdamW([
+                    {"params": encoder_params, "lr": starting_lr * encoder_lr_mult,
+                     "lr_multiplier": encoder_lr_mult},
+                    {"params": other_params,   "lr": starting_lr, "lr_multiplier": 1.0},
+                ])
+        if policy == "constant":
             return optimizer
-
-        encoder_lr_mult = float(encoder_lr_mult)
-        encoder_params, other_params = self._split_encoder_params()
-        if not encoder_params:
-            # No encoder found — fall back to single LR.
-            return torch.optim.AdamW(
-                self._optimised_parameters(), lr=starting_lr,
-            )
-
-        optimizer = torch.optim.AdamW([
-            {"params": encoder_params, "lr": starting_lr * encoder_lr_mult},
-            {"params": other_params,   "lr": starting_lr},
-        ])
-        return optimizer
+        params = lr_search_settings(self.settings)
+        scheduler = make_onecycle(
+            optimizer,
+            max_lrs=[float(g["lr"]) for g in optimizer.param_groups],
+            total_steps=max(1, int(self.total_steps)),
+            pct_start=params.pct_lr_inc,
+        )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "interval": "step", "frequency": 1},
+        }
 
     def _optimised_parameters(self) -> List[torch.nn.Parameter]:
         """Parameters the optimiser should see.
@@ -843,7 +877,24 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         if self.training:
             student.encoder.train()
         self._encoder_frozen = False
-        logger.info("Encoder unfrozen.")
+        self._pin_encoder_bn_eval()
+        logger.info(
+            "Encoder unfrozen%s.",
+            " (BatchNorm statistics kept frozen)" if self._freeze_encoder_bn_stats else "",
+        )
+
+    def _pin_encoder_bn_eval(self) -> None:
+        """Put the encoder's BatchNorm layers in eval mode when their
+        statistics are to stay frozen and the encoder is otherwise training."""
+        if not (self._freeze_encoder_bn_stats and self.training and not self._encoder_frozen):
+            return
+        student = self._underlying_student
+        encoder = getattr(student, "encoder", None)
+        if encoder is None:
+            return
+        for module in encoder.modules():
+            if isinstance(module, nn.modules.batchnorm._BatchNorm):
+                module.eval()
 
     def train(self, mode: bool = True):  # type: ignore[override]
         super().train(mode)
@@ -855,6 +906,8 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             student = self._underlying_student
             if hasattr(student, "encoder"):
                 student.encoder.eval()
+        elif mode:
+            self._pin_encoder_bn_eval()
         return self
 
     #  Checkpoint helpers 

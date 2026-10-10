@@ -640,6 +640,10 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
     from pytorch_lightning.loggers import TensorBoardLogger
 
     from volume_segmantics.data.lightning_dataloaders import VolSeg2dDataModule
+    from volume_segmantics.model.operations.lightning_lr import (
+        LRPolicyCallback,
+        lr_policy_from_settings,
+    )
     from volume_segmantics.model.operations.lightning2d import (
         CHECKPOINT_MONITOR,
         EpochHistoryCallback,
@@ -726,8 +730,21 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         ],
     }
 
+    lr_policy = lr_policy_from_settings(settings)
+    logging.info("Learning-rate policy: %s", lr_policy)
     callbacks = [
         UnfreezeEncoderCallback(num_frozen_epochs=num_cyc_frozen),
+    ]
+    if lr_policy == "find_onecycle":
+        # After the unfreeze callback: each phase's sweep must see the
+        # encoder's requires_grad state for that phase.
+        callbacks.append(LRPolicyCallback(
+            settings=settings,
+            num_frozen_epochs=num_cyc_frozen,
+            num_unfrozen_epochs=num_cyc_unfrozen,
+            steps_per_epoch=steps_per_epoch,
+        ))
+    callbacks += [
         EpochHistoryCallback(),
         LegacyEpochSummaryCallback(),
         NoVNumProgressBar(),

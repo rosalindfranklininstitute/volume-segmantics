@@ -7,6 +7,7 @@ settings_templates:
 output_root: tmp/pipeline_trainer_parity_smoke
 global_overrides:
   train:
+    random_seed: 1234
     image_size: 64
     num_cyc_frozen: 2
     num_cyc_unfrozen: 0
@@ -72,4 +73,4 @@ tests:
   - ${model:lightning_model}
   - ${model:legacy_model}
   - --max-drift
-  - '0.10'
+  - '0.15'

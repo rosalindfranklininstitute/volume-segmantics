@@ -23,6 +23,7 @@ training_set_proportion: 0.85 # Proportion of images to use the training, rest a
 cuda_device: 0 # The graphics card to use (between 0 and 3 for a machine with 4 GPUs)
 num_cyc_frozen: 8 # Number of training epochs on frozen model
 num_cyc_unfrozen: 5 # Number of training epochs on unfrozen model
+freeze_encoder_bn_stats: True # Keep the encoder's BatchNorm running statistics fixed during unfrozen training. 
 patience: 4 # Number of epochs to wait before early stopping if the validation foreground Dice (val_fg_dice, which also selects the saved checkpoint) does not improve
 
 # Parameters to control Model Architecture
@@ -48,12 +49,17 @@ model:
   # in_channels: 1  # Optional: will be auto-detected from data (1 for grayscale, 3 for RGB, N for 2.5D)
  
 # Learning rate settings
+# lr_policy selects how the default (Lightning) trainer sets its learning rate:
+lr_policy: find_onecycle # or constant
 # Parameters for finding learning rate
 lr_find_epochs: 1 # Number of training epochs for learning rate search
-# Divisor for start and end LR when finding LR on reloaded model (unfrozen training)
-# For large pretrained encoders (e.g., DINO), consider reducing this (e.g., 50-100) 
-# To allow higher learning rates when using differential LRs
-lr_reduce_factor: 500 # Divisor for start and end LR when finding LR on reloaded model
+# Divisor applied to starting_lr and end_lr for the unfrozen phase's learning-rate
+# search. With 10, the shipped range of 5e-5 to 1e-3 becomes 5e-6 to 1e-4, so the
+# decoder fine-tunes at roughly 1e-5 to 3e-5 and the encoder, under
+# encoder_lr_multiplier, an order of magnitude below that. The old default of 500
+# predates encoder_lr_multiplier and left the unfrozen phase at about 3e-7, which
+# trains nothing; a warning is now logged when a phase selects a rate below 1e-6.
+lr_reduce_factor: 10
  
 # Differential learning rates for unfrozen training (encoder vs decoder/head)
 # When unfrozen, encoder uses learning_rate * encoder_lr_multiplier, decoder/head use learning_rate

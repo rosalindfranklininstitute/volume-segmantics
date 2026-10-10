@@ -51,6 +51,13 @@ from volume_segmantics.model.training.multitask_calculator import (
 # Fixtures 
 
 
+def _optimizer_of(configured):
+    """The optimizer from ``configure_optimizers``, which returns a bare
+    optimizer under ``lr_policy: constant`` and an optimizer-plus-schedule
+    dict under the default ``find_onecycle``."""
+    return configured["optimizer"] if isinstance(configured, dict) else configured
+
+
 @pytest.fixture
 def basic_settings():
     """Minimal settings.SimpleNamespace for the Lightning module."""
@@ -165,25 +172,32 @@ def test_optimizer_single_lr_when_multiplier_is_one(
         four_heads_pipeline_config,
         settings=basic_settings, num_classes=3,
     )
-    opt = mod.configure_optimizers()
+    opt = _optimizer_of(mod.configure_optimizers())
     assert len(opt.param_groups) == 1
 
 
 def test_optimizer_two_param_groups_with_differential_lr(lightning_module):
     """encoder_lr_multiplier=0.1 -> encoder group at 0.1×LR, others at LR."""
-    opt = lightning_module.configure_optimizers()
+    opt = _optimizer_of(lightning_module.configure_optimizers())
     assert len(opt.param_groups) == 2
     encoder_group, other_group = opt.param_groups
     starting_lr = lightning_module.settings.starting_lr
-    assert encoder_group["lr"] == pytest.approx(starting_lr * 0.1)
-    assert other_group["lr"] == pytest.approx(starting_lr)
+    # Under the default find_onecycle policy a OneCycle schedule is attached
+    # at construction and sets each group's live ``lr`` to its warm-up start;
+    # the configured rate is then the group's ``max_lr``. Under ``constant``
+    # the live ``lr`` is the configured rate itself.
+    def configured(group):
+        return group["max_lr"] if "max_lr" in group else group["lr"]
+    assert configured(encoder_group) == pytest.approx(starting_lr * 0.1)
+    assert configured(other_group) == pytest.approx(starting_lr)
+    assert encoder_group["lr"] == pytest.approx(0.1 * other_group["lr"])
     # Both groups have parameters.
     assert len(encoder_group["params"]) > 0
     assert len(other_group["params"]) > 0
 
 
 def test_optimizer_no_param_overlap_between_groups(lightning_module):
-    opt = lightning_module.configure_optimizers()
+    opt = _optimizer_of(lightning_module.configure_optimizers())
     encoder_ids = {id(p) for p in opt.param_groups[0]["params"]}
     other_ids = {id(p) for p in opt.param_groups[1]["params"]}
     assert not (encoder_ids & other_ids)
@@ -197,7 +211,7 @@ def test_optimizer_handles_none_multiplier(
         four_heads_pipeline_config,
         settings=basic_settings, num_classes=3,
     )
-    opt = mod.configure_optimizers()
+    opt = _optimizer_of(mod.configure_optimizers())
     assert len(opt.param_groups) == 1
 
 
@@ -521,6 +535,11 @@ def test_end_to_end_bn_stats_moved_from_random_init(
 
     basic_settings.num_cyc_frozen = 0
     basic_settings.num_cyc_unfrozen = 1
+    # This guard reads the encoder's BatchNorm statistics as the evidence that
+    # the sanity-check phase left the model in training mode. The default now
+    # keeps those statistics frozen on purpose (freeze_encoder_bn_stats), so
+    # the guard turns that off to keep measuring what it was written for.
+    basic_settings.freeze_encoder_bn_stats = False
 
     data_module = VolSeg2dDataModule(
         image_dir=img_dir, label_dir=msk_dir,
