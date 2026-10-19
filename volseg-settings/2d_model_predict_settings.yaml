@@ -9,6 +9,13 @@ prediction_axis: Z # One of [Z, Y, X]. Specify axis along which to predict if do
 output_size: 512 # Only for predict imagedir 
 data_hdf5_path: /data # Internal path in the HDF5 file where the image data for prediction is stored (only for HDF output, see config.py)
 
+# Sliding window inference 
+use_sliding_window: false
+sw_roi_size: [512, 512]          # Window size [H, W]
+sw_overlap: 0.25                 # Overlap ratio between windows (0.0 - 1.0)
+sw_batch_size: 4                 # Number of windows to process in parallel
+sw_mode: gaussian                # Weighting mode: 'gaussian' or 'constant'
+
 #Normalisation settings
 clip_data: True # If set to True, the image data intensities will be clipped and rescaled before prediction. Set to False if data is already clipped.
 st_dev_factor: 2.575 # Number of standard deviations from the mean to clip data to.
@@ -19,13 +26,6 @@ use_imagenet_norm: True # If True, applies ImageNet mean/std normalisation to in
 augmentation_library: albumentations # Choose augmentation library: "albumentations" or "monai"
 
 # 2.5D prediction settings
-use_2_5d_prediction: False # If True, uses 2.5D prediction with configurable number of slices
+use_2_5d_prediction: True # If True, uses 2.5D prediction with configurable number of slices
 num_slices: 3 # Number of slices to use (must match training configuration)
 prediction_padding_factor: 1.0 # Multiplier for padding amount (1.0 = num_slices//2, 2.0 = num_slices, etc.)
-
-# Sliding window inference 
-use_sliding_window: false
-sw_roi_size: [512, 512]          # Window size [H, W]
-sw_overlap: 0.25                 # Overlap ratio between windows (0.0 - 1.0)
-sw_batch_size: 4                 # Number of windows to process in parallel
-sw_mode: gaussian                # Weighting mode: 'gaussian' or 'constant'

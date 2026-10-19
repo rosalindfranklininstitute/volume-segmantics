@@ -3,19 +3,22 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Volume Segmantics documentation
+Volume Segmantics Documentation
 ===============================
 
 
-.. include:: ../../README.md
+.. include:: ../../ReadMe.md
    :parser: myst_parser.sphinx_
 
 .. toctree::
-   :maxdepth: 3
+   :maxdepth: 6
    :caption: Contents:
    :hidden:
 
-   README
-   tutorials
-   optuna
+   ReadMe
+   Docs_Installation
+   Docs_Settings-Guide
+   Docs_Functionality
+   Docs_Optuna
+   VolSeg_Tutorial
 
