@@ -19,9 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Multi-GPU slicing guard: under DDP only rank 0 slices the training volumes; re-launched worker ranks wait for its sentinel in the run directory, derive the class count from the slices on disk, and never re-slice or delete them.
 * MONAI as the pipeline augmentation backend: `augmentations.backend: monai` in `pipeline.yaml` (or `auto` with `augmentation_library: monai` in the train settings) translates the configured transforms to MONAI dictionary transforms applied consistently across the image and every head target, accepts MONAI-only transforms by name, and seeds MONAI's shared random state per process. Falls back to Albumentations when MONAI is absent. Applies to the labeled and the unlabeled pipeline datasets.
 
+* `lr_policy` train setting for the default (Lightning) trainer. `find_onecycle` (the default) ports the legacy trainer's learning-rate semantics: before each phase a sweep from `starting_lr` to `end_lr` over `lr_find_epochs` selects the rate at the steepest loss descent divided by 3, the phase trains under a OneCycle schedule with a `pct_lr_inc` warm-up, and the unfrozen phase sweeps the range divided by `lr_reduce_factor`; the sweep runs on rank 0 and is broadcast under DDP. `constant` is training at `starting_lr` with no sweep and no schedule.
+* `freeze_encoder_bn_stats` train setting (default `True`): the default trainer keeps the encoder's BatchNorm running statistics frozen through the unfrozen phase. 
+* Both learning-rate finders warn when a phase selects a rate below 1e-6, naming `lr_reduce_factor` and the search bounds.
+
 ### Changed
 
 * A file path in `model.encoder_weights` no longer initialises a DINO encoder (it loaded with `strict=False`, dropping missing tensors silently). Use `dinov2`/`dinov3` for the hub backbone, or load a full saved model via `full_weights_path`.
+
 
 ### Fixed
 
@@ -34,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * The legacy settings' `consistency_weight` (default 0.1), `rampup_start` and `rampup_end` are honoured by the default trainer; `pipeline.yaml` gains an optional `ema_teacher.consistency_rampup` block.
 * Various fixes: frequency-weighted Dice (`inverse_freq`, `inverse_sqrt_freq`) gives a class absent from the batch no weight instead of nearly all of it; prediction resizes slices to the `image_size` the checkpoint now records (`native_scale` in the predict settings opts out); a named `border_mode` in `pipeline.yaml` augmentations resolves to its OpenCV constant, so the packaged default pipeline trains; `output_entropy` works at medium and high quality; multi-task prediction no longer fails its alignment diagnostic on non-square slices; the Lightning trainer trains on the settings' `cuda_device` (multi-GPU is opt-in via `--devices`); batch size is taken from the memory the driver reports free; the epoch summary line, epoch history and stats CSV carry each epoch's own metrics and tolerate short or missing series; an unknown `OUTPUT_FORMAT` is refused before prediction instead of writing nothing.
 * Test harness: an `encoder-family` assertion checks that a checkpoint's weights corroborate its declared encoder; the DINO smoke configs now run it, and the harness collects assertion failures instead of aborting a config at the first one.
+* The default (Lightning) trainer honours `encoder_weights_path` and `full_weights_path`.
+* `GeneralizedDiceLoss` gave a class absent from the batch a weight of 1 over epsilon. An absent class now takes the largest present weight.
 
 
 
