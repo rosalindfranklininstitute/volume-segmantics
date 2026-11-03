@@ -152,6 +152,17 @@ def get_2d_training_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--precision",
+        type=str,
+        default=None,
+        help=(
+            "Training precision for the Lightning trainer, overriding the "
+            "settings file's 'precision': 32 (full precision, the default), "
+            "16-mixed or bf16-mixed (automatic mixed precision in float16 or "
+            "bfloat16)."
+        ),
+    )
+    parser.add_argument(
         "--optuna",
         metavar="Path to optuna search-space config YAML",
         type=str,
