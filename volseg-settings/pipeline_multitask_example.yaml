@@ -1,0 +1,62 @@
+# Example pipeline.yaml for multi-task training: the semantic head plus a
+# boundary head and a distance head. Copy this file to
+# volseg-settings/pipeline.yaml (next to 2d_model_train_settings.yaml) and
+# train as usual:
+#
+#   model-train-2d --data path/to/data.h5 --labels path/to/labels.h5
+#
+# The heads sit on the decoder of the architecture model.type names in the
+# train settings; their targets are derived from the semantic labels on the
+# fly. decoder_sharing in the train settings chooses one decoder for every
+# head (shared) or one per head (separate). Every key not set here keeps the
+# value of the packaged default, volume_segmantics/settings/pipeline.default.yaml,
+# which documents all of them.
+
+schema_version: pipeline_v1
+
+heads:
+  semantic:
+    enabled: true
+    loss: dice_ce                   # the semantic loss; alpha/beta/dice_weight_mode/
+    loss_weight: 1.0                # exclude_background default to the train settings'
+                                    # ce_weight/dice_weight/dice_weight_mode/exclude_background_from_dice
+  boundary:
+    enabled: true
+    loss: boundary_bce_dice         # bce | boundary_bce | boundary_dice | boundary_bce_dice
+    loss_weight: 0.5
+  distance:
+    enabled: true
+    d_clip: 10.0                    # distances are clipped to this many voxels
+    loss: distance_l1               # distance_l1 | distance_mse
+    loss_weight: 0.5
+  sdm:
+    enabled: false                  # signed distance map head
+    variant: per_class              # binary | per_class
+    d_clip: 10.0
+    loss: sdm_l1                    # sdm_l1 | sdm_mse
+    loss_weight: 0.5
+
+targets:
+  boundary:
+    width: 3                        # boundary thickness in voxels
+  distance:
+    distance_transform: edt
+
+# The extra heads' loss weights ramp up over the first tenth of training.
+loss_schedule:
+  boundary:
+    schedule: linear_warmup
+    start_weight: 0.0
+    end_weight: 1.0
+    warmup_fraction: 0.10
+  distance:
+    schedule: linear_warmup
+    start_weight: 0.0
+    end_weight: 1.0
+    warmup_fraction: 0.10
+
+# model-predict-pipeline writes every head's map to the Zarr store; this is
+# how it combines the passes (single_axis | multi_axis | sliding_window |
+# tta_uncertainty).
+prediction:
+  inference_mode: multi_axis

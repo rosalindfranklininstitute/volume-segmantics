@@ -130,6 +130,7 @@ def main():
     use_legacy_trainer = getattr(args, "legacy_trainer", False)
     lightning_strategy = getattr(args, "strategy", None)
     lightning_devices = getattr(args, "devices", None)
+    lightning_precision = getattr(args, "precision", None)
     optuna_config = getattr(args, "optuna", None)
 
     # Optuna hyperparameter optimisation short-circuits normal training: run the
@@ -175,6 +176,7 @@ def main():
     settings.use_legacy_trainer = use_legacy_trainer
     settings.lightning_strategy = lightning_strategy
     settings.lightning_devices = lightning_devices
+    settings.lightning_precision = lightning_precision
 
     if (task2_dir is not None or task3_dir is not None) and not use_legacy_trainer:
         pipeline_yaml_path = root_path / cfg.SETTINGS_DIR / "pipeline.yaml"
@@ -212,20 +214,25 @@ def main():
     task2_im_out_dir = root_path / "task2"  # dir for task2 imgs
     task3_im_out_dir = root_path / "task3"  # dir for task3 imgs
 
+    # Only the legacy trainer slices and reads the volumes behind --task2 /
+    # --task3 and switches on its use_multitask mode. The default trainer
+    # derives every head's targets from the semantic labels, so under it the
+    # options only enable the heads (above) and the volumes are left alone.
     task2_vols = None
     task3_vols = None
-    if task2_dir is not None:
-        task2_vols = [task2_dir] if isinstance(task2_dir, str) else task2_dir
-        settings.task2_dir = str(task2_im_out_dir.resolve())  # Store output directory path in settings
-        if not getattr(settings, "use_multitask", False):
-            settings.use_multitask = True
-            logging.info("Auto-enabling multitask mode because --task2 was provided")
-    if task3_dir is not None:
-        task3_vols = [task3_dir] if isinstance(task3_dir, str) else task3_dir
-        settings.task3_dir = str(task3_im_out_dir.resolve())  # Store output directory path in settings
-        if not getattr(settings, "use_multitask", False):
-            settings.use_multitask = True
-            logging.info("Auto-enabling multitask mode because --task3 was provided")
+    if use_legacy_trainer:
+        if task2_dir is not None:
+            task2_vols = [task2_dir] if isinstance(task2_dir, str) else task2_dir
+            settings.task2_dir = str(task2_im_out_dir.resolve())  # Store output directory path in settings
+            if not getattr(settings, "use_multitask", False):
+                settings.use_multitask = True
+                logging.info("Auto-enabling multitask mode because --task2 was provided")
+        if task3_dir is not None:
+            task3_vols = [task3_dir] if isinstance(task3_dir, str) else task3_dir
+            settings.task3_dir = str(task3_im_out_dir.resolve())  # Store output directory path in settings
+            if not getattr(settings, "use_multitask", False):
+                settings.use_multitask = True
+                logging.info("Auto-enabling multitask mode because --task3 was provided")
     data_im_out_dir = root_path / settings.data_im_dirname  # dir for data imgs
     seg_im_out_dir = root_path / settings.seg_im_out_dirname  # dir for seg imgs
 
@@ -654,7 +661,10 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         VolSegCheckpointCallback,
         VolSegDiagnosticsCallback,
         VolSegSSLVizCallback,
+        checkpoint_model_type_name,
         final_checkpoint_path,
+        model_struct_dict_for_checkpoint,
+        resolve_precision,
     )
 
     pipeline_config = settings.pipeline_config
@@ -673,13 +683,9 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         )
         sys.exit(1)
 
-    # Output filename — pipeline-multitask-specific marker so users
-    # can distinguish pipeline version outputs from v0.4 single-head outputs.
-    model_type_name = (
-        "PIPELINE_MULTITASK_UNET" if len(enabled_heads) > 1
-        or (len(enabled_heads) == 1 and enabled_heads[0] != "semantic")
-        else "U_NET"
-    )
+    # Output filename: the model.type that trains (U_NET, FPN, ...), with a
+    # pipeline-multitask marker when more than the semantic head is trained.
+    model_type_name = checkpoint_model_type_name(settings, enabled_heads)
     model_fn = f"{date.today()}_{model_type_name}_{settings.model_output_fn}.pytorch"
     model_out = Path(root_path, model_fn)
 
@@ -706,29 +712,10 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         total_steps=total_steps,
     )
 
-    # Vol-seg checkpoint callback needs a model_struc_dict for v0.4
-    # predict-side compatibility. The minimal dict we save is enough
-    # for `model-predict-2d` to reconstruct the encoder + heads.
-    model_struc_dict = {
-        "type": "PIPELINE_MULTITASK_UNET",
-        "encoder_name": (settings.model or {}).get("encoder_name", "resnet34"),
-        "encoder_weights": (settings.model or {}).get("encoder_weights", "imagenet"),
-        "encoder_depth": int((settings.model or {}).get("encoder_depth", 5) or 5),
-        "in_channels": cfg.get_model_input_channels(settings) or 1,
-        "classes": int(max_label_no),
-        # SSL on -> ``pl_module.model`` is a ``MeanTeacherModel`` wrapper;
-        # use ``pl_module.head_names`` + ``_underlying_student`` so the
-        # accessor works regardless.
-        "heads": [
-            {
-                "name": n,
-                "out_channels": getattr(
-                    pl_module._underlying_student.heads[i], "out_channels", None,
-                ),
-            }
-            for i, n in enumerate(pl_module.head_names)
-        ],
-    }
+    # The vol-seg checkpoint's model_struc_dict: what `model-predict-2d`
+    # needs to rebuild the architecture, its encoder, the decoder sharing and
+    # the heads.
+    model_struc_dict = model_struct_dict_for_checkpoint(settings, pl_module, int(max_label_no))
 
     lr_policy = lr_policy_from_settings(settings)
     logging.info("Learning-rate policy: %s", lr_policy)
@@ -784,6 +771,8 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
 
     accelerator = "gpu" if torch.cuda.is_available() else "cpu"
     devices, strategy = _resolve_lightning_devices(settings, accelerator)
+    precision = resolve_precision(settings, getattr(settings, "lightning_precision", None))
+    logging.info("Training precision: %s", precision)
 
     tb_logger = TensorBoardLogger(
         save_dir=str(root_path), name="lightning_logs",
@@ -796,6 +785,7 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         accelerator=accelerator,
         devices=devices,
         strategy=strategy,
+        precision=precision,
         log_every_n_steps=max(1, steps_per_epoch // 4),
     )
 

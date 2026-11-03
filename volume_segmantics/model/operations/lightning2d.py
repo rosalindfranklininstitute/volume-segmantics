@@ -12,7 +12,7 @@ import math
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -28,8 +28,16 @@ from volume_segmantics.model.operations.trainer_losses import (
     get_rampup_ratio,
     per_head_consistency_loss,
 )
-from volume_segmantics.model.model_2d import apply_weight_path_settings
-from volume_segmantics.model.pipeline_multitask_unet import PipelineMultitaskUnet
+import volume_segmantics.utilities.base_data_utils as utils
+from volume_segmantics.model.model_2d import apply_weight_path_settings, coerce_model_type
+from volume_segmantics.model.pipeline_multitask_model import (
+    UNET_FAMILY,
+    PipelineMultitaskModel,
+)
+from volume_segmantics.model.pipeline_multitask_unet import (
+    PipelineMultitaskUnet,
+    check_decoder_sharing,
+)
 from volume_segmantics.model.training.mean_teacher import (
     EMASchedule,
     MeanTeacherModel,
@@ -107,6 +115,112 @@ def _emit_via_progress_console(trainer: Any, line: str) -> None:
 #: validation targets. See ``_SemanticDiceAccumulator.foreground_present_mean``.
 CHECKPOINT_MONITOR = "val_fg_dice"
 
+#: ``eval_metric`` values. Dice is always reported (and selects the checkpoint
+#: through :data:`CHECKPOINT_MONITOR`); ``MeanIoU`` reports the per-class and
+#: mean IoU as well, in the epoch summary, the stats CSV and the loss plot.
+EVAL_METRICS = ("DiceCoefficient", "MeanIoU")
+#: ``dice_averaging`` values for the reported mean, as the legacy trainer took.
+DICE_AVERAGING_MODES = ("macro", "weighted")
+#: ``precision`` settings and the Lightning precision each selects.
+PRECISION_CHOICES = {
+    "32": "32-true", "32-true": "32-true",
+    "16": "16-mixed", "16-mixed": "16-mixed",
+    "bf16": "bf16-mixed", "bf16-mixed": "bf16-mixed",
+    "64": "64-true", "64-true": "64-true",
+}
+
+
+def model_type_from_settings(settings: Any) -> utils.ModelType:
+    """The ``model.type`` the settings ask for (``U_Net`` when unset)."""
+    model_cfg = getattr(settings, "model", None) or {}
+    raw = model_cfg.get("type") if isinstance(model_cfg, Mapping) else None
+    return coerce_model_type(raw if raw not in (None, "") else "U_Net")
+
+
+def eval_metric_from_settings(settings: Any) -> str:
+    """The settings' ``eval_metric`` (``DiceCoefficient`` when unset), refusing
+    a name that is not one of :data:`EVAL_METRICS`."""
+    raw = getattr(settings, "eval_metric", None)
+    if raw in (None, "", False):
+        return "DiceCoefficient"
+    for name in EVAL_METRICS:
+        if str(raw).strip().lower() == name.lower():
+            return name
+    raise ValueError(f"eval_metric must be one of {EVAL_METRICS}; got {raw!r}")
+
+
+def dice_averaging_from_settings(settings: Any) -> str:
+    """The settings' ``dice_averaging`` (``macro`` when unset)."""
+    raw = getattr(settings, "dice_averaging", None)
+    if raw in (None, "", False):
+        return "macro"
+    mode = str(raw).strip().lower()
+    if mode not in DICE_AVERAGING_MODES:
+        raise ValueError(f"dice_averaging must be one of {DICE_AVERAGING_MODES}; got {raw!r}")
+    return mode
+
+
+def resolve_precision(settings: Any, override: Any = None) -> str:
+    """The Lightning ``precision`` for a run: ``--precision`` over the settings'
+    ``precision`` over full precision.
+
+    ``32`` is full precision; ``16-mixed`` and ``bf16-mixed`` are automatic
+    mixed precision in float16 (CUDA only: Lightning falls back to bfloat16
+    on a CPU) and in bfloat16; ``16`` and ``bf16`` are taken as their
+    ``-mixed`` spellings and ``64`` is double precision.
+    """
+    raw = override if override not in (None, "") else getattr(settings, "precision", None)
+    if raw in (None, "", False):
+        return "32-true"
+    key = str(raw).strip().lower()
+    if key not in PRECISION_CHOICES:
+        raise ValueError(
+            f"precision must be one of {sorted(set(PRECISION_CHOICES))}; got {raw!r}"
+        )
+    return PRECISION_CHOICES[key]
+
+
+def checkpoint_model_type_name(settings: Any, enabled_heads: Sequence[str]) -> str:
+    """The architecture marker in a training run's checkpoint file name.
+
+    ``U_NET`` / ``PIPELINE_MULTITASK_UNET`` for the U-Net family, as before;
+    the ``model.type`` name (``FPN``, ...) for the others, with the
+    ``PIPELINE_MULTITASK_`` prefix when more than the semantic head trains.
+    """
+    heads = list(enabled_heads)
+    multi = len(heads) > 1 or (len(heads) == 1 and heads[0] != "semantic")
+    model_type = model_type_from_settings(settings)
+    if model_type in UNET_FAMILY:
+        return "PIPELINE_MULTITASK_UNET" if multi else "U_NET"
+    return f"PIPELINE_MULTITASK_{model_type.name}" if multi else model_type.name
+
+
+def model_struct_dict_for_checkpoint(
+    settings: Any, pl_module: Any, num_classes: int,
+) -> Dict[str, Any]:
+    """The ``model_struc_dict`` a checkpoint of ``pl_module`` carries so that
+    ``create_model_on_device`` rebuilds it: the architecture, its encoder
+    arguments, the decoder sharing and the heads."""
+    model_cfg = getattr(settings, "model", None) or {}
+    model_type = model_type_from_settings(settings)
+    student = pl_module._underlying_student
+    return {
+        "type": "PIPELINE_MULTITASK_UNET" if model_type in UNET_FAMILY else model_type.name,
+        "encoder_name": model_cfg.get("encoder_name", "resnet34"),
+        "encoder_weights": model_cfg.get("encoder_weights", "imagenet"),
+        "encoder_depth": int(model_cfg.get("encoder_depth", 5) or 5),
+        "in_channels": cfg.get_model_input_channels(settings) or 1,
+        "classes": int(num_classes),
+        "decoder_sharing": getattr(student, "decoder_sharing", "shared"),
+        "heads": [
+            {
+                "name": name,
+                "out_channels": getattr(student.heads[i], "out_channels", None),
+            }
+            for i, name in enumerate(pl_module.head_names)
+        ],
+    }
+
 
 class _SemanticDiceAccumulator:
     """Per-class Dice over the semantic head's argmax predictions.
@@ -155,6 +269,57 @@ class _SemanticDiceAccumulator:
             denom = 2 * self.tp[c] + self.fp[c] + self.fn[c]
             out.append(2 * self.tp[c] / denom if denom > 0 else 0.0)
         return out
+
+    def compute_iou(self) -> List[float]:
+        """Per-class IoU (Jaccard) from the same counts: TP / (TP + FP + FN)."""
+        out: List[float] = []
+        for c in range(self.num_classes):
+            denom = self.tp[c] + self.fp[c] + self.fn[c]
+            out.append(self.tp[c] / denom if denom > 0 else 0.0)
+        return out
+
+    def average(
+        self,
+        per_class: Sequence[float],
+        *,
+        exclude_background: bool = False,
+        averaging: str = "macro",
+        weight_mode: str = "inverse_sqrt_freq",
+    ) -> float:
+        """The mean of a per-class score the way the legacy trainer reported it.
+
+        Only classes present in the predictions or the targets count, and
+        class 0 is left out under ``exclude_background``. ``macro`` is their
+        plain mean; ``weighted`` weights each class by its target pixel count
+        under ``weight_mode`` (``inverse_freq``, ``inverse_sqrt_freq``,
+        ``pixel_count`` or ``uniform``), normalised over the classes scored.
+        """
+        start = 1 if exclude_background else 0
+        classes = [
+            c for c in range(start, self.num_classes)
+            if self.tp[c] + self.fp[c] + self.fn[c] > 0
+        ]
+        if not classes:
+            return 0.0
+        if averaging != "weighted":
+            return sum(per_class[c] for c in classes) / len(classes)
+        counts = {c: self.tp[c] + self.fn[c] for c in classes}
+        total = sum(counts.values())
+        weights: Dict[int, float] = {}
+        for c in classes:
+            freq = counts[c] / total if total > 0 else 0.0
+            if weight_mode == "inverse_freq":
+                weights[c] = 1.0 / freq if freq > 0 else 0.0
+            elif weight_mode == "inverse_sqrt_freq":
+                weights[c] = 1.0 / math.sqrt(freq) if freq > 0 else 0.0
+            elif weight_mode == "pixel_count":
+                weights[c] = float(counts[c])
+            else:  # uniform over the classes with target pixels
+                weights[c] = 1.0 if counts[c] > 0 else 0.0
+        weight_sum = sum(weights.values())
+        if weight_sum <= 0:
+            return 0.0
+        return sum(per_class[c] * weights[c] for c in classes) / weight_sum
 
     def foreground_present_mean(self) -> float:
         """Mean Dice over the foreground classes present in the targets.
@@ -354,6 +519,16 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         self.loss_calculator = loss_calculator
         self.settings = settings
         self.num_classes = int(num_classes)
+        # The validation metric the settings ask to see (eval_metric) and how
+        # its mean is taken (dice_averaging, exclude_background_from_dice,
+        # dice_weight_mode).
+        # Dice is always reported; MeanIoU adds the IoU beside it.
+        self.eval_metric = eval_metric_from_settings(settings)
+        self._metric_average_kwargs: Dict[str, Any] = dict(
+            exclude_background=bool(getattr(settings, "exclude_background_from_dice", False)),
+            averaging=dice_averaging_from_settings(settings),
+            weight_mode=str(getattr(settings, "dice_weight_mode", None) or "inverse_sqrt_freq"),
+        )
         # Mean Teacher's ramp of the consistency weight (pipeline.yaml
         # ema_teacher.consistency_rampup; the legacy rampup_start/rampup_end).
         self._consistency_ramp = ema_cfg.consistency_rampup if self._ssl_enabled else None
@@ -389,10 +564,7 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         # stage == "val". Mirrors legacy trainer's per-class breakdown.
         self._val_dice_accumulator = _SemanticDiceAccumulator(self.num_classes)
         # Boundary-head Dice accumulator — only updates when the
-        # boundary head is enabled. Always allocated; the v0.4
-        # visualizer expects a ``boundary_dice`` column key, and the
-        # accumulator's ``compute()`` returns None when the head was
-        # never seen so we skip the log.
+        # boundary head is enabled. Always allocated.
         self._val_boundary_dice_accumulator = _BinaryDiceAccumulator()
 
     #  Pipeline-config factory 
@@ -422,42 +594,69 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         if encoder_weights in ("None", "null"):
             encoder_weights = None
         encoder_depth = int(model_cfg.get("encoder_depth", 5) or 5)
+        model_type = model_type_from_settings(settings)
+        decoder_sharing = check_decoder_sharing(getattr(settings, "decoder_sharing", None))
 
         # pipeline version default: single-channel (grayscale) input. 2.5D slicing is
         # honoured if the legacy YAML enables it.
         resolved_in_channels = cfg.get_model_input_channels(settings) or in_channels
 
-        # Resolve the decoder's last-stage output channel count so the
-        # heads are built with the right in_channels. PipelineMultitaskUnet
-        # mirrors this resolution in __init__ but applies it to itself
-        # AFTER the heads are constructed — so we have to duplicate it
-        # here to avoid the in_channels=16 vs decoder=32 mismatch the
-        # DINO depth=4 path would otherwise hit.
-        default_decoder_channels = (256, 128, 64, 32, 16)
-        is_dino = (
-            encoder_name.startswith("dinov2_")
-            or encoder_name.startswith("dinov3_")
-        )
-        effective_depth = min(encoder_depth, 4) if is_dino else encoder_depth
-        if is_dino and effective_depth == 4:
-            effective_decoder_channels = (256, 128, 64, 32)
-        else:
-            effective_decoder_channels = default_decoder_channels[:effective_depth]
-        head_in_channels = int(effective_decoder_channels[-1])
-        head_modules = build_head_modules(
-            pipeline_config.heads,
-            in_channels=head_in_channels,
-            num_classes=num_classes,
-            dim=2,
-        )
+        if model_type in UNET_FAMILY:
+            if model_type == utils.ModelType.MULTITASK_UNET:
+                logging.info(
+                    "model.type Multitask_Unet is the v0.4 name; building the "
+                    "pipeline multi-head U-Net with the heads pipeline.yaml enables."
+                )
+            # Resolve the decoder's last-stage output channel count so the
+            # heads are built with the right in_channels. PipelineMultitaskUnet
+            # mirrors this resolution in __init__ but applies it to itself
+            # AFTER the heads are constructed — so we have to duplicate it
+            # here to avoid the in_channels=16 vs decoder=32 mismatch the
+            # DINO depth=4 path would otherwise hit.
+            default_decoder_channels = (256, 128, 64, 32, 16)
+            is_dino = (
+                encoder_name.startswith("dinov2_")
+                or encoder_name.startswith("dinov3_")
+            )
+            effective_depth = min(encoder_depth, 4) if is_dino else encoder_depth
+            if is_dino and effective_depth == 4:
+                effective_decoder_channels = (256, 128, 64, 32)
+            else:
+                effective_decoder_channels = default_decoder_channels[:effective_depth]
+            head_in_channels = int(effective_decoder_channels[-1])
+            head_modules = build_head_modules(
+                pipeline_config.heads,
+                in_channels=head_in_channels,
+                num_classes=num_classes,
+                dim=2,
+            )
 
-        model = PipelineMultitaskUnet(
-            head_modules=head_modules,
-            encoder_name=encoder_name,
-            encoder_depth=encoder_depth,
-            encoder_weights=encoder_weights,
-            in_channels=resolved_in_channels,
-            decoder_channels=effective_decoder_channels,
+            model: nn.Module = PipelineMultitaskUnet(
+                head_modules=head_modules,
+                encoder_name=encoder_name,
+                encoder_depth=encoder_depth,
+                encoder_weights=encoder_weights,
+                in_channels=resolved_in_channels,
+                decoder_channels=effective_decoder_channels,
+                decoder_sharing=decoder_sharing,
+            )
+        else:
+            # Any other model.type: the pipeline heads sit on that
+            # architecture's own decoder.
+            model = PipelineMultitaskModel(
+                pipeline_config.heads,
+                num_classes,
+                architecture=model_type,
+                encoder_name=encoder_name,
+                encoder_depth=encoder_depth,
+                encoder_weights=encoder_weights,
+                in_channels=resolved_in_channels,
+                decoder_sharing=decoder_sharing,
+            )
+        logging.info(
+            "Lightning trainer: model.type %s with encoder %s, %d %s decoder(s), heads %s",
+            model_type.name, encoder_name, len(model.decoders), decoder_sharing,
+            list(model.head_names),
         )
         # ``full_weights_path`` / ``encoder_weights_path`` from the train
         # settings, applied before the module wraps the model (so an EMA
@@ -734,12 +933,14 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
         # accumulator unconditionally — even during the sanity-check
         # phase, where we deliberately skip emitting metrics — so the
         # next epoch starts with a clean slate.
-        per_class = self._val_dice_accumulator.compute()
+        acc = self._val_dice_accumulator
+        per_class = acc.compute()
         sanity = bool(getattr(self.trainer, "sanity_checking", False))
         if not sanity and per_class:
-            mean_dice = sum(per_class) / len(per_class)
+            # The reported mean follows the settings (dice_averaging,
+            # exclude_background_from_dice), as the legacy trainer's did.
             self.log(
-                "val_seg_dice", mean_dice,
+                "val_seg_dice", acc.average(per_class, **self._metric_average_kwargs),
                 prog_bar=True, on_epoch=True, sync_dist=True,
             )
             for c, val in enumerate(per_class):
@@ -750,9 +951,20 @@ class VolSeg2dLightningModule(pl.LightningModule if pl is not None else object):
             # What VolSegCheckpointCallback and EarlyStopping select on.
             self.log(
                 CHECKPOINT_MONITOR,
-                self._val_dice_accumulator.foreground_present_mean(),
+                acc.foreground_present_mean(),
                 on_epoch=True, sync_dist=True,
             )
+            if self.eval_metric == "MeanIoU":
+                per_class_iou = acc.compute_iou()
+                self.log(
+                    "val_seg_iou", acc.average(per_class_iou, **self._metric_average_kwargs),
+                    prog_bar=True, on_epoch=True, sync_dist=True,
+                )
+                for c, val in enumerate(per_class_iou):
+                    self.log(
+                        f"val_iou_class_{c}", float(val),
+                        on_epoch=True, sync_dist=True,
+                    )
         boundary_dice = self._val_boundary_dice_accumulator.compute()
         if not sanity and boundary_dice is not None:
             self.log(
@@ -1004,9 +1216,10 @@ class LegacyEpochSummaryCallback(pl.Callback if pl is not None else object):
 
     Reads ``train_loss``, ``val_loss``, ``val_seg_dice``, and
     ``val_dice_class_<i>`` from ``trainer.callback_metrics`` (all
-    populated by :class:`VolSeg2dLightningModule`). Tracks epoch
-    elapsed time via :meth:`on_train_epoch_start`. Skipped during the
-    sanity-check phase. Per-head losses (boundary, distance, sdm)
+    populated by :class:`VolSeg2dLightningModule`) at the end of the
+    training epoch, when both the epoch's aggregated training loss and
+    its validation metrics are final. Tracks epoch elapsed time via
+    :meth:`on_train_epoch_start`. Skipped during the sanity-check phase. Per-head losses (boundary, distance, sdm)
     appear in parens after Train Loss / Val Loss when present, mirroring
     legacy's multitask formatting.
     """
@@ -1017,10 +1230,12 @@ class LegacyEpochSummaryCallback(pl.Callback if pl is not None else object):
     def on_train_epoch_start(self, trainer, pl_module) -> None:
         self._tic = time.perf_counter()
 
-    def on_validation_end(self, trainer, pl_module) -> None:
-        # on_validation_end, not on_validation_epoch_end: Lightning runs the
-        # callbacks' epoch-end hook *before* the module's, so at that point
-        # val_seg_dice is still the previous epoch's (and absent on epoch 0).
+    def on_train_epoch_end(self, trainer, pl_module) -> None:
+        # After the epoch's validation, which Lightning runs inside the
+        # training epoch: here val_seg_dice is this epoch's (the module logs it
+        # in its own on_validation_epoch_end) and so is the aggregated
+        # train_loss, which on_validation_end still saw as the previous
+        # epoch's, and as absent on the first.
         if trainer.global_rank != 0:
             return
         if getattr(trainer, "sanity_checking", False):
@@ -1045,6 +1260,7 @@ class LegacyEpochSummaryCallback(pl.Callback if pl is not None else object):
         train_loss = _get("train_loss")
         val_loss = _get("val_loss")
         seg_dice = _get("val_seg_dice")
+        seg_iou = _get("val_seg_iou")
 
         # Per-head loss breakdowns (matches legacy's multitask format).
         head_names: Tuple[str, ...] = tuple(
@@ -1070,22 +1286,25 @@ class LegacyEpochSummaryCallback(pl.Callback if pl is not None else object):
             log_parts.append(f"Val Loss: {val_loss:.4f}{_head_breakdown('val')}")
         if seg_dice is not None:
             log_parts.append(f"Seg Dice: {seg_dice:.4f}")
+        if seg_iou is not None:
+            log_parts.append(f"Seg IoU: {seg_iou:.4f}")
         log_parts.append(f"Time: {elapsed:.1f}s")
         _emit(" | ".join(log_parts))
 
-        # Per-class Dice breakdown.
+        # Per-class Dice (and IoU under eval_metric: MeanIoU) breakdown.
         num_classes = int(getattr(pl_module, "num_classes", 0) or 0)
         if num_classes > 0:
             label_codes = getattr(pl_module, "label_codes", {}) or {}
-            class_parts: List[str] = []
-            for c in range(num_classes):
-                dice_c = _get(f"val_dice_class_{c}")
-                if dice_c is None:
-                    continue
-                name = label_codes.get(c, f"C{c}")
-                class_parts.append(f"{name}: {dice_c:.3f}")
-            if class_parts:
-                _emit(f"  Per-class Dice: {' | '.join(class_parts)}")
+            for metric, prefix in (("Dice", "val_dice_class_"), ("IoU", "val_iou_class_")):
+                class_parts: List[str] = []
+                for c in range(num_classes):
+                    value_c = _get(f"{prefix}{c}")
+                    if value_c is None:
+                        continue
+                    name = label_codes.get(c, f"C{c}")
+                    class_parts.append(f"{name}: {value_c:.3f}")
+                if class_parts:
+                    _emit(f"  Per-class {metric}: {' | '.join(class_parts)}")
 
 
 # Custom progress bar that drops Lightning's ``v_num`` postfix from
@@ -1268,7 +1487,7 @@ def _ensure_tuple_output(output: Any) -> Tuple[Any, ...]:
 
 
 class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
-    """End-of-training diagnostic outputs (PNG + CSV) for parity with v0.4.
+    """End-of-training diagnostic outputs (PNG + CSV).
 
     The legacy raw trainer wrote three artifacts next to the saved
     ``.pytorch`` checkpoint when training finished:
@@ -1306,6 +1525,8 @@ class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
     | ``val_seg_dice``       | ``seg_dice``       |
     | ``val_fg_dice``        | ``fg_dice``        |
     | ``val_dice_class_<c>`` | ``dice_class_<c>`` |
+    | ``val_seg_iou``        | ``seg_iou``        |
+    | ``val_iou_class_<c>``  | ``iou_class_<c>``  |
     +-------------------------+--------------------+
     """
 
@@ -1324,6 +1545,7 @@ class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
         "val_seg_dice": "seg_dice",
         "val_fg_dice": "fg_dice",
         "val_boundary_dice": "boundary_dice",
+        "val_seg_iou": "seg_iou",
     }
     _SDM_FALLBACK_RENAMES: Dict[str, str] = {
         "train_sdm_loss": "train_task3",
@@ -1445,9 +1667,12 @@ class VolSegDiagnosticsCallback(pl.Callback if pl is not None else object):
             for src_key, value in row.items():
                 if src_key == "epoch":
                     continue
-                # val_dice_class_<c> -> dice_class_<c>: the per-class columns
-                # the CSV writer reads
-                dst_key = renames.get(src_key, src_key.replace("val_dice_class_", "dice_class_"))
+                # val_dice_class_<c> -> dice_class_<c> (and the IoU ones): the
+                # per-class columns the CSV writer reads
+                dst_key = renames.get(
+                    src_key,
+                    src_key.replace("val_dice_class_", "dice_class_").replace("val_iou_class_", "iou_class_"),
+                )
                 out.setdefault(dst_key, []).append(float(value))
 
         # Pad shorter columns with zeros so the visualizer's parallel-
@@ -1743,6 +1968,13 @@ def _resolve_device_num_from_module(pl_module: Any) -> Any:
 __all__ = [
     "CHECKPOINT_MONITOR",
     "EpochHistoryCallback",
+    "EVAL_METRICS",
+    "PRECISION_CHOICES",
+    "checkpoint_model_type_name",
+    "eval_metric_from_settings",
+    "model_struct_dict_for_checkpoint",
+    "model_type_from_settings",
+    "resolve_precision",
     "UnfreezeEncoderCallback",
     "VolSeg2dLightningModule",
     "VolSegCheckpointCallback",

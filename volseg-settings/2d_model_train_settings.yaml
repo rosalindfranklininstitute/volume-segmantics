@@ -21,6 +21,7 @@ image_size: 512 # size of images used for training (must be multiple of 32)
 downsample: False
 training_set_proportion: 0.85 # Proportion of images to use the training, rest are used for validation
 cuda_device: 0 # The graphics card to use (between 0 and 3 for a machine with 4 GPUs)
+precision: 32 # Training precision: 32 (full precision), 16-mixed (automatic mixed precision in float16, CUDA only) or bf16-mixed (bfloat16). --precision on the command line overrides it.
 num_cyc_frozen: 8 # Number of training epochs on frozen model
 num_cyc_unfrozen: 5 # Number of training epochs on unfrozen model
 freeze_encoder_bn_stats: True # Keep the encoder's BatchNorm running statistics fixed during unfrozen training. 
@@ -30,8 +31,10 @@ patience: 4 # Number of epochs to wait before early stopping if the validation f
 model:
   # Choose type of segmentation model from the list of those tested so far
   # ["U_Net", "U_Net_Plus_plus", "FPN", "DeepLabV3", "DeepLabV3_Plus"]
-  # "MA_Net", "Linknet", "PAN", "Segformer", "Vanilla_Unet", "Multitask_Unet"]
-  # Note: Use "Multitask_Unet" when use_multitask is true
+  # "MA_Net", "Linknet", "PAN", "Segformer", "Vanilla_Unet"]
+  # The trainer builds this architecture, puts the heads from pipeline.yaml (or
+  # --task2/--task3) on its decoder and names the checkpoint after it.
+  # "Multitask_Unet" is the legacy name for the multi-head U-Net.
   type: "U_Net"
   # For more details on encoder types please see smp.readthedocs.io
   # choose encoder, those tested so far include the following:
@@ -94,9 +97,11 @@ exclude_background_from_dice: False   # Usually true for foreground structures
 ce_weight: 0.2   # Weight for Cross-Entropy component (alpha in CombinedCEDiceLoss)
 dice_weight: 0.8 # Weight for Dice component (beta in CombinedCEDiceLoss)
  
-# Evaluation metric
+# Evaluation metric. Validation Dice is always reported (per class and as a mean) and
+# the foreground Dice selects the saved checkpoint; MeanIoU reports the per-class and
+# mean IoU as well, in the epoch summary, the training stats CSV and the loss plot.
 eval_metric: "MeanIoU" # Choose from one of [MeanIoU, DiceCoefficient]
-dice_averaging: "macro"  # For DiceCoefficient: "macro" or "weighted"
+dice_averaging: "macro"  # The reported mean: "macro" (plain mean over the classes present) or "weighted" (by class frequency under dice_weight_mode)
  
 # Misc training settings
 plot_lr_graph: False # Set to True if gnuplot is installed and a terminal plot of learning rate is required 
@@ -116,10 +121,13 @@ num_slices: 3 # Number of slices to use (must be odd: 3, 5, 7, 9, etc.)
 slice_file_format: "png" # File format for multi-channel slices: "tiff" (default) or "png" (only for 3 channels or less)
 skip_border_slices: False # NOTE: not yet implemented
  
-# Multi-task learning settings (requires MONAI datasets)
-use_multitask: false # Enable multi-task learning (requires MONAI datasets)
-num_tasks: 2 # Number of tasks: 2 (seg + boundary) or 3 (seg + boundary + task3)
-decoder_sharing: "shared" # Decoder sharing strategy: "shared" (all heads share one decoder) or "separate" (each head has its own decoder)
+# Multi-task learning settings. The default trainer takes its heads from
+# volseg-settings/pipeline.yaml or from --task2 / --task3 (see the README); only
+# use_multitask, num_tasks and the loss settings below are read by the legacy
+# trainer. decoder_sharing applies to both trainers.
+use_multitask: false # Legacy trainer: enable multi-task learning (requires MONAI datasets)
+num_tasks: 2 # Legacy trainer: number of tasks: 2 (seg + boundary) or 3 (seg + boundary + task3)
+decoder_sharing: "shared" # Decoder sharing strategy: "shared" (all heads share one decoder) or "separate" (each head has its own decoder, adding a decoder's parameters per extra head)
 # Multi-task loss weights 
 seg_loss_weight: 1.0 # Weight for segmentation loss
 boundary_loss_weight: 1.0 # Weight for boundary loss

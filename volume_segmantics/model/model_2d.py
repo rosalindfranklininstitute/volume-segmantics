@@ -460,6 +460,165 @@ def check_checkpoint_encoder_family(state_dict, encoder_name, *, context: str = 
         )
 
 
+#: Keys a pipeline-mode checkpoint's ``model_struc_dict`` carries beyond the
+#: architecture's own constructor arguments.
+PIPELINE_STRUCT_KEYS = (
+    "heads", "head_modules", "decoder_sharing", "decoder_channels", "decoder_in_channels",
+)
+
+#: The plain segmentation_models_pytorch architectures ``build_architecture`` builds.
+SMP_ARCHITECTURES = (
+    utils.ModelType.U_NET, utils.ModelType.U_NET_PLUS_PLUS, utils.ModelType.FPN,
+    utils.ModelType.DEEPLABV3, utils.ModelType.DEEPLABV3_PLUS, utils.ModelType.MA_NET,
+    utils.ModelType.LINKNET, utils.ModelType.PAN, utils.ModelType.SEGFORMER,
+)
+
+
+def coerce_model_type(model_type) -> "utils.ModelType":
+    """``model_type`` as a :class:`ModelType`: the enum itself, or its name in any case."""
+    if isinstance(model_type, utils.ModelType):
+        return model_type
+    try:
+        return utils.ModelType[str(model_type).upper()]
+    except KeyError as e:
+        raise ValueError(
+            f"unknown model type {model_type!r}; known: {[m.name for m in utils.ModelType]}"
+        ) from e
+
+
+def heads_config_from_descriptor(heads_descriptor) -> Dict[str, Any]:
+    """The ``heads:`` config a checkpoint's saved head descriptor list describes.
+
+    The trainer records ``[{"name": ..., "out_channels": ...}, ...]`` in the
+    checkpoint's ``model_struc_dict``; prediction rebuilds the heads from it.
+    """
+    from volume_segmantics.data.pipeline_loader import HeadConfig
+    if not heads_descriptor:
+        raise ValueError(
+            "a pipeline-mode checkpoint needs a 'heads' descriptor list in its "
+            "model_struc_dict; none was present."
+        )
+    heads_cfg: Dict[str, HeadConfig] = {}
+    for entry in heads_descriptor:
+        if not isinstance(entry, dict) or "name" not in entry:
+            raise ValueError(
+                f"model_struc_dict 'heads' entry must be a dict with 'name'; got {entry!r}"
+            )
+        hc = HeadConfig(enabled=True)
+        oc = entry.get("out_channels")
+        if oc is not None:
+            hc.out_channels = int(oc)
+        heads_cfg[str(entry["name"])] = hc
+    return heads_cfg
+
+
+def build_architecture(model_type, model_struc_dict: dict) -> torch.nn.Module:
+    """Build a plain architecture (an smp model or the vanilla U-Net) from its
+    constructor arguments, on the CPU.
+
+    The device move, the encoder verification and the first-conv adaptation
+    are :func:`create_model_on_device`'s; this is the construction alone, so
+    the pipeline multi-head wrapper can take the encoder and decoder of any
+    ``model.type``.
+    """
+    model_type = coerce_model_type(model_type)
+    struct_dict_copy = {
+        k: v for k, v in model_struc_dict.items() if k != "type" and k not in PIPELINE_STRUCT_KEYS
+    }
+    encoder_name = struct_dict_copy.get('encoder_name', '') or ''
+    is_dino = encoder_name.startswith(DINO_ENCODER_PREFIXES)
+    if is_dino:
+        _check_dino_compatibility(
+            model_type, encoder_name, struct_dict_copy.get("encoder_depth", 4),
+        )
+        # The DINO backbone fetches its own pretrained weights while it is
+        # built; smp's loader must not see a weights name it cannot resolve.
+        struct_dict_copy["encoder_weights"] = None
+
+    if model_type == utils.ModelType.U_NET:
+        if struct_dict_copy.get('encoder_name') in {'convnext_base', 'convnext_large', 'swin_base_patch4_window12_384'}:
+            model = smp.Unet(**struct_dict_copy, encoder_depth=4,
+                decoder_channels=(256, 128, 64, 32),
+                head_upsampling=2,)
+        elif is_dino:
+            # DINO encoders are registered with smp by
+            # dino_encoder.register_dino_encoders(), so encoder_name resolves
+            # and the decoder is sized from the DINO feature pyramid.
+            dino_depth = struct_dict_copy.pop('encoder_depth', 4)
+            model = smp.Unet(
+                **struct_dict_copy,
+                encoder_depth=dino_depth,
+                decoder_channels=(256, 128, 64, 32) if dino_depth == 4
+                else (256, 128, 64, 32, 16),
+                head_upsampling=2,
+            )
+        else:
+            model = smp.Unet(**struct_dict_copy)
+        logging.info("Built a U-Net model")
+    elif model_type == utils.ModelType.U_NET_PLUS_PLUS:
+        if struct_dict_copy.get('encoder_name') in {'convnext_base', 'convnext_large', 'swin_base_patch4_window12_384'}:
+            model = smp.UnetPlusPlus(**struct_dict_copy, encoder_depth=4,
+                decoder_channels=(256, 128, 64, 32),
+                head_upsampling=2,)
+        elif is_dino:
+            dino_depth = struct_dict_copy.pop('encoder_depth', 4)
+            model = smp.UnetPlusPlus(
+                **struct_dict_copy,
+                encoder_depth=dino_depth,
+                decoder_channels=(256, 128, 64, 32) if dino_depth == 4
+                else (256, 128, 64, 32, 16),
+                head_upsampling=2,
+            )
+        else:
+            model = smp.UnetPlusPlus(**struct_dict_copy)
+        logging.info("Built a U-Net++ model")
+    elif model_type == utils.ModelType.FPN:
+        if is_dino:
+            struct_dict_copy['encoder_depth'] = struct_dict_copy.get('encoder_depth', 4)
+        model = smp.FPN(**struct_dict_copy)
+        logging.info("Built an FPN model")
+    elif model_type == utils.ModelType.DEEPLABV3:
+        if is_dino:
+            struct_dict_copy['encoder_depth'] = struct_dict_copy.get('encoder_depth', 4)
+        model = smp.DeepLabV3(**struct_dict_copy)
+        logging.info("Built a DeepLabV3 model")
+    elif model_type == utils.ModelType.DEEPLABV3_PLUS:
+        if is_dino:
+            struct_dict_copy['encoder_depth'] = struct_dict_copy.get('encoder_depth', 4)
+        model = smp.DeepLabV3Plus(**struct_dict_copy)
+        logging.info("Built a DeepLabV3+ model")
+    elif model_type == utils.ModelType.MA_NET:
+        if is_dino:
+            struct_dict_copy['encoder_depth'] = struct_dict_copy.get('encoder_depth', 4)
+        model = smp.MAnet(**struct_dict_copy)
+        logging.info("Built an MA-Net model")
+    elif model_type == utils.ModelType.LINKNET:
+        if is_dino:
+            struct_dict_copy['encoder_depth'] = struct_dict_copy.get('encoder_depth', 4)
+        model = smp.Linknet(**struct_dict_copy)
+        logging.info("Built a Linknet model")
+    elif model_type == utils.ModelType.PAN:
+        if is_dino:
+            struct_dict_copy['encoder_depth'] = struct_dict_copy.get('encoder_depth', 4)
+        model = smp.PAN(**struct_dict_copy)
+        logging.info("Built a PAN model")
+    elif model_type == utils.ModelType.SEGFORMER:
+        if is_dino:
+            struct_dict_copy['encoder_depth'] = struct_dict_copy.get('encoder_depth', 4)
+        model = smp.Segformer(**struct_dict_copy)
+        logging.info("Built a Segformer model")
+    elif model_type == utils.ModelType.VANILLA_UNET:
+        in_channels = struct_dict_copy.get("in_channels", 1)
+        model = VanillaUNet(in_channels=in_channels, out_classes=struct_dict_copy["classes"], up_sample_mode='conv_transpose')
+        logging.info("Built a Vanilla U-Net model")
+    else:
+        raise ValueError(
+            f"build_architecture: {model_type.name} is not a plain architecture; "
+            f"the pipeline multi-head models are built by create_model_on_device."
+        )
+    return model
+
+
 def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.Module:
     struct_dict_copy = model_struc_dict.copy()
     model_type = struct_dict_copy.pop("type")
@@ -490,124 +649,7 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
         # the encoder, which refuses checkpoint paths.
         struct_dict_copy["encoder_weights"] = None
 
-    if model_type == utils.ModelType.U_NET:
-        encoder_name = struct_dict_copy.get('encoder_name', '')
-        is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-
-        if struct_dict_copy['encoder_name'] in {'convnext_base', 'convnext_large', 'swin_base_patch4_window12_384'}:
-            model = smp.Unet(**struct_dict_copy, encoder_depth=4,
-                decoder_channels=(256, 128, 64, 32),
-                head_upsampling=2,)
-        elif is_dino:
-            # DINO encoders are registered with smp by
-            # dino_encoder.register_dino_encoders(), so encoder_name resolves
-            # and the decoder is sized from the DINO feature pyramid.
-            #
-            # encoder_weights must be None here: smp's loader expects HF-Hub
-            # entries, while DINOEncoder fetches its pretrained backbone via
-            # torch.hub while constructing. Passing 'dinov2' through would
-            # raise from smp's pretrained_settings lookup.
-            dino_depth = struct_dict_copy.pop('encoder_depth', 4)
-            struct_dict_copy['encoder_weights'] = None
-            model = smp.Unet(
-                **struct_dict_copy,
-                encoder_depth=dino_depth,
-                decoder_channels=(256, 128, 64, 32) if dino_depth == 4
-                else (256, 128, 64, 32, 16),
-                head_upsampling=2,
-            )
-        else:
-            model = smp.Unet(**struct_dict_copy)
-        logging.info(f"Sending the U-Net model to device {device_num}")
-    elif model_type == utils.ModelType.U_NET_PLUS_PLUS:
-        encoder_name = struct_dict_copy.get('encoder_name', '')
-        is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-
-        if struct_dict_copy['encoder_name'] in {'convnext_base', 'convnext_large', 'swin_base_patch4_window12_384'}:
-            model = smp.UnetPlusPlus(**struct_dict_copy, encoder_depth=4,
-                decoder_channels=(256, 128, 64, 32),
-                head_upsampling=2,)
-        elif is_dino:
-            # DINO encoders are registered with smp by
-            # dino_encoder.register_dino_encoders(), so encoder_name resolves
-            # and the decoder is sized from the DINO feature pyramid.
-            #
-            # encoder_weights must be None here: smp's loader expects HF-Hub
-            # entries, while DINOEncoder fetches its pretrained backbone via
-            # torch.hub while constructing. Passing 'dinov2' through would
-            # raise from smp's pretrained_settings lookup.
-            dino_depth = struct_dict_copy.pop('encoder_depth', 4)
-            struct_dict_copy['encoder_weights'] = None
-            model = smp.UnetPlusPlus(
-                **struct_dict_copy,
-                encoder_depth=dino_depth,
-                decoder_channels=(256, 128, 64, 32) if dino_depth == 4
-                else (256, 128, 64, 32, 16),
-                head_upsampling=2,
-            )
-        else:
-            model = smp.UnetPlusPlus(**struct_dict_copy)
-        logging.info(f"Sending the U-Net++ model to device {device_num}")
-    elif model_type == utils.ModelType.FPN:
-        encoder_name = struct_dict_copy.get('encoder_name', '')
-        is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        if is_dino:
-            dino_depth = struct_dict_copy.get('encoder_depth', 4)
-            struct_dict_copy['encoder_depth'] = dino_depth
-        model = smp.FPN(**struct_dict_copy)
-        logging.info(f"Sending the FPN model to device {device_num}")
-    elif model_type == utils.ModelType.DEEPLABV3:
-        encoder_name = struct_dict_copy.get('encoder_name', '')
-        is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        if is_dino:
-            dino_depth = struct_dict_copy.get('encoder_depth', 4)
-            struct_dict_copy['encoder_depth'] = dino_depth
-        model = smp.DeepLabV3(**struct_dict_copy)
-        logging.info(f"Sending the DeepLabV3 model to device {device_num}")
-    elif model_type == utils.ModelType.DEEPLABV3_PLUS:
-        encoder_name = struct_dict_copy.get('encoder_name', '')
-        is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        if is_dino:
-            dino_depth = struct_dict_copy.get('encoder_depth', 4)
-            struct_dict_copy['encoder_depth'] = dino_depth
-        model = smp.DeepLabV3Plus(**struct_dict_copy)
-        logging.info(f"Sending the DeepLabV3+ model to device {device_num}")
-    elif model_type == utils.ModelType.MA_NET:
-        encoder_name = struct_dict_copy.get('encoder_name', '')
-        is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        if is_dino:
-            dino_depth = struct_dict_copy.get('encoder_depth', 4)
-            struct_dict_copy['encoder_depth'] = dino_depth
-        model = smp.MAnet(**struct_dict_copy)
-        logging.info(f"Sending the MA-Net model to device {device_num}")
-    elif model_type == utils.ModelType.LINKNET:
-        encoder_name = struct_dict_copy.get('encoder_name', '')
-        is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        if is_dino:
-            dino_depth = struct_dict_copy.get('encoder_depth', 4)
-            struct_dict_copy['encoder_depth'] = dino_depth
-        model = smp.Linknet(**struct_dict_copy)
-    elif model_type == utils.ModelType.PAN:
-        encoder_name = struct_dict_copy.get('encoder_name', '')
-        is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        if is_dino:
-            dino_depth = struct_dict_copy.get('encoder_depth', 4)
-            struct_dict_copy['encoder_depth'] = dino_depth
-        model = smp.PAN(**struct_dict_copy)
-        logging.info(f"Sending the PAN model to device {device_num}")
-    elif model_type == utils.ModelType.SEGFORMER:
-        encoder_name = struct_dict_copy.get('encoder_name', '')
-        is_dino = encoder_name.startswith('dinov2_') or encoder_name.startswith('dinov3_') or encoder_name.startswith('dinov1_')
-        if is_dino:
-            dino_depth = struct_dict_copy.get('encoder_depth', 4)
-            struct_dict_copy['encoder_depth'] = dino_depth
-        model = smp.Segformer(**struct_dict_copy)
-        logging.info(f"Sending the Segformer model to device {device_num}")
-    elif model_type == utils.ModelType.VANILLA_UNET:
-        in_channels = struct_dict_copy.get("in_channels", 1)
-        model = VanillaUNet(in_channels=in_channels, out_classes=struct_dict_copy["classes"], up_sample_mode='conv_transpose')
-        logging.info(f"Sending the Vanilla Unet model to device {device_num}")
-    elif model_type == utils.ModelType.MULTITASK_UNET:
+    if model_type == utils.ModelType.MULTITASK_UNET:
         raise DeprecationWarning(
             "v0.4 'Multitask_Unet' is deprecated as of v0.4.0b3. "
             "Use the new pipeline.yaml head registry instead — drop a "
@@ -628,20 +670,8 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
                     "(pre-built) or 'heads' (saved descriptor list) in the "
                     "model_struc_dict — neither was present."
                 )
-            from volume_segmantics.data.pipeline_loader import HeadConfig
             from volume_segmantics.model.heads import build_head_modules
-            heads_cfg: Dict[str, "HeadConfig"] = {}
-            for entry in heads_descriptor:
-                if not isinstance(entry, dict) or "name" not in entry:
-                    raise ValueError(
-                        f"PIPELINE_MULTITASK_UNET 'heads' entry must be a "
-                        f"dict with 'name'; got {entry!r}"
-                    )
-                hc = HeadConfig(enabled=True)
-                oc = entry.get("out_channels")
-                if oc is not None:
-                    hc.out_channels = int(oc)
-                heads_cfg[str(entry["name"])] = hc
+            heads_cfg = heads_config_from_descriptor(heads_descriptor)
             # Mirror PipelineMultitaskUnet.__init__'s DINO-aware
             # decoder_channels resolution so the heads we build here
             # have in_channels matching the decoder's last-stage
@@ -691,6 +721,7 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
         struct_dict_copy.pop("classes", None)
         struct_dict_copy.pop("activation", None)
         struct_dict_copy.pop("aux_params", None)
+        struct_dict_copy.pop("decoder_in_channels", None)
         model = PipelineMultitaskUnet(
             head_modules=head_modules, **struct_dict_copy,
         )
@@ -698,6 +729,26 @@ def create_model_on_device(device_num: int, model_struc_dict: dict) -> torch.nn.
             f"Sending the Pipeline Multitask U-Net model "
             f"(heads={list(model.head_names)}) to device {device_num}"
         )
+    elif "heads" in struct_dict_copy:
+        # A pipeline-mode checkpoint of another architecture: the heads sit on
+        # that architecture's own decoder (see PipelineMultitaskModel).
+        from volume_segmantics.model.pipeline_multitask_model import (
+            PipelineMultitaskModel,
+        )
+        heads_cfg = heads_config_from_descriptor(struct_dict_copy.pop("heads"))
+        num_classes = int(struct_dict_copy.pop("classes", 2))
+        for key in ("activation", "aux_params", "head_modules", "decoder_channels", "decoder_in_channels"):
+            struct_dict_copy.pop(key, None)
+        model = PipelineMultitaskModel(
+            heads_cfg, num_classes, architecture=model_type, **struct_dict_copy,
+        )
+        logging.info(
+            f"Sending the Pipeline Multitask {model_type.name} model "
+            f"(heads={list(model.head_names)}) to device {device_num}"
+        )
+    else:
+        model = build_architecture(model_type, struct_dict_copy)
+        logging.info(f"Sending the {model_type.name} model to device {device_num}")
 
     # If using pretrained weights with >3 input channels, adapt first conv by averaging RGB.
     # Skip this for DINO encoders as they handle channel adaptation internally
@@ -845,27 +896,13 @@ def _adapt_first_conv_from_imagenet_avg(model: torch.nn.Module, model_type, stru
         return
 
     # Create a temporary 3-channel model with same architecture to pull pretrained RGB weights
-    struct_rgb = struct_dict_copy.copy()
+    struct_rgb = {k: v for k, v in struct_dict_copy.items() if k not in PIPELINE_STRUCT_KEYS}
     struct_rgb['in_channels'] = 3
     model_type_local = model_type
-    if model_type_local == utils.ModelType.U_NET:
-        tmp = smp.Unet(**struct_rgb)
-    elif model_type_local == utils.ModelType.U_NET_PLUS_PLUS:
-        tmp = smp.UnetPlusPlus(**struct_rgb)
-    elif model_type_local == utils.ModelType.FPN:
-        tmp = smp.FPN(**struct_rgb)
-    elif model_type_local == utils.ModelType.DEEPLABV3:
-        tmp = smp.DeepLabV3(**struct_rgb)
-    elif model_type_local == utils.ModelType.DEEPLABV3_PLUS:
-        tmp = smp.DeepLabV3Plus(**struct_rgb)
-    elif model_type_local == utils.ModelType.MA_NET:
-        tmp = smp.MAnet(**struct_rgb)
-    elif model_type_local == utils.ModelType.LINKNET:
-        tmp = smp.Linknet(**struct_rgb)
-    elif model_type_local == utils.ModelType.PAN:
-        tmp = smp.PAN(**struct_rgb)
-    elif model_type_local == utils.ModelType.SEGFORMER:
-        tmp = smp.Segformer(**struct_rgb)
+    if model_type_local in SMP_ARCHITECTURES:
+        # The plain architectures, and the pipeline multi-head wrapper of one
+        # of them, which carries its base architecture as its type.
+        tmp = build_architecture(model_type_local, struct_rgb)
     elif model_type_local == utils.ModelType.MULTITASK_UNET:
         # For multitask, create a temporary model with RGB input
         heads_config = struct_dict_copy.get("heads_config", None)
