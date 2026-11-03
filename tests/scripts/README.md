@@ -16,6 +16,7 @@ python tests/scripts/run_smoke.py losses
 python tests/scripts/run_smoke.py multitask
 python tests/scripts/run_smoke.py 2.5d
 python tests/scripts/run_smoke.py semisup
+python tests/scripts/run_smoke.py architectures   # FPN, two-head DeepLabV3+, Segformer under the default trainer
 
 # Dry-run (print resolved commands, skip execution)
 python tests/scripts/run_smoke.py basic --dry-run

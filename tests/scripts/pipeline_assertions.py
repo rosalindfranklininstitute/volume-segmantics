@@ -118,6 +118,32 @@ def _check_weight_signature(declared: str, keys: Sequence[str], signature: dict)
     return sum(1 for k in keys if k.startswith(signature["require"][0]))
 
 
+def assert_checkpoint_key(ckpt_path: Path, *, key: str, equals: Optional[str] = None) -> None:
+    """``model_struc_dict[key]`` exists in the checkpoint and, with ``equals``,
+    is that value (compared as upper-case text, so a ``ModelType`` enum and
+    its name agree). The architecture guard: a run asked for ``type: FPN``
+    must have written an FPN checkpoint."""
+    import torch
+    ckpt_path = Path(ckpt_path)
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    struct = ckpt.get("model_struc_dict") if isinstance(ckpt, dict) else None
+    if not isinstance(struct, dict):
+        raise AssertionError(f"checkpoint-key: {ckpt_path} carries no model_struc_dict.")
+    if key not in struct:
+        raise AssertionError(
+            f"checkpoint-key: model_struc_dict of {ckpt_path.name} has no {key!r}; "
+            f"keys: {sorted(struct)}"
+        )
+    value = struct[key]
+    text = value.name if hasattr(value, "name") else str(value)
+    if equals is not None and text.upper() != str(equals).upper():
+        raise AssertionError(
+            f"checkpoint-key: {ckpt_path.name} model_struc_dict[{key!r}] = {text!r}, "
+            f"expected {equals!r}."
+        )
+    print(f"[OK] checkpoint-key: {ckpt_path.name} model_struc_dict[{key!r}] = {text!r}")
+
+
 def assert_encoder_family(
     ckpt_path: Path, *, expect_name: Optional[str] = None, name_only: bool = False,
 ) -> None:
@@ -679,6 +705,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--min-nbts", type=int, default=1)
     sp.add_argument("--min-rvar-std", type=float, default=0.01)
 
+    sp = sub.add_parser("checkpoint-key")
+    sp.add_argument("ckpt", type=Path)
+    sp.add_argument("--key", required=True, help="model_struc_dict key to read, e.g. type.")
+    sp.add_argument("--equals", default=None, help="Value it must hold (case-insensitive).")
+
     sp = sub.add_parser("encoder-family")
     sp.add_argument("ckpt", type=Path)
     sp.add_argument("--expect", default=None, dest="expect_name",
@@ -828,6 +859,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         assert_val_dice_within(
             args.ckpt_a, args.ckpt_b, max_drift=args.max_drift, key=args.key,
         )
+    elif args.cmd == "checkpoint-key":
+        assert_checkpoint_key(args.ckpt, key=args.key, equals=args.equals)
     elif args.cmd == "encoder-family":
         assert_encoder_family(args.ckpt, expect_name=args.expect_name, name_only=args.name_only)
     elif args.cmd == "segmentation-dice":

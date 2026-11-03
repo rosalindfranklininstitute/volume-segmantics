@@ -1,0 +1,162 @@
+# Smoke: the default trainer builds the model.type the settings ask for, names
+# the checkpoint after it, records it, and model-predict-2d rebuilds it.
+# One semantic-only FPN, one two-head DeepLabV3+ with separate decoders (via
+# --task2) and one Segformer, each at smoke scale with a prediction pass.
+#
+# Run:
+#   python tests/scripts/run_smoke.py architectures
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/architectures_smoke
+global_overrides:
+  train:
+    image_size: 64
+    # Both epochs unfrozen: the encoders start from random weights, and the
+    # best epoch may be the first, so every epoch must train the whole model
+    # for checkpoint-trained to see a BatchNorm batch count on an
+    # architecture whose decoder has none (FPN, GroupNorm).
+    num_cyc_frozen: 0
+    num_cyc_unfrozen: 2
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    freeze_encoder_bn_stats: false
+    eval_metric: MeanIoU
+    model:
+      type: FPN
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: low
+    output_probs: false
+    output_entropy: false
+    prediction_axis: Z
+tests:
+- name: train_fpn
+  type: train
+  model_key: fpn_model
+  overrides:
+    train:
+      model_output_fn: architectures_smoke_fpn
+  assert_outputs:
+    should_exist_globs:
+    - '*_FPN_*.pytorch'
+    - '*_train_stats.csv'
+    - '*_loss_plot.png'
+- name: assert_fpn_type
+  type: pipeline_assert
+  subcommand: checkpoint-key
+  args:
+  - ${model:fpn_model}
+  - --key
+  - type
+  - --equals
+  - FPN
+- name: assert_fpn_trained
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:fpn_model}
+- name: predict_fpn
+  type: predict
+  model_key: fpn_model
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+- name: train_deeplabv3plus_two_heads
+  type: train
+  model_key: dlv3p_model
+  args:
+  - --task2
+  - ${path:label}
+  overrides:
+    train:
+      model_output_fn: architectures_smoke_dlv3p
+      decoder_sharing: separate
+      precision: 16-mixed
+      model:
+        type: DeepLabV3_Plus
+        encoder_name: resnet34
+        encoder_weights: null
+  assert_outputs:
+    should_exist_globs:
+    - '*_PIPELINE_MULTITASK_DEEPLABV3_PLUS_*.pytorch'
+    - '*_train_stats.csv'
+- name: assert_dlv3p_type
+  type: pipeline_assert
+  subcommand: checkpoint-key
+  args:
+  - ${model:dlv3p_model}
+  - --key
+  - type
+  - --equals
+  - DEEPLABV3_PLUS
+- name: assert_dlv3p_separate_decoders
+  type: pipeline_assert
+  subcommand: checkpoint-key
+  args:
+  - ${model:dlv3p_model}
+  - --key
+  - decoder_sharing
+  - --equals
+  - separate
+- name: predict_dlv3p
+  type: predict
+  model_key: dlv3p_model
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+- name: pipeline_predict_dlv3p
+  type: pipeline_predict_zarr
+  model_key: dlv3p_model
+  inference_mode: single_axis
+  output_zarr: prediction.zarr
+  zarr_key: dlv3p_zarr
+- name: assert_dlv3p_zarr_heads
+  type: pipeline_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:dlv3p_zarr}
+  - --keys
+  - teacher_argmax
+  - boundary_map
+- name: train_segformer
+  type: train
+  model_key: segformer_model
+  overrides:
+    train:
+      model_output_fn: architectures_smoke_segformer
+      model:
+        type: Segformer
+        encoder_name: resnet34
+        encoder_weights: null
+  assert_outputs:
+    should_exist_globs:
+    - '*_SEGFORMER_*.pytorch'
+- name: assert_segformer_type
+  type: pipeline_assert
+  subcommand: checkpoint-key
+  args:
+  - ${model:segformer_model}
+  - --key
+  - type
+  - --equals
+  - SEGFORMER
+- name: predict_segformer_medium
+  type: predict
+  model_key: segformer_model
+  overrides:
+    predict:
+      quality: medium
+      output_entropy: true
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'

@@ -52,6 +52,7 @@ NAMED_CONFIGS = {
     "multitask": "tests/scripts/configs/multitask_smoke_tests.yaml",
     "2.5d": "tests/scripts/configs/two_5d_slicing_smoke_tests.yaml",
     "semisup": "tests/scripts/configs/semisup_smoke_tests.yaml",
+    "architectures": "tests/scripts/configs/architectures_smoke_tests.yaml",
     # DINO smoke tests
     "dino_basic": "tests/scripts/configs/dino_basic_smoke_tests.yaml",
     "dino_multitask": "tests/scripts/configs/dino_multitask_smoke_tests.yaml",
@@ -89,7 +90,7 @@ NAMED_CONFIGS = {
 
 # Groups that expand to multiple configs run in sequence
 NAMED_GROUPS = {
-    "all_smoke": ["basic", "losses", "multitask", "2.5d", "semisup"],
+    "all_smoke": ["basic", "losses", "multitask", "2.5d", "semisup", "architectures"],
     "all_qa": ["qa_basic", "qa_losses", "qa_multitask", "qa_semisup", "qa_2.5d"],
     "all_dino_smoke": ["dino_basic", "dino_multitask", "dino_semisup", "dino_2.5d"],
     "all_dino_qa": ["qa_dino_basic", "qa_dino_multitask", "qa_dino_semisup", "qa_dino_2.5d"],

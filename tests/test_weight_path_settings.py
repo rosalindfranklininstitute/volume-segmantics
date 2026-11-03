@@ -3,6 +3,7 @@
 
 """
 
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -171,3 +172,36 @@ def test_lightning_module_refuses_a_missing_weights_file(tmp_path):
         VolSeg2dLightningModule.from_pipeline_config(
             _semantic_config(), settings=_settings(full_weights_path=str(tmp_path / "absent.pytorch")), num_classes=2,
         )
+
+
+def test_a_trainer_checkpoint_restarts_a_run_from_its_weights(tmp_path):
+    """A ``.pytorch`` written by ``model-train-2d`` under the
+    default trainer, named in ``full_weights_path`` or ``encoder_weights_path``,
+    initialises the next run."""
+    from volume_segmantics.model.operations.lightning2d import (
+        VolSegCheckpointCallback,
+        model_struct_dict_for_checkpoint,
+    )
+    torch.manual_seed(1)
+    trained = VolSeg2dLightningModule.from_pipeline_config(_semantic_config(), settings=_settings(), num_classes=2)
+    # Named as model-train-2d names its output; nothing reads the date back.
+    ckpt = tmp_path / f"{date.today()}_U_NET_trained_2d_model.pytorch"
+    callback = VolSegCheckpointCallback(
+        ckpt, model_struct_dict_for_checkpoint(_settings(), trained, 2), image_size=64,
+        input_stack={"use_2_5d": False, "num_slices": 3},
+    )
+    trainer = SimpleNamespace(callbacks=[], global_rank=0, sanity_checking=False, callback_metrics={})
+    callback._save_volseg_checkpoint(trainer, trained, ckpt)
+
+    torch.manual_seed(2)
+    restarted = VolSeg2dLightningModule.from_pipeline_config(
+        _semantic_config(), settings=_settings(full_weights_path=str(ckpt)), num_classes=2,
+    )
+    assert _same(trained._underlying_student, restarted._underlying_student)
+
+    torch.manual_seed(3)
+    encoder_only = VolSeg2dLightningModule.from_pipeline_config(
+        _semantic_config(), settings=_settings(encoder_weights_path=str(ckpt)), num_classes=2,
+    )
+    assert _same(trained._underlying_student.encoder, encoder_only._underlying_student.encoder)
+    assert not _same(trained._underlying_student.decoders, encoder_only._underlying_student.decoders)
