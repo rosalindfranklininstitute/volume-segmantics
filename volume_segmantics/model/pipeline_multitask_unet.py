@@ -24,6 +24,23 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+#: ``decoder_sharing`` values: one decoder for every head, or one per head.
+DECODER_SHARING_MODES = ("shared", "separate")
+
+
+def check_decoder_sharing(value) -> str:
+    """``decoder_sharing`` normalised to ``"shared"`` or ``"separate"``.
+
+    Unset (``None``, empty, ``False``) is ``"shared"``; anything else is refused
+    rather than silently training a shared decoder.
+    """
+    mode = "shared" if value in (None, "", False) else str(value).strip().lower()
+    if mode not in DECODER_SHARING_MODES:
+        raise ValueError(
+            f"decoder_sharing must be one of {DECODER_SHARING_MODES}; got {value!r}"
+        )
+    return mode
+
 
 def _is_dino(encoder_name: str) -> bool:
     return (
@@ -57,6 +74,10 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
         SMP decoder attention. ``None`` or ``"scse"``.
     in_channels
         Network input channel count. pipeline version default = 1 (grayscale).
+    decoder_sharing
+        ``"shared"`` (one decoder read by every head, the default) or
+        ``"separate"`` (one decoder per head, so a second head adds a whole
+        decoder's parameters). The train settings' ``decoder_sharing`` key.
     """
 
     requires_divisible_input_shape = False
@@ -72,6 +93,7 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
         decoder_channels: Sequence[int] = (256, 128, 64, 32, 16),
         decoder_attention_type: Optional[str] = None,
         in_channels: int = 1,
+        decoder_sharing: str = "shared",
         **encoder_kwargs,
     ) -> None:
         super().__init__()
@@ -80,6 +102,7 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
             raise ValueError(
                 "PipelineMultitaskUnet requires at least one head module"
             )
+        decoder_sharing = check_decoder_sharing(decoder_sharing)
         if encoder_depth is None:
             encoder_depth = 5
         encoder_depth = int(encoder_depth)
@@ -139,8 +162,8 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
             )
             head_upsampling = None
 
-        #  Decoder 
-        # Single shared decoder. (pipeline version drops decoder_sharing: separate.)
+        #  Decoder(s) 
+        # One decoder read by every head, or one decoder per head.
         if decoder_use_batchnorm is True:
             use_norm: Union[bool, str] = "batchnorm"
         elif decoder_use_batchnorm is False:
@@ -150,15 +173,19 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
         else:
             use_norm = "batchnorm"
 
-        decoder = UnetDecoder(
-            encoder_channels=self.encoder.out_channels,
-            decoder_channels=decoder_channels,
-            n_blocks=encoder_depth,
-            use_norm=use_norm,
-            add_center_block=encoder_name.startswith("vgg"),
-            attention_type=decoder_attention_type,
-        )
-        self.decoders = nn.ModuleList([decoder])
+        num_decoders = len(head_modules) if decoder_sharing == "separate" else 1
+        self.decoders = nn.ModuleList([
+            UnetDecoder(
+                encoder_channels=self.encoder.out_channels,
+                decoder_channels=decoder_channels,
+                n_blocks=encoder_depth,
+                use_norm=use_norm,
+                add_center_block=encoder_name.startswith("vgg"),
+                attention_type=decoder_attention_type,
+            )
+            for _ in range(num_decoders)
+        ])
+        self.decoder_sharing = decoder_sharing
 
         #  Heads 
         # Validate head modules' input-channel expectation matches the
@@ -179,8 +206,11 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
                     )
 
         self.heads = nn.ModuleList(list(head_modules))
-        # Single shared decoder: every head reads decoder index 0.
-        self.head_to_decoder: List[int] = [0] * len(head_modules)
+        # Shared: every head reads decoder 0. Separate: head i reads decoder i.
+        self.head_to_decoder: List[int] = (
+            list(range(len(head_modules))) if decoder_sharing == "separate"
+            else [0] * len(head_modules)
+        )
 
         # No optional classification head in pipeline version.
         self.classification_head = None
@@ -205,12 +235,12 @@ class PipelineMultitaskUnet(MultitaskSegmentationModel):
     #       if mask.shape mismatches input: bilinear upsample
     #   return tuple(masks)
     #
-    # Because all heads share decoder 0, the parent caches the decoder
-    # output on the first head and reuses it for the others.
+    # Under "shared" every head reads decoder 0, so the parent computes it
+    # once and reuses it; under "separate" each head runs its own decoder.
 
     @property
     def num_heads(self) -> int:
         return len(self.heads)
 
 
-__all__ = ["PipelineMultitaskUnet"]
+__all__ = ["DECODER_SHARING_MODES", "PipelineMultitaskUnet", "check_decoder_sharing"]
