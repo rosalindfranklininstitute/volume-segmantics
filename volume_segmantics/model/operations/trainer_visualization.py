@@ -135,8 +135,10 @@ class TrainingVisualizer:
             ax.plot(epochs, epoch_history["seg_dice"], label="Seg Dice (mean)")
             if any(epoch_history["boundary_dice"]):
                 ax.plot(epochs, epoch_history["boundary_dice"], label="Boundary Dice")
+            if any(epoch_history.get("seg_iou", [])):
+                ax.plot(epochs, epoch_history["seg_iou"], label="Seg IoU (mean)")
             ax.set_xlabel("Epoch")
-            ax.set_ylabel("Dice Score")
+            ax.set_ylabel("Score")
             ax.set_title("Mean Evaluation Metrics")
             ax.legend()
             ax.grid(True)
@@ -239,12 +241,14 @@ class TrainingVisualizer:
             ax.legend()
             ax.grid(True)
             
-            # Mean Dice
+            # Mean Dice (and IoU when it was reported)
             ax = axes[0, 1]
             ax.plot(epochs, epoch_history["seg_dice"], label="Mean Dice", color='green')
+            if any(epoch_history.get("seg_iou", [])):
+                ax.plot(epochs, epoch_history["seg_iou"], label="Mean IoU", color='purple')
             ax.set_xlabel("Epochs")
-            ax.set_ylabel("Dice Score")
-            ax.set_title("Mean Dice Score")
+            ax.set_ylabel("Score")
+            ax.set_title("Mean Validation Metrics")
             ax.legend()
             ax.grid(True)
             
@@ -328,20 +332,31 @@ class TrainingVisualizer:
                 header.extend(["Train_Loss", "Valid_Loss", "Seg_Dice"])
             
             # Add per-class Dice columns
-            for c in range(self.num_classes):
-                class_name = self.label_codes.get(c, f"Class_{c}") if self.label_codes else f"Class_{c}"
-                header.append(f"Dice_{class_name}")
+            class_names = [
+                self.label_codes.get(c, f"Class_{c}") if self.label_codes else f"Class_{c}"
+                for c in range(self.num_classes)
+            ]
+            header.extend(f"Dice_{name}" for name in class_names)
+            # The IoU columns exist only when the run reported it
+            # (eval_metric: MeanIoU): the mean, then one per class.
+            has_iou = bool(epoch_history.get("seg_iou"))
+            if has_iou:
+                header.append("Seg_IoU")
+                header.extend(f"IoU_{name}" for name in class_names)
             
             writer.writerow(header)
             
             stat_keys = _MULTITASK_STAT_KEYS if self.use_multitask else _SINGLE_TASK_STAT_KEYS
             dice_keys = [f"dice_class_{c}" for c in range(self.num_classes)]
+            iou_keys = ["seg_iou"] + [f"iou_class_{c}" for c in range(self.num_classes)]
             # Write data rows
             for i, epoch in enumerate(epochs):
                 row = [epoch]
                 
                 row.extend(_stat_at(epoch_history, key, i) for key in stat_keys)
                 row.extend(_stat_at(epoch_history, key, i) for key in dice_keys)
+                if has_iou:
+                    row.extend(_stat_at(epoch_history, key, i) for key in iou_keys)
                 
                 writer.writerow(row)
         
