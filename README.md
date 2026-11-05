@@ -76,7 +76,7 @@ They read their settings from YAML files in a directory named `volseg-settings` 
 | --- | --- |
 | `2d_model_train_settings.yaml` | Everything about training: data layout, normalisation, model and encoder, learning rate, loss, evaluation metric, 2.5D slicing. |
 | `2d_model_predict_settings.yaml` | Everything about prediction: quality, outputs, normalisation, 2.5D prediction, sliding-window inference. |
-| `pipeline.yaml` (optional) | The multi-head pipeline: which heads to train, their losses and schedules, the augmentation backend, the EMA teacher, the inference mode and instance assembly. When it is absent a pipeline configuration is derived from the training settings with a semantic head only. |
+| `pipeline.yaml` (optional) | The multi-head pipeline: which heads to train, their losses and schedules, the augmentation backend, the EMA teacher, the inference mode and instance assembly. When it is absent a pipeline configuration is derived from the training settings with a semantic head only. A commented two-head example is `volseg-settings/pipeline_multitask_example.yaml`; see [Multi-task training](#multi-task-training-with-pipelineyaml). |
 | `optuna_config.yaml` (optional) | The search space for `model-train-2d --optuna`. |
 
 Check the normalisation settings carefully for your data; different datasets need different choices, and the prediction settings must match the ones used for training.
@@ -109,7 +109,8 @@ Options of `model-train-2d`:
 | `--devices auto` / `--devices 2` | Train on every visible GPU, or on a given number, with Lightning's distributed data parallel strategy. The default is the single GPU named by `cuda_device` in the settings. |
 | `--strategy ddp` | Override the Lightning strategy. |
 | `--optuna [CONFIG]` | Run an Optuna hyperparameter search instead of a single training run; needs the `optuna` extra. See [docs/optuna.md](docs/optuna.md). |
-| `--task2 DIR` / `--task3 DIR` | Precomputed boundary or distance labels for the legacy multi-task trainer. Under the default trainer these enable the matching heads, whose targets are derived from the semantic labels on the fly. |
+| `--task2 DIR` / `--task3 DIR` | Enable the `boundary` or `distance` head beside the semantic one, see [Multi-task training](#multi-task-training-with-pipelineyaml). The default trainer derives those heads' targets from the semantic labels, so the directory given is not read; the legacy trainer reads precomputed labels from it. |
+| `--precision 16-mixed` | Train under automatic mixed precision, overriding `precision` in the settings; `bf16-mixed` for bfloat16. |
 | `--legacy-trainer` | Use the deprecated raw-PyTorch trainer, scheduled for removal in version 0.5. |
 
 ### Predicting a 3D segmentation with a 2D model
@@ -157,36 +158,70 @@ The Zarr store holds `teacher_argmax` and `teacher_probs` for the semantic head,
 
 ### Trainers
 
-The default trainer is built on PyTorch Lightning and supports mixed precision, multi-GPU training with distributed data parallel, and the multi-head pipeline. The original raw-PyTorch trainer is kept behind `--legacy-trainer` for one release and is scheduled for removal in version 0.5.
+The default trainer is built on PyTorch Lightning and supports mixed precision, multi-GPU training with distributed data parallel, and the multi-head pipeline. 
 
-Training runs in two phases set by `num_cyc_frozen` and `num_cyc_unfrozen`: first with the pre-trained encoder frozen, then with every layer trainable. Under the default trainer the encoder's BatchNorm statistics stay fixed in both phases (`freeze_encoder_bn_stats`), which is the usual practice when fine-tuning a pre-trained encoder with small batches. Under the default trainer, early stopping watches the validation foreground Dice with the patience given by `patience`, and the same metric selects the saved checkpoint; the legacy trainer watches the validation loss.
+`precision` in the training settings selects full precision (`32`, the default), automatic mixed precision in float16 (`16-mixed`, CUDA only) or in bfloat16 (`bf16-mixed`); `--precision` on the command line overrides it. The learning-rate sweep runs in full precision.
 
-### Learning rate
+Training runs in two phases set by `num_cyc_frozen` and `num_cyc_unfrozen`: first with the pre-trained encoder frozen, then with every layer trainable.Under the default trainer, early stopping watches the validation foreground Dice with the patience given by `patience`, and the same metric selects the saved checkpoint.
 
-`lr_policy` chooses how the learning rate is set:
-
-- `find_onecycle` (the default): before each phase a sweep from `starting_lr` to `end_lr` over `lr_find_epochs` epochs selects the rate at the steepest loss descent, and the phase trains under a OneCycle schedule whose warm-up fraction is `pct_lr_inc`. The unfrozen phase searches the range divided by `lr_reduce_factor`, 10 by default. `encoder_lr_multiplier` scales the encoder's rate relative to the decoder's during unfrozen training.
-- `constant`: train at `starting_lr` with no sweep and no schedule.
-
-A warning is logged if a phase selects a rate below 1e-6, which means the search range sat below useful values.
 
 ### Models and encoders
 
-`model.type` selects the architecture: `U_Net`, `U_Net_Plus_plus`, `FPN`, `DeepLabV3`, `DeepLabV3_Plus`, `MA_Net`, `Linknet`, `PAN`, `Segformer` or `Vanilla_Unet` (no pre-trained encoder). `model.encoder_name` selects any encoder supported by segmentation-models-pytorch, including timm encoders with the `tu-` prefix, and the DINO vision transformers `dinov2_vits14`, `dinov2_vitb14`, `dinov2_vitl14`, `dinov2_vitg14`, their `_reg` variants with registers, `dinov3_vitl16` and `dinov3_vit7b16`. DINO encoders work with `U_Net`, `Segformer`, and with `U_Net_Plus_plus` and `Linknet` for the patch-16 models; an `encoder_depth` of 4 is recommended for them. `model.encoder_weights` is `imagenet` for pre-trained weights or `null` for random initialisation.
+`model.type` selects the architecture: `U_Net`, `U_Net_Plus_plus`, `FPN`, `DeepLabV3`, `DeepLabV3_Plus`, `MA_Net`, `Linknet`, `PAN`, `Segformer` or `Vanilla_Unet` (no pre-trained encoder). The default trainer builds that architecture and puts the pipeline heads on its decoder, names the checkpoint after it (for example `<date>_FPN_<model_output_fn>.pytorch`) and records it in the checkpoint, from which `model-predict-2d` rebuilds it. `model.encoder_name` selects any encoder supported by segmentation-models-pytorch, including timm encoders with the `tu-` prefix, and the DINO vision transformers `dinov2_vits14`, `dinov2_vitb14`, `dinov2_vitl14`, `dinov2_vitg14`, their `_reg` variants with registers, `dinov3_vitl16` and `dinov3_vit7b16`. DINO encoders work with `U_Net`, `Segformer`, and with `U_Net_Plus_plus` and `Linknet` for the patch-16 models; an `encoder_depth` of 4 is recommended for them. `model.encoder_weights` is `imagenet` for pre-trained weights or `null` for random initialisation.
 
 Two further settings initialise a model from your own files: `full_weights_path` loads a saved model's weights before training, and `encoder_weights_path` loads encoder weights alone, adapting the first convolution to the number of input channels. 
 
 ### Losses and metrics
 
-`loss_criterion` selects `CombinedCEDiceLoss` (the default, with `ce_weight`, `dice_weight`, `dice_weight_mode` and `exclude_background_from_dice`), `DiceLoss`, `GeneralizedDiceLoss`, `CrossEntropyLoss`, `BCELoss`, `TverskyLoss`, `BoundaryDoULoss`, `BoundaryLoss` or `ClassWeightedDiceLoss`. `eval_metric` selects `MeanIoU` or `DiceCoefficient`. Generalized Dice weights each class by the inverse of its squared volume, which concentrates training on rare classes; for multi-class data with large classes the combined or class-weighted Dice losses are usually the better choice.
+`loss_criterion` selects `CombinedCEDiceLoss` (the default, with `ce_weight`, `dice_weight`, `dice_weight_mode` and `exclude_background_from_dice`), `DiceLoss`, `GeneralizedDiceLoss`, `CrossEntropyLoss`, `BCELoss`, `TverskyLoss`, `BoundaryDoULoss`, `BoundaryLoss` or `ClassWeightedDiceLoss`. 
+
+The validation Dice is always reported: per class, as the mean the settings ask for (`dice_averaging` is `macro` or `weighted`, and `exclude_background_from_dice` leaves class 0 out of the mean), and as the foreground Dice that selects the saved checkpoint. `eval_metric: MeanIoU` adds the per-class and mean intersection over union to the epoch summary, the training stats CSV and the loss plot. `DiceCoefficient` reports Dice alone. 
 
 ### 2.5D slicing
 
 With `use_2_5d_slicing: True` each training image is a stack of `num_slices` adjacent slices, an odd number of 3 or more, so the model sees context from neighbouring slices. The encoder's first convolution is adapted to that many input channels. Prediction must then set `use_2_5d_prediction: True` with the same `num_slices`.
 
-### Multi-head training with pipeline.yaml
+### Multi-task training with pipeline.yaml
 
-`pipeline.yaml` enables extra heads beside the semantic one: `boundary`, `distance` and `sdm` (signed distance map), each with its own loss, weight and warm-up schedule. The same file selects the augmentation backend (`albumentations` or `monai`), the inference mode and the instance-assembly backend used by `model-predict-pipeline`. The packaged default, `volume_segmantics/settings/pipeline.default.yaml`, documents every key.
+Multi-task training adds prediction heads beside the semantic one: `boundary`, `distance` and `sdm` (signed distance map), each with its own loss, weight and warm-up schedule. Every head reads the decoder of the architecture `model.type` names, and their targets are derived from the semantic labels on the fly, so no extra label volumes are needed. There are two ways to enable heads.
+
+The quick way is the command line: `--task2` enables the boundary head and `--task3` the distance head, with their default losses. The argument is a path for the legacy trainer, which reads precomputed labels from it; the default trainer does not read it, so the semantic labels can be given again:
+
+```shell
+model-train-2d --data training_data/vessels_256cube_DATA.h5 --labels training_data/vessels_256cube_LABELS.h5 --task2 training_data/vessels_256cube_LABELS.h5
+```
+
+The full way is a `pipeline.yaml` in `volseg-settings`, which is read whenever it exists and takes precedence over `--task2` and `--task3`. Copy `volseg-settings/pipeline_multitask_example.yaml` to `volseg-settings/pipeline.yaml` and edit it; this is its heads block:
+
+```yaml
+schema_version: pipeline_v1
+heads:
+  semantic:
+    enabled: true
+    loss: dice_ce
+    loss_weight: 1.0
+  boundary:
+    enabled: true
+    loss: boundary_bce_dice       # bce | boundary_bce | boundary_dice | boundary_bce_dice
+    loss_weight: 0.5
+  distance:
+    enabled: true
+    d_clip: 10.0                  # distances are clipped to this many voxels
+    loss: distance_l1             # distance_l1 | distance_mse
+    loss_weight: 0.5
+  sdm:
+    enabled: false
+```
+
+Then train as usual:
+
+```shell
+model-train-2d --data training_data/vessels_256cube_DATA.h5 --labels training_data/vessels_256cube_LABELS.h5
+```
+
+The heads share one decoder by default; `decoder_sharing: separate` in the training settings gives each head its own decoder, which adds a decoder's parameters per extra head. The checkpoint is named `<date>_PIPELINE_MULTITASK_<type>_<model_output_fn>.pytorch` and `model-predict-2d` writes the semantic segmentation from it; `model-predict-pipeline` writes every head's map to a Zarr store and can assemble instances from them. 
+
+The same `pipeline.yaml` also selects the augmentation backend (`albumentations` or `monai`), the inference mode and the instance-assembly backend; the packaged default, `volume_segmantics/settings/pipeline.default.yaml`, documents every key. (The legacy trainer's `use_multitask`, `num_tasks` and `Multitask_Unet` settings are not needed: `Multitask_Unet` as `model.type` builds the pipeline U-Net.)
 
 ### Semi-supervised learning
 

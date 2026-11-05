@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.4.1]
 
 ### Added
 
@@ -22,24 +22,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * `lr_policy` train setting for the default (Lightning) trainer. `find_onecycle` (the default) ports the legacy trainer's learning-rate semantics: before each phase a sweep from `starting_lr` to `end_lr` over `lr_find_epochs` selects the rate at the steepest loss descent divided by 3, the phase trains under a OneCycle schedule with a `pct_lr_inc` warm-up, and the unfrozen phase sweeps the range divided by `lr_reduce_factor`; the sweep runs on rank 0 and is broadcast under DDP. `constant` is training at `starting_lr` with no sweep and no schedule.
 * `freeze_encoder_bn_stats` train setting (default `True`): the default trainer keeps the encoder's BatchNorm running statistics frozen through the unfrozen phase. 
 * Both learning-rate finders warn when a phase selects a rate below 1e-6, naming `lr_reduce_factor` and the search bounds.
+.
+* `decoder_sharing: separate` under the default trainer gives every pipeline head its own decoder (for the pipeline U-Net and every other `model.type`); the checkpoint records the sharing and prediction rebuilds it. 
+
+* A `checkpoint-key` assertion in the test harness and an `architectures` smoke configuration that trains FPN, DeepLabV3+ with two heads and Segformer under the default trainer and predicts with each.
+
+* Explicit `precision` train setting and `--precision` option for the default trainer: `32` (full precision, the default), `16-mixed` or `bf16-mixed` for automatic mixed precision in float16 or bfloat16.
+
 
 ### Changed
+
+* `eval_metric` reaches the default trainer. Validation Dice is still always reported and the foreground Dice still selects the checkpoint; `MeanIoU` adds the per-class and mean IoU to the epoch summary line, the training stats CSV (`Seg_IoU`, `IoU_<class>`) and the loss plot. `dice_averaging` (`macro` or `weighted`) and `exclude_background_from_dice` shape the reported mean as they did under the legacy trainer, and an unknown `eval_metric` or `dice_averaging` is refused
+
+* The default trainer no longer slices the volumes given to `--task2` / `--task3` (it derives the heads' targets from the semantic labels and never read those slices) and no longer switches on the legacy `use_multitask` mode for them.
 
 * A file path in `model.encoder_weights` no longer initialises a DINO encoder (it loaded with `strict=False`, dropping missing tensors silently). Use `dinov2`/`dinov3` for the hub backbone, or load a full saved model via `full_weights_path`.
 
 
 ### Fixed
 
+* The epoch summary line printed on the console carried the previous epoch's training loss, and none on the first epoch; it is now printed at the end of the training epoch with that epoch's own loss and validation metrics.
+
+* The default trainer builds the `model.type` the settings ask for. Before this it always built the pipeline U-Net and named the checkpoint `U_NET`, so `FPN`, `DeepLabV3`, `DeepLabV3_Plus`, `MA_Net`, `Linknet`, `PAN`, `Segformer`, `U_Net_Plus_plus` and `Vanilla_Unet` all trained as a U-Net. Each architecture is now built with its own decoder and the pipeline heads on it, the checkpoint is named after the type (`<date>_FPN_...`, or `PIPELINE_MULTITASK_FPN` with more than one head) and records it, and `model-predict-2d` rebuilds it; `Multitask_Unet` remains the legacy name of the pipeline U-Net.
+
 * DINO encoders are registered with `segmentation_models_pytorch` through its public `encoders` registry, and `DINOEncoder` implements the smp encoder protocol (`output_stride`, `set_in_channels`, `make_dilated`). 
+
 * A failed DINO weight download raises instead of silently continuing with a randomly initialised DINOv3 backbone.
+
 * Prediction rebuilds a DINO model from the checkpoint alone and no longer fetches hub weights it then overwrites.
+
 * `create_model_on_device` verifies after every construction that the built encoder's class matches the requested `encoder_name`, so a substituted backbone raises instead of training or predicting silently.
+
 * `create_model_from_file` and `create_model_from_file_full_weights` check a checkpoint's declared `encoder_name` against its state-dict keys before building anything, refusing the mislabelled "DINO" checkpoints.
+
 * The default (Lightning) trainer now feeds `--unlabeled_data_dir` into training correcly: every labeled batch is paired with a batch of unlabeled slices prepared exactly like the labeled ones, Mean Teacher's consistency loss is taken between the student's augmented view and the teacher's plain view of those slices, and pseudo-labelling adds a confidence-masked cross-entropy on them with its documented weight, ramp and threshold schedule. 
+
 * The legacy settings' `consistency_weight` (default 0.1), `rampup_start` and `rampup_end` are honoured by the default trainer; `pipeline.yaml` gains an optional `ema_teacher.consistency_rampup` block.
+
 * Various fixes: frequency-weighted Dice (`inverse_freq`, `inverse_sqrt_freq`) gives a class absent from the batch no weight instead of nearly all of it; prediction resizes slices to the `image_size` the checkpoint now records (`native_scale` in the predict settings opts out); a named `border_mode` in `pipeline.yaml` augmentations resolves to its OpenCV constant, so the packaged default pipeline trains; `output_entropy` works at medium and high quality; multi-task prediction no longer fails its alignment diagnostic on non-square slices; the Lightning trainer trains on the settings' `cuda_device` (multi-GPU is opt-in via `--devices`); batch size is taken from the memory the driver reports free; the epoch summary line, epoch history and stats CSV carry each epoch's own metrics and tolerate short or missing series; an unknown `OUTPUT_FORMAT` is refused before prediction instead of writing nothing.
+
 * Test harness: an `encoder-family` assertion checks that a checkpoint's weights corroborate its declared encoder; the DINO smoke configs now run it, and the harness collects assertion failures instead of aborting a config at the first one.
+
 * The default (Lightning) trainer honours `encoder_weights_path` and `full_weights_path`.
+
 * `GeneralizedDiceLoss` gave a class absent from the batch a weight of 1 over epsilon. An absent class now takes the largest present weight.
 
 
