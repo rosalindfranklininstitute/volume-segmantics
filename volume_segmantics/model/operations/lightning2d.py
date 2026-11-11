@@ -1176,6 +1176,57 @@ class UnfreezeEncoderCallback(pl.Callback if pl is not None else object):
             self._unfrozen = True
 
 
+def early_stopping_patience(settings: Any) -> int:
+    """Return the ``patience`` train setting as a number of epochs.
+
+    A value of 0 disables early stopping. If ``patience`` is empty or absent,
+    the default is 4. The function does not change a value of 0 to the
+    default.
+    """
+    raw = getattr(settings, "patience", None)
+    if raw is None or raw == "":
+        return 4
+    patience = int(raw)
+    if patience < 0:
+        raise ValueError(f"patience must be 0 (off) or a positive epoch count; got {raw!r}")
+    return patience
+
+
+if pl is not None:
+    from pytorch_lightning.callbacks import EarlyStopping as _ES_BASE
+else:  # pragma: no cover
+    _ES_BASE = object  # type: ignore[assignment,misc]
+
+
+class PhasedEarlyStopping(_ES_BASE):  # type: ignore[misc,valid-type]
+    """Early stopping that does not stop the run while the encoder is frozen.
+    """
+
+    def __init__(self, *args: Any, num_frozen_epochs: int = 0,
+                 num_unfrozen_epochs: int = 0, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.num_frozen_epochs = int(num_frozen_epochs or 0)
+        self.num_unfrozen_epochs = int(num_unfrozen_epochs or 0)
+
+    def _in_protected_frozen_phase(self, trainer: Any) -> bool:
+        return (
+            self.num_frozen_epochs > 0
+            and self.num_unfrozen_epochs > 0
+            and int(trainer.current_epoch) < self.num_frozen_epochs
+        )
+
+    def _run_early_stopping_check(self, trainer: Any) -> None:
+        if not self._in_protected_frozen_phase(trainer):
+            super()._run_early_stopping_check(trainer)
+            return
+        should_stop_before = trainer.should_stop
+        super()._run_early_stopping_check(trainer)
+        # Keep the best score from the check. Ignore the stop decision.
+        trainer.should_stop = should_stop_before
+        self.stopped_epoch = 0
+        self.wait_count = 0
+
+
 class EpochHistoryCallback(pl.Callback if pl is not None else object):
     """Collects per-epoch logged metrics into a list of dicts.
 

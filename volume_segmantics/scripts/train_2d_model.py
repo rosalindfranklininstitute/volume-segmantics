@@ -646,12 +646,11 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
     * Callbacks: :class:`UnfreezeEncoderCallback` (frozen->unfrozen
       two-stage), :class:`VolSegCheckpointCallback` (with the v0.5
       Bug 2 sanity-check + always-save-final fixes),
-      :class:`EpochHistoryCallback`, Lightning's :class:`EarlyStopping`
-      mapped onto the legacy ``patience`` setting.
+      :class:`EpochHistoryCallback`, :class:`PhasedEarlyStopping` with the
+      ``patience`` setting (0 disables it).
 
     """
     import pytorch_lightning as pl
-    from pytorch_lightning.callbacks import EarlyStopping
     from pytorch_lightning.loggers import TensorBoardLogger
 
     from volume_segmantics.data.lightning_dataloaders import VolSeg2dDataModule
@@ -664,12 +663,14 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
         EpochHistoryCallback,
         LegacyEpochSummaryCallback,
         NoVNumProgressBar,
+        PhasedEarlyStopping,
         UnfreezeEncoderCallback,
         VolSeg2dLightningModule,
         VolSegCheckpointCallback,
         VolSegDiagnosticsCallback,
         VolSegSSLVizCallback,
         checkpoint_model_type_name,
+        early_stopping_patience,
         final_checkpoint_path,
         model_struct_dict_for_checkpoint,
         resolve_precision,
@@ -770,12 +771,20 @@ def run_trainer_lightning(data_im_out_dir, seg_im_out_dir, max_label_no, setting
                 num_classes=int(max_label_no),
             ),
         )
-    patience = int(getattr(settings, "patience", 4) or 4)
+    patience = early_stopping_patience(settings)
     if patience > 0:
         callbacks.append(
             # The same metric the checkpoint callback keeps the best epoch by.
-            EarlyStopping(monitor=CHECKPOINT_MONITOR, patience=patience, mode="max")
+            # A plateau while the encoder is frozen does not stop the run. The
+            # unfrozen phase always runs.
+            PhasedEarlyStopping(
+                monitor=CHECKPOINT_MONITOR, patience=patience, mode="max",
+                num_frozen_epochs=num_cyc_frozen,
+                num_unfrozen_epochs=num_cyc_unfrozen,
+            )
         )
+    else:
+        logging.info("Early stopping is off (patience: 0).")
 
     accelerator = "gpu" if torch.cuda.is_available() else "cpu"
     devices, strategy = _resolve_lightning_devices(settings, accelerator)
