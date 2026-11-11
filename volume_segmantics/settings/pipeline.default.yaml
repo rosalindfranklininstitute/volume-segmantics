@@ -60,6 +60,7 @@ augmentations:
     - { name: Rotate, limit: 30, p: 0.5, border_mode: reflect }
     - { name: RandomBrightnessContrast, brightness_limit: 0.2,
         contrast_limit: 0.2, p: 0.3 }
+    # var_limit is the noise variance on the 0-255 grey scale
     - { name: GaussNoise, var_limit: [10.0, 50.0], p: 0.3 }
 
 #  EMA teacher (semi-supervised learning) 

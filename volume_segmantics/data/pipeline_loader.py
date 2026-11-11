@@ -541,6 +541,22 @@ def _parse_transform_list(src: Sequence[Any]) -> List[TransformSpec]:
     return out
 
 
+def default_train_transforms() -> List[TransformSpec]:
+    """Return ``augmentations.train_transforms`` of the packaged default pipeline.
+
+    Training uses this list when there is no ``pipeline.yaml``, or when the
+    ``pipeline.yaml`` does not give a list. The function reads
+    ``volume_segmantics/settings/pipeline.default.yaml``. Thus this file is
+    the only source of the defaults.
+    """
+    from volume_segmantics.settings import PIPELINE_DEFAULT_PATH
+
+    with PIPELINE_DEFAULT_PATH.open("r") as fh:
+        data = yaml.safe_load(fh) or {}
+    aug_src = data.get("augmentations", {}) or {}
+    return _parse_transform_list(aug_src.get("train_transforms", []) or [])
+
+
 def parse_pipeline_dict(data: Mapping[str, Any]) -> PipelineConfig:
     """Parse a pre-loaded YAML dict into a :class:`PipelineConfig`.
     """
@@ -564,12 +580,18 @@ def parse_pipeline_dict(data: Mapping[str, Any]) -> PipelineConfig:
         sdm=dict(targets_src.get("sdm", {"distance_transform": "edt"})),
     )
 
+    # When pipeline.yaml does not give ``augmentations.train_transforms``, the
+    # packaged default list applies. All other keys that have no value also
+    # use their defaults. An empty list (``train_transforms: []``) disables
+    # the training augmentations.
     aug_src = data.get("augmentations", {}) or {}
+    if aug_src.get("train_transforms") is None:
+        train_transforms = default_train_transforms()
+    else:
+        train_transforms = _parse_transform_list(aug_src["train_transforms"])
     augmentations = AugmentationsConfig(
         backend=aug_src.get("backend", "auto"),
-        train_transforms=_parse_transform_list(
-            aug_src.get("train_transforms", []) or []
-        ),
+        train_transforms=train_transforms,
     )
 
     ema_src = data.get("ema_teacher", {}) or {}
@@ -781,6 +803,8 @@ def legacy_settings_to_pipeline_config(
 
     return PipelineConfig(
         heads={"semantic": semantic},
+        # There is no pipeline.yaml. Use the packaged default augmentations.
+        augmentations=AugmentationsConfig(train_transforms=default_train_transforms()),
         ema_teacher=ema_teacher,
         prediction=PredictionConfig(
             inference_mode=_legacy_inference_mode(settings),

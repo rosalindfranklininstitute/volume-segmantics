@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
+import math
 import os
 import re
 from pathlib import Path
@@ -153,6 +155,43 @@ def _albumentations_params(spec: TransformSpec) -> Dict[str, Any]:
                 f"{sorted(_CV2_BORDER_MODES)} or an OpenCV integer constant."
             )
         params["border_mode"] = _CV2_BORDER_MODES[mode.lower()]
+    if spec.name == "GaussNoise":
+        params = _gauss_noise_params(params)
+    return params
+
+
+def _gauss_noise_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Give ``var_limit`` the same effect in all Albumentations releases.
+
+    In ``pipeline.yaml``, ``var_limit`` is a noise variance on the 0-255 grey
+    scale. For example, ``[10, 50]`` is a standard deviation of approximately
+    3 to 7 grey levels. Old Albumentations releases use the value in this way.
+    Releases that have ``std_range`` change a ``var_limit`` larger than 1 to
+    20-44% of the full range. This noise is approximately ten times too
+    strong. For these releases, this function calculates the equivalent
+    ``std_range``, which is a fraction of the full range. For old releases,
+    this function does not change ``var_limit``. The MONAI backend uses the
+    value in the same way.
+    """
+    var_limit = params.get("var_limit")
+    if var_limit is None or "std_range" in params:
+        return params
+    try:
+        accepts_std_range = "std_range" in inspect.signature(A.GaussNoise.__init__).parameters
+    except (TypeError, ValueError):  # pragma: no cover - signature unavailable
+        accepts_std_range = False
+    if not accepts_std_range:
+        return params
+    if isinstance(var_limit, (list, tuple)):
+        low, high = float(var_limit[0]), float(var_limit[-1])
+    else:
+        low, high = 0.0, float(var_limit)
+    if low < 0 or high < low:
+        raise ValueError(f"GaussNoise: var_limit must be a non-negative ascending range; got {var_limit!r}")
+    params = {k: v for k, v in params.items() if k != "var_limit"}
+    params["std_range"] = (
+        min(1.0, math.sqrt(low) / 255.0), min(1.0, math.sqrt(high) / 255.0),
+    )
     return params
 
 
