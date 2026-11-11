@@ -213,7 +213,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
             if one_hot:
                 raise NotImplementedError("One hot for Z-ONLY not implemented.")
             elif output_probs and not output_entropy:
-                prediction, probs = self.predictor._predict_12_ways_max_probs(
+                prediction, probs = self.predictor._predict_Zonly_max_probs(
                     self.data_vol
                 )
             elif output_entropy and not output_probs:
@@ -225,7 +225,7 @@ class VolSeg2DPredictionManager(BaseDataManager):
                     self.data_vol
                 )
             else:
-                prediction, _ = self.predictor._predict_12_ways_max_probs(
+                prediction, _ = self.predictor._predict_Zonly_max_probs(
                     self.data_vol
                 )
 

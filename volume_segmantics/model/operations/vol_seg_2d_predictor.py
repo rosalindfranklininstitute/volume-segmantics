@@ -231,14 +231,31 @@ class VolSeg2dPredictor:
             labels, probs, logits for this slice (primary segmentation)
             If multi-task model, also returns additional_task_outputs dict
         """
-        slice_tensor, frame = self._to_training_scale(slice_tensor, yx_dims)
+        # Sliding window is for slices that are larger than the window. It
+        # divides the slice into tiles at the native slice size. Thus the
+        # decision uses the native slice size, before a resize.
+        roi_h, roi_w = self.sw_roi_size
+        native_h, native_w = slice_tensor.shape[-2:]
+        use_sw = bool(self.use_sliding_window) and (native_h > roi_h or native_w > roi_w)
+        if use_sw:
+            frame = None
+            if (
+                getattr(self, "training_image_size", None) is not None
+                and not getattr(self, "native_scale", False)
+                and not getattr(self, "_sw_native_scale_logged", False)
+            ):
+                logging.info(
+                    "Sliding window: slices of %dx%d exceed the %dx%d window and are "
+                    "tiled at their own size, not resized to the training image_size "
+                    "(%d). The volume should be at the voxel scale the model was "
+                    "trained at.", native_h, native_w, roi_h, roi_w, self.training_image_size,
+                )
+                self._sw_native_scale_logged = True
+        else:
+            slice_tensor, frame = self._to_training_scale(slice_tensor, yx_dims)
         B, C, H, W = slice_tensor.shape
         is_multitask = self._is_multitask_model()
         additional_outputs = {}
-
-        # Check if sliding window is needed
-        roi_h, roi_w = self.sw_roi_size
-        use_sw = self.use_sliding_window and (H > roi_h or W > roi_w)
 
         if use_sw:
             def predictor(x):
@@ -624,23 +641,40 @@ class VolSeg2dPredictor:
         return label_container[0], prob_container[0]
 
     def _predict_Zonly_max_probs(self, data_vol):
+        """``quality: z_only``: slice along z only, with four in-plane rotations.
+
+        The function turns the volume 0, 90, 180 and 270 degrees around the z
+        axis (in the y/x plane). It predicts each rotation slice by slice
+        along z. It merges the four results voxel by voxel and keeps the label
+        that has the highest probability. The function does not slice along y
+        or x. This is the purpose of the mode for anisotropic volumes. For a
+        multi-task model, the other heads keep the output of the pass that
+        has no rotation.
+        """
         shape_tup = data_vol.shape
-        logging.info("Creating empty data volumes in RAM to combine 12 way prediction.")
+        logging.info("Creating empty data volumes in RAM to combine 4 way (z only) prediction.")
         label_container = np.empty((2, *shape_tup), dtype=np.uint8)
         prob_container = np.empty((2, *shape_tup), dtype=np.float16)
-        labels, probs, _ = self._predict_single_axis(data_vol, output_probs=True)
-        label_container[0] = labels
-        prob_container[0] = self._max_probs_per_voxel(probs)
-        for k in range(1, 4):
-            logging.info(f"Rotating volume {k * 90} degrees")
-            data_vol = np.rot90(data_vol)
-            labels, probs, _ = self._predict_single_axis(data_vol, output_probs=True)
-            label_container[1] = np.rot90(labels, -k)
-            prob_container[1] = np.rot90(self._max_probs_per_voxel(probs), -k)
-            logging.info(
-                f"Merging rot {k * 90} deg volume with rot {(k-1) * 90} deg volume."
-            )
-            self._merge_vols_in_mem(prob_container, label_container)
+        clean_task_outputs = None
+        for k in range(4):
+            if k:
+                logging.info(f"Rotating volume {k * 90} degrees about z")
+            rotated = np.ascontiguousarray(np.rot90(data_vol, k, axes=(1, 2)))
+            labels, probs, _ = self._predict_single_axis(rotated, output_probs=True, axis=Axis.Z)
+            if clean_task_outputs is None:
+                clean_task_outputs = getattr(self, '_last_additional_tasks', None)
+            slot = 1 if k else 0
+            label_container[slot] = np.rot90(labels, -k, axes=(1, 2))
+            prob_container[slot] = np.rot90(self._max_probs_per_voxel(probs), -k, axes=(1, 2))
+            if k:
+                logging.info(
+                    f"Merging rot {k * 90} deg volume with rot {(k-1) * 90} deg volume."
+                )
+                self._merge_vols_in_mem(prob_container, label_container)
+        # Use the head outputs of the pass that has no rotation, not the
+        # outputs of the last rotation.
+        if clean_task_outputs is not None:
+            self._last_additional_tasks = clean_task_outputs
         return label_container[0], prob_container[0]
 
     def _predict_single_axis_to_one_hot(self, data_vol, axis=Axis.Z):
