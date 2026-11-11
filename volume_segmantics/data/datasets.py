@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import imageio
 import cv2
 import numpy as np
+import torch
 import volume_segmantics.data.augmentations as augs
 import volume_segmantics.data.augmentations_monai as augs_monai
 import volume_segmantics.utilities.config as cfg
@@ -24,6 +25,22 @@ def get_augmentation_module(settings: SimpleNamespace):
         return augs_monai
     else:
         return augs
+
+
+def _integer_image_to_unit_range(image):
+    """Change an integer slice to float32 in the range 0 to 1.
+
+    The function does not change a float slice. The input is a NumPy array
+    (from the Albumentations pre-processing) or a tensor (from the MONAI
+    pre-processing).
+    """
+    if isinstance(image, torch.Tensor):
+        if not image.is_floating_point():
+            image = image.to(torch.float32) / 255.0
+        return image
+    if np.issubdtype(image.dtype, np.integer):
+        image = image.astype(np.float32) / 255.0
+    return image
 
 
 class VolSeg2dDataset(BaseDataset):
@@ -212,6 +229,11 @@ class VolSeg2dPredictionDataset(BaseDataset):
                 image = image / 255
             image = image - self.imagenet_mean
             image = image / self.imagenet_std
+        else:
+            # Change integer grey levels to the range 0 to 1. The training
+            # datasets do the same when ImageNet statistics are off. Before
+            # this change, the model got 0-255 data after training on 0-1 data.
+            image = _integer_image_to_unit_range(image)
 
         # apply post-processing
         if self.postprocessing:
@@ -284,6 +306,11 @@ class VolSeg2dImageDirDataset(BaseDataset):
                 image = image / 255
             image = image - self.imagenet_mean
             image = image / self.imagenet_std
+        else:
+            # Change integer grey levels to the range 0 to 1. The training
+            # datasets do the same when ImageNet statistics are off. Before
+            # this change, the model got 0-255 data after training on 0-1 data.
+            image = _integer_image_to_unit_range(image)
 
         # apply post-processing
         if self.postprocessing:

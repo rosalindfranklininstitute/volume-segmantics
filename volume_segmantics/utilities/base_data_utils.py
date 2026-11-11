@@ -12,7 +12,6 @@ import imageio
 import zarr
 import numpy as np
 import torch
-import torchvision.transforms.functional as F
 from skimage.measure import block_reduce
 
 import volume_segmantics.utilities.config as cfg
@@ -153,7 +152,13 @@ def crop_tensor_to_array(tensor: Union[torch.Tensor, np.ndarray], yx_dims: List[
         tensor = torch.from_numpy(tensor)
     if tensor.is_cuda:
         tensor = tensor.cpu()
-    tensor = F.center_crop(tensor, yx_dims)
+    # Remove the centre padding that the prediction dataset added (PadIfNeeded
+    # / SpatialPad). This padding puts floor(pad / 2) before the image. The
+    # torchvision center_crop starts at round(pad / 2). 
+    height, width = int(yx_dims[0]), int(yx_dims[1])
+    top = max(0, (tensor.shape[-2] - height) // 2)
+    left = max(0, (tensor.shape[-1] - width) // 2)
+    tensor = tensor[..., top:top + height, left:left + width]
     return tensor.detach().numpy()
 
 
