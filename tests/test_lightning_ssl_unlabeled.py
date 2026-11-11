@@ -124,7 +124,63 @@ def test_unlabeled_dataset_yields_two_views_in_the_labeled_layout(tmp_path):
     assert set(item) == {"image", "image_teacher"}
     assert item["image"].shape == (1, 32, 32) and item["image"].dtype == torch.float32
     assert item["image_teacher"].shape == (1, 32, 32)
-    assert torch.equal(ds[0]["image_teacher"], ds[0]["image_teacher"])  # the teacher view is deterministic
+
+
+def _views_config(backend, transforms):
+    from volume_segmantics.data.pipeline_loader import (
+        AugmentationsConfig, HeadConfig, PipelineConfig, TransformSpec,
+    )
+    return PipelineConfig(
+        heads={"semantic": HeadConfig(enabled=True, loss="dice_ce")},
+        augmentations=AugmentationsConfig(backend=backend, train_transforms=[
+            TransformSpec(name=name, params=params) for name, params in transforms
+        ]),
+    )
+
+
+SPATIAL_ONLY = [("HorizontalFlip", {"p": 0.5}), ("VerticalFlip", {"p": 0.5}), ("RandomRotate90", {"p": 1.0})]
+
+
+@pytest.mark.parametrize("backend", ["albumentations", "monai"])
+def test_the_two_views_share_their_geometry(tmp_path, backend):
+    """The consistency loss and the pseudo-label loss compare pixel by pixel.
+    Before this change, a flip or a rotation applied to the student view only.
+    Then the losses compared each pixel with a different part of the slice."""
+    unl = _write_slices(tmp_path / "unl", 2, shape=(32, 32))
+    ds = UnlabeledPipelineDataset(
+        unl, pipeline_config=_views_config(backend, SPATIAL_ONLY), img_size=32, imagenet_norm=False,
+    )
+    teachers = []
+    for _ in range(12):
+        item = ds[0]
+        assert torch.allclose(item["image"], item["image_teacher"], atol=1e-6)
+        assert 0.0 <= float(item["image_teacher"].min()) and float(item["image_teacher"].max()) <= 1.0
+        teachers.append(item["image_teacher"])
+    # The geometry of the two views is random for each draw.
+    assert any(not torch.equal(teachers[0], t) for t in teachers[1:])
+
+
+def test_photometric_augmentation_reaches_the_student_view_only(tmp_path):
+    unl = _write_slices(tmp_path / "unl", 2, shape=(32, 32))
+    cfg = _views_config("albumentations", [
+        ("HorizontalFlip", {"p": 1.0}),
+        ("RandomBrightnessContrast", {"brightness_limit": [0.3, 0.3], "contrast_limit": 0.0, "p": 1.0}),
+    ])
+    ds = UnlabeledPipelineDataset(unl, pipeline_config=cfg, img_size=32, imagenet_norm=False)
+    plain = UnlabeledPipelineDataset(
+        unl, pipeline_config=_views_config("albumentations", []), img_size=32, imagenet_norm=False,
+    )[0]["image_teacher"]
+    item = ds[0]
+    assert torch.equal(item["image_teacher"], torch.flip(plain, dims=[-1]))  # flipped, not brightened
+    assert not torch.allclose(item["image"], item["image_teacher"])
+    assert float(item["image"].mean()) > float(item["image_teacher"].mean())
+
+
+def test_without_train_transforms_the_views_are_the_plain_slice(tmp_path):
+    unl = _write_slices(tmp_path / "unl", 2, shape=(32, 32))
+    ds = UnlabeledPipelineDataset(unl, pipeline_config=_views_config("albumentations", []), img_size=32)
+    assert torch.equal(ds[0]["image_teacher"], ds[0]["image_teacher"])
+    assert torch.equal(ds[0]["image"], ds[0]["image_teacher"])
 
 
 def test_data_module_pairs_an_unlabeled_batch_with_every_labeled_batch(tmp_path, monkeypatch):

@@ -238,6 +238,7 @@ def build_pipeline_augmentations(
     enabled_head_names: Mapping[str, bool],
     img_size: Optional[int] = None,
     augmentation_library: str = "albumentations",
+    extra_image_targets: Tuple[str, ...] = (),
 ) -> Tuple[Optional[Any], Optional[A.Compose], Dict[str, str]]:
     """Build spatial + photometric Albumentations Compose objects.
 
@@ -264,6 +265,11 @@ def build_pipeline_augmentations(
     img_size
         Optional pre-pad size; when set, a leading
         :class:`A.LongestMaxSize` + :class:`A.PadIfNeeded` 
+    extra_image_targets
+        More sample keys that contain images. The spatial transforms apply to
+        these keys and to the image together (same flip, same rotation,
+        bilinear). The photometric transforms do not apply to these keys. The
+        unlabeled dataset uses this parameter for the teacher view.
 
     Notes
     -----
@@ -285,6 +291,8 @@ def build_pipeline_augmentations(
         elif head_name == "sdm":
             additional_targets["sdm"] = "image"
         # Future heads land here with the right kind.
+    for key in extra_image_targets:
+        additional_targets[key] = "image"
 
     # Optional MONAI path: swap the training spatial augmentation for a
     # MONAI multi-key Compose. Photometric augs are folded into it (image
@@ -294,6 +302,7 @@ def build_pipeline_augmentations(
         monai_aug = _try_build_monai_pipeline_aug(
             enabled_head_names, additional_targets, img_size,
             train_transforms=aug_cfg.train_transforms,
+            extra_image_keys=tuple(extra_image_targets),
         )
         if monai_aug is not None:
             return monai_aug, None, additional_targets
@@ -350,10 +359,15 @@ class _MonaiPipelineAug:
     transforms and the subsequent normalisation see a consistent range.
     """
 
-    def __init__(self, compose, keys: List[str], image_key: str = "image"):
+    def __init__(self, compose, keys: List[str], image_key: str = "image",
+                 extra_image_keys: Tuple[str, ...] = ()):
         self._compose = compose
         self._keys = list(keys)
         self._image_key = image_key
+        # All keys that contain an image. The code scales these images to the
+        # range 0 to 1 at input and clips them at output. Only ``image_key``
+        # gets intensity transforms.
+        self._image_keys = {image_key, *extra_image_keys}
         self._pid = None
         self._seed_once_per_process()
 
@@ -377,7 +391,7 @@ class _MonaiPipelineAug:
             ndims[key] = arr.ndim
             cf = arr[np.newaxis, ...] if arr.ndim == 2 else np.transpose(arr, (2, 0, 1))
             cf = cf.astype(np.float32)
-            if key == self._image_key and np.issubdtype(arr.dtype, np.integer):
+            if key in self._image_keys and np.issubdtype(arr.dtype, np.integer):
                 cf = cf / 255.0
             data[key] = torch.as_tensor(np.ascontiguousarray(cf))
 
@@ -387,7 +401,7 @@ class _MonaiPipelineAug:
         for key, nd in ndims.items():
             val = out[key]
             val = val.detach().cpu().numpy() if torch.is_tensor(val) else np.asarray(val)
-            if key == self._image_key:
+            if key in self._image_keys:
                 val = np.clip(val, 0.0, 1.0)
             # Channel-first -> Albumentations layout: (1,H,W)->(H,W); (C,H,W)->(H,W,C).
             result[key] = val[0] if nd == 2 else np.transpose(val, (1, 2, 0))
@@ -399,6 +413,7 @@ def _try_build_monai_pipeline_aug(
     additional_targets: Dict[str, str],
     img_size: Optional[int],
     train_transforms: Optional[List[TransformSpec]] = None,
+    extra_image_keys: Tuple[str, ...] = (),
 ) -> Optional[_MonaiPipelineAug]:
     """Build the MONAI spatial augmentation, or ``None`` to fall back.
 
@@ -439,7 +454,7 @@ def _try_build_monai_pipeline_aug(
         int(img_size), keys, modes, train_transforms=train_transforms,
     )
     logger.info("Using MONAI augmentations for the pipeline (keys=%s).", keys)
-    return _MonaiPipelineAug(compose, keys)
+    return _MonaiPipelineAug(compose, keys, extra_image_keys=tuple(extra_image_keys))
 
 
 class PipelineMultiTaskDataset(BaseDataset):
@@ -726,11 +741,18 @@ class UnlabeledPipelineDataset(BaseDataset):
     prepares labeled ones: the same reader, resize/pad, ImageNet
     normalisation and tensor layout.
 
-    Each item carries two views of one slice. ``image`` is the student's view
-    (the training spatial + photometric augmentations); ``image_teacher`` is
-    the teacher's (resize/pad only). Mean Teacher consistency and
-    pseudo-labelling are defined on that weak/strong pair.
+    Each item has two views of one slice. The two views have the same
+    geometry. The dataset selects the training spatial augmentations
+    (resize/pad, flips, rotations, ...) one time and applies them to the two
+    views. ``image_teacher`` is this view with no other change. ``image`` is
+    the student view, which also gets the photometric augmentations. Mean
+    Teacher consistency and pseudo-labelling compare the two views pixel by
+    pixel. If a flip or a rotation applies to only one view, the comparison
+    uses a different part of the slice for each pixel.
     """
+
+    #: The sample key of the teacher view in the spatial transforms.
+    TEACHER_KEY = "image_teacher"
 
     _read_image = PipelineMultiTaskDataset._read_image
     _apply_imagenet_norm = PipelineMultiTaskDataset._apply_imagenet_norm
@@ -764,9 +786,10 @@ class UnlabeledPipelineDataset(BaseDataset):
         self.settings = settings
         self.use_2_5d_slicing = bool(use_2_5d_slicing)
         self.num_2_5d_slices = int(num_2_5d_slices)
-        # Student view: the labeled training set's own augmentations, keyed
-        # for the image alone (an unlabeled sample carries no targets, and
-        # MONAI's dictionary transforms refuse a missing key).
+        # These are the augmentations of the labeled training set. The keys
+        # are the image and the teacher copy of the image. An unlabeled sample
+        # has no targets. The spatial transforms apply to the two keys. The
+        # photometric transforms apply to the student image only.
         self.spatial_aug, self.photometric_aug, _ = build_pipeline_augmentations(
             pipeline_config.augmentations,
             enabled_head_names={},
@@ -774,14 +797,7 @@ class UnlabeledPipelineDataset(BaseDataset):
             augmentation_library=resolve_augmentation_backend(
                 pipeline_config.augmentations, settings,
             ),
-        )
-        # Teacher view: the validation-time resize/pad only.
-        self.preprocess = (
-            A.Compose([
-                A.LongestMaxSize(max_size=img_size, p=1.0),
-                A.PadIfNeeded(min_height=img_size, min_width=img_size, p=1.0),
-            ])
-            if img_size is not None else None
+            extra_image_targets=(self.TEACHER_KEY,),
         )
         self.imagenet_norm = bool(imagenet_norm)
         if use_2_5d_slicing:
@@ -803,12 +819,11 @@ class UnlabeledPipelineDataset(BaseDataset):
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         image = self._read_image(self.images_fps[idx])
-        teacher = image
-        if self.preprocess is not None:
-            teacher = self.preprocess(image=teacher)["image"]
-        student = image
+        student = teacher = image
         if self.spatial_aug is not None:
-            student = self.spatial_aug(image=student)["image"]
+            # Use one set of random spatial parameters for the two views.
+            sample = self.spatial_aug(**{"image": image, self.TEACHER_KEY: image.copy()})
+            student, teacher = sample["image"], sample[self.TEACHER_KEY]
         if self.photometric_aug is not None:
             student = self.photometric_aug(image=student)["image"]
         return {
