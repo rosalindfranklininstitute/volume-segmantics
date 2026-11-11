@@ -240,7 +240,7 @@ class BoundaryLoss(nn.Module):
         outputs: sigmoid results,  shape=(b, 2, x, y, z)
         gt:      ground truth mask; shape=(b, 2, x, y, z)
         """
-        outputs_soft = outputs.sigmoid()
+        outputs_soft = _at_least_float32(outputs).sigmoid()  # Use float32. Refer to compute_per_channel_dice.
         gt_sdf = self.compute_sdf1_1(gt, outputs_soft.shape)
         pc = outputs_soft[:, self.idx, ...]
         # Use outputs_soft.device instead of hardcoded .cuda()
@@ -314,7 +314,7 @@ class BoundaryDoULoss(nn.Module):
         return loss
 
     def forward(self, inputs, target):
-        inputs = inputs.sigmoid()
+        inputs = _at_least_float32(inputs).sigmoid()  # Use float32. Refer to compute_per_channel_dice.
 
         assert (
             inputs.size() == target.size()
@@ -344,7 +344,7 @@ class BoundaryDoULossV2(BoundaryDoULoss):
         self.allowed_outlier_fraction = allowed_outlier_fraction
 
     def forward(self, inputs, target):
-        inputs = inputs.sigmoid()
+        inputs = _at_least_float32(inputs).sigmoid()  # Use float32. Refer to compute_per_channel_dice.
 
         assert (
             inputs.size() == target.size()
@@ -444,6 +444,13 @@ class TverskyLoss(nn.Module):
         return 1.0 - loss / n_terms
 
 
+def _at_least_float32(tensor: torch.Tensor) -> torch.Tensor:
+    """Change a half-precision tensor to float32. Do not change float32 or float64."""
+    if tensor.dtype in (torch.float16, torch.bfloat16):
+        return tensor.float()
+    return tensor
+
+
 def compute_per_channel_dice(input, target, epsilon=1e-6, weight=None):
     """
     Computes DiceCoefficient as defined in https://arxiv.org/abs/1606.04797 given  a multi channel input and target.
@@ -460,7 +467,10 @@ def compute_per_channel_dice(input, target, epsilon=1e-6, weight=None):
     #print(input.size(), target.size())
     assert input.size() == target.size(), "'input' and 'target' must have the same shape"
 
-    input = flatten(input)
+    # Use float32 for the sums of pixels. The largest float16 value is 65504.
+    # The sum of the pixels in a batch of slices can be larger than this value.
+    # Then the sum is inf and the Dice is a constant.
+    input = _at_least_float32(flatten(input))
     target = flatten(target)
     target = target.float()
 
@@ -545,8 +555,9 @@ class _AbstractDiceLoss(nn.Module):
         raise NotImplementedError
 
     def forward(self, input, target):
-        # get probabilities from logits
-        input = self.normalization(input)
+        # get probabilities from logits. Use float32, because the Dice sums of
+        # all pixels can overflow float16 (refer to compute_per_channel_dice).
+        input = self.normalization(_at_least_float32(input))
 
         # compute per channel Dice coefficient
         per_channel_dice = self.dice(input, target, weight=self.weight)
