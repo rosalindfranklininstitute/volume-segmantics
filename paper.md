@@ -14,9 +14,12 @@ authors:
     affiliation: 1
   - name: Dolapo Adebo
     affiliation: 1
-  - name: Sam Kersley
-    affiliation: 1
   - name: Neville Yee
+    affiliation: 1
+  - name: Oliver N. F. King
+    orcid: 0000-0002-6152-7207
+  - affiliation: 2
+  - name: Sam Kersley
     affiliation: 1
   - name: Piper Fowler-Wright
     affiliation: 1
@@ -29,6 +32,8 @@ authors:
 affiliations:
   - name: Rosalind Franklin Institute, Harwell Campus, Rutherford Appleton Laboratory, Didcot OX11 0QX, United Kingdom
     index: 1
+  - name: Doctoral Training Centre, Oxford University
+  - index: 1
 date: 4 July 2026
 bibliography: paper.bib
 ---
@@ -227,10 +232,10 @@ reviewed and manually revised by the authors.
 # Acknowledgements
 
 The authors acknowledge support from BBSRC grant number BB/Y005953/1 (MCD) and
-the Wellcome Leap *In Utero* program (MCD). Synchrotron CT imaging of human
-placenta was performed on Beamline I13-2 of the Diamond Light Source synchrotron
-in Oxfordshire, UK. The testing of the software and some of the segmentations were
-performed using the Baskerville Tier 2 HPC service
+the Wellcome Leap *In Utero* program (MCD) and the Wellcome Trust Grant 220526/Z/20/Z.
+Synchrotron CT imaging of human placenta was performed on Beamline I13-2 of the 
+Diamond Light Source synchrotron in Oxfordshire, UK. The testing of the software 
+and some of the segmentations were performed using the Baskerville Tier 2 HPC service
 (<https://www.baskerville.ac.uk/>). Baskerville was funded by the EPSRC and UKRI
 through the World Class Labs scheme (EP/T022221/1) and the Digital Research
 Infrastructure project (EP/W032244/1) and is operated by Advanced Research
