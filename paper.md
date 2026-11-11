@@ -18,7 +18,7 @@ authors:
     affiliation: 1
   - name: Oliver N. F. King
     orcid: 0000-0002-6152-7207
-  - affiliation: 2
+    affiliation: 2
   - name: Sam Kersley
     affiliation: 1
   - name: Piper Fowler-Wright
@@ -33,7 +33,7 @@ affiliations:
   - name: Rosalind Franklin Institute, Harwell Campus, Rutherford Appleton Laboratory, Didcot OX11 0QX, United Kingdom
     index: 1
   - name: Doctoral Training Centre, Oxford University
-  - index: 1
+    index: 1
 date: 4 July 2026
 bibliography: paper.bib
 ---
