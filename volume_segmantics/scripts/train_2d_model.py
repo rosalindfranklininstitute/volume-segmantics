@@ -95,9 +95,12 @@ def _resolve_unlabeled_dir(settings) -> Optional[Path]:
 def _resolve_pipeline_config(
     settings,
     root_path: Path,
+    use_legacy_trainer: bool = False,
 ):
     """Load <root>/volseg-settings/pipeline.yaml if present; else synth.
 
+    With the default trainer, an unknown ``loss_criterion`` causes an error.
+    The legacy trainer makes its own loss and does its own check of the name.
     """
     pipeline_yaml_path = root_path / cfg.SETTINGS_DIR / "pipeline.yaml"
     if pipeline_yaml_path.exists():
@@ -105,12 +108,15 @@ def _resolve_pipeline_config(
         # The settings file's ce_weight / dice_weight / dice_weight_mode /
         # exclude_background_from_dice fill in beneath the semantic head's
         # own options; a value the head states in pipeline.yaml wins.
-        return with_semantic_loss_settings(load_pipeline_yaml(pipeline_yaml_path), settings)
+        return with_semantic_loss_settings(
+            load_pipeline_yaml(pipeline_yaml_path), settings,
+            strict_loss=not use_legacy_trainer,
+        )
     logging.info(
         "No pipeline.yaml found; synthesising semantic-only pipeline "
         "config from legacy settings"
     )
-    return legacy_settings_to_pipeline_config(settings)
+    return legacy_settings_to_pipeline_config(settings, strict_loss=not use_legacy_trainer)
 
 def main():
     logging.basicConfig(
@@ -172,7 +178,9 @@ def main():
     #  attach the parsed (or synthesised) pipeline config to
     # settings before trainer construction so dataloaders + the
     # Lightning module read from the same source of truth.
-    settings.pipeline_config = _resolve_pipeline_config(settings, root_path)
+    settings.pipeline_config = _resolve_pipeline_config(
+        settings, root_path, use_legacy_trainer=use_legacy_trainer,
+    )
     settings.use_legacy_trainer = use_legacy_trainer
     settings.lightning_strategy = lightning_strategy
     settings.lightning_devices = lightning_devices

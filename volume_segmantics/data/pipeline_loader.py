@@ -710,38 +710,73 @@ def semantic_loss_options_from_settings(settings: Any, loss_name: str) -> Dict[s
     return options
 
 
-def with_semantic_loss_settings(config: "PipelineConfig", settings: Any) -> "PipelineConfig":
-    """``config`` with the settings file's loss options beneath the semantic
-    head's own: a value the head states in ``pipeline.yaml`` wins, a value only
-    the settings file states fills in. Unchanged when there is nothing to add.
+def with_semantic_loss_settings(
+    config: "PipelineConfig", settings: Any, *, strict_loss: bool = True,
+) -> "PipelineConfig":
+    """Add the loss values of the settings file to the semantic head of ``config``.
+
+    A value that the head gives in ``pipeline.yaml`` has priority. A value
+    that only the settings file gives fills the gap. This rule applies to the
+    loss: a semantic head without ``loss`` uses the ``loss_criterion`` of the
+    settings. It also applies to the loss options (``ce_weight``,
+    ``dice_weight``, ``dice_weight_mode``, ``exclude_background_from_dice``).
+    The function returns ``config`` with no change when there is nothing to
+    add. When ``strict_loss`` is true, the function raises an error for a
+    ``loss_criterion`` that the default trainer does not have.
     """
     semantic = config.heads.get("semantic") if config is not None else None
     if semantic is None:
         return config
-    loss_name = semantic.loss or "dice_ce"
-    options = semantic_loss_options_from_settings(settings, loss_name)
-    if not options:
+    loss_name = semantic.loss
+    if loss_name is None:
+        loss_criterion = getattr(settings, "loss_criterion", None) if settings is not None else None
+        # With the legacy trainer (strict_loss=False), a name that has no
+        # pipeline equivalent does not change the default loss of the head.
+        if loss_criterion and (strict_loss or str(loss_criterion) in LEGACY_TO_REGISTRY_LOSS):
+            loss_name = _legacy_loss_name(str(loss_criterion))
+            semantic = replace(semantic, loss=loss_name)
+    options = semantic_loss_options_from_settings(settings, loss_name or "dice_ce")
+    if not options and semantic is config.heads["semantic"]:
         return config
     extra = {**options, **(semantic.extra or {})}
     return replace(config, heads={**config.heads, "semantic": replace(semantic, extra=extra)})
 
 
-def _legacy_loss_name(loss_criterion: str) -> str:
+#: The ``loss_criterion`` names of the train settings. Each name selects a
+#: registry loss for the semantic head with the default trainer.
+LEGACY_TO_REGISTRY_LOSS: Dict[str, str] = {
+    "CombinedCEDiceLoss": "combined_ce_dice",
+    "BCEDiceLoss": "combined_ce_dice",   # deprecated alias
+    "BCELoss": "bce",
+    "DiceLoss": "dice",
+    "CrossEntropyLoss": "cross_entropy",
+    "GeneralizedDiceLoss": "generalized_dice",
+    "TverskyLoss": "tversky",
+    "BoundaryDoULoss": "boundary_dou",
+    "BoundaryLoss": "boundary_loss",
+    "ClassWeightedDiceLoss": "class_weighted_dice",
+}
+
+
+def _legacy_loss_name(loss_criterion: str, *, strict: bool = True) -> str:
     """Map the legacy loss_criterion string to a registry name.
+
+    The function raises an error for a name that is not in the map. It is
+    incorrect to train with a different loss from the loss in the settings
+    and give no message. ``strict=False`` keeps the old fallback to
+    ``combined_ce_dice`` for the legacy trainer. The legacy trainer makes its
+    loss from ``loss_criterion`` and accepts some names that have no pipeline
+    equivalent.
     """
-    LEGACY_TO_REGISTRY = {
-        "CombinedCEDiceLoss": "combined_ce_dice",
-        "BCEDiceLoss": "combined_ce_dice",   # deprecated alias
-        "BCELoss": "bce",
-        "DiceLoss": "dice",
-        "CrossEntropyLoss": "cross_entropy",
-        "GeneralizedDiceLoss": "generalized_dice",
-        "TverskyLoss": "tversky",
-        "BoundaryDoULoss": "boundary_dou",
-        "BoundaryLoss": "boundary_loss",
-        "ClassWeightedDiceLoss": "class_weighted_dice",
-    }
-    return LEGACY_TO_REGISTRY.get(loss_criterion, "combined_ce_dice")
+    if loss_criterion in LEGACY_TO_REGISTRY_LOSS:
+        return LEGACY_TO_REGISTRY_LOSS[loss_criterion]
+    if not strict:
+        return "combined_ce_dice"
+    raise PipelineConfigError(
+        f"loss_criterion {loss_criterion!r} is not a loss the default trainer "
+        f"knows; use one of {sorted(LEGACY_TO_REGISTRY_LOSS)}. (Losses only "
+        f"the legacy trainer implements need --legacy-trainer.)"
+    )
 
 
 def _legacy_inference_mode(settings: SimpleNamespace) -> str:
@@ -756,13 +791,20 @@ def _legacy_inference_mode(settings: SimpleNamespace) -> str:
 
 def legacy_settings_to_pipeline_config(
     settings: SimpleNamespace,
+    *,
+    strict_loss: bool = True,
 ) -> PipelineConfig:
-    
+    """Make the semantic-only pipeline config from the train settings.
+
+    ``strict_loss=False`` accepts a ``loss_criterion`` that has no pipeline
+    equivalent (refer to :func:`_legacy_loss_name`). The legacy trainer uses
+    this value because it makes its own loss.
+    """
     # Semantic head from legacy loss_criterion, with the settings file's loss
     # options (ce_weight, dice_weight, dice_weight_mode,
     # exclude_background_from_dice) as the head's options.
-    loss_criterion = getattr(settings, "loss_criterion", "CombinedCEDiceLoss")
-    loss_name = _legacy_loss_name(loss_criterion)
+    loss_criterion = getattr(settings, "loss_criterion", None) or "CombinedCEDiceLoss"
+    loss_name = _legacy_loss_name(str(loss_criterion), strict=strict_loss)
     semantic = HeadConfig(
         enabled=True,
         loss=loss_name,

@@ -25,7 +25,7 @@ precision: 32 # Training precision: 32 (full precision), 16-mixed (automatic mix
 num_cyc_frozen: 8 # Number of training epochs on frozen model
 num_cyc_unfrozen: 5 # Number of training epochs on unfrozen model
 freeze_encoder_bn_stats: True # Keep the encoder's BatchNorm running statistics fixed during unfrozen training. 
-patience: 4 # Number of epochs to wait before early stopping if the validation foreground Dice (val_fg_dice, which also selects the saved checkpoint) does not improve
+patience: 4 # Number of epochs to wait before early stopping if the validation foreground Dice (val_fg_dice, which also selects the saved checkpoint) does not improve. A value of 0 disables early stopping. With the default trainer, early stopping does not stop the frozen phase when an unfrozen phase follows. The count starts at the first unfrozen epoch
 
 # Parameters to control Model Architecture
 model:

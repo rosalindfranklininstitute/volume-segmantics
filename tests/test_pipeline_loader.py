@@ -519,12 +519,15 @@ def test_legacy_adapter_pseudo_labeling_alone_enables_ema_teacher():
     assert cfg.ema_teacher.enabled is True
 
 
-def test_legacy_adapter_unknown_loss_falls_back_to_combined_ce_dice():
+def test_legacy_adapter_refuses_an_unknown_loss():
     settings = SimpleNamespace(
         loss_criterion="MysteryLoss",  # not in the legacy -> registry map
         quality="medium",
     )
-    cfg = legacy_settings_to_pipeline_config(settings)
+    with pytest.raises(PipelineConfigError, match="MysteryLoss"):
+        legacy_settings_to_pipeline_config(settings)
+    # The legacy trainer makes its own loss and does its own check of the name.
+    cfg = legacy_settings_to_pipeline_config(settings, strict_loss=False)
     assert cfg.heads["semantic"].loss == "combined_ce_dice"
 
 
