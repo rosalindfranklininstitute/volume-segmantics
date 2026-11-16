@@ -7,6 +7,7 @@ prediction, the Lightning devices resolved from ``cuda_device``, the training
 taken from the memory the driver reports free.
 """
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,6 +59,27 @@ def test_entropy_output_runs_on_the_medium_and_high_paths(prediction_settings, q
     predictor = _EntropyOnlyPredictor()
     prediction = _manager(prediction_settings, predictor).predict_volume_to_path(None, quality)
     assert prediction.shape == (4, 8, 8) and predictor.calls == ["entropy"]
+
+
+class _SingleAxisPredictor(_EntropyOnlyPredictor):
+    """Answers the single-axis path too; low quality must take it, not the estimator."""
+
+    def _predict_single_axis(self, data_vol, axis=None):
+        self.calls.append("single_axis")
+        shape = data_vol.shape
+        return np.zeros(shape, np.uint8), np.zeros(shape, np.float16), np.zeros(shape, np.float32)
+
+
+def test_entropy_at_low_quality_warns_instead_of_silently_writing_none(prediction_settings, caplog):
+    """A single pass has no votes to disagree, so no entropy is written; the log says so."""
+    prediction_settings.output_entropy = True
+    prediction_settings.output_probs = False
+    prediction_settings.one_hot = False
+    predictor = _SingleAxisPredictor()
+    with caplog.at_level(logging.WARNING):
+        prediction = _manager(prediction_settings, predictor).predict_volume_to_path(None, utils.Quality.LOW)
+    assert prediction.shape == (4, 8, 8) and predictor.calls == ["single_axis"]
+    assert "no entropy volume is written" in caplog.text
 
 
 def test_an_unknown_output_format_is_refused_before_prediction(prediction_settings, tmp_path, monkeypatch):

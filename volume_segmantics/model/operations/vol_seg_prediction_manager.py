@@ -158,6 +158,13 @@ class VolSeg2DPredictionManager(BaseDataManager):
         if quality is None:
             quality = utils.get_prediction_quality(self.settings)
         if quality == utils.Quality.LOW:
+            if output_entropy:
+                logging.warning(
+                    "output_entropy is set but quality is 'low': entropy is the "
+                    "disagreement between prediction passes and a single pass has "
+                    "none, so no entropy volume is written. Use quality medium, "
+                    "high or z_only."
+                )
             if one_hot:
                 prediction = self.predictor._predict_single_axis_to_one_hot(
                     self.data_vol, axis=preferred_axis

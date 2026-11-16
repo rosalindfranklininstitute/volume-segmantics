@@ -128,9 +128,11 @@ The volume is segmented following `volseg-settings/2d_model_predict_settings.yam
 | `low` | one axis, chosen by `prediction_axis` |
 | `medium` | the three axes |
 | `high` | the three axes in four rotations each, twelve passes |
-| `z_only` | the z axis in four rotations |
+| `z_only` | the z axis in four rotations; with `output_entropy: True`, each rotation unflipped and flipped along each of the three axes: sixteen passes |
 
-The segmented volume is written to the working directory, or to `--data_dir`, as TIFF, HDF5 or MRC according to `OUTPUT_FORMAT` in `volume_segmantics/utilities/config.py`; any other value is refused before prediction starts. With `output_probs: True` a volume of the winning class's probability is written alongside, and with `output_entropy: True` (medium, high or z_only quality) volumes of per-voxel entropy and vote counts as well. `native_scale: True` predicts at the volume's own slice size instead of resizing each slice to the training image size, and `downsample: True` predicts at half resolution and returns every output to the input volume's shape.
+The segmented volume is written to the working directory, or to `--data_dir`, as TIFF, HDF5 or MRC according to `OUTPUT_FORMAT` in `volume_segmantics/utilities/config.py`; any other value is refused before prediction starts. With `output_probs: True` a volume of the winning class's probability is written alongside.
+
+With `output_entropy: True` (medium, high or z_only quality) volumes of per-voxel entropy and vote counts as well: every pass votes for a class at each voxel, `_votes` holds the counts per class and `_entropy` the Shannon entropy of that vote distribution, normalised so that 0 means every pass agreed and 1 an even split over the labels predicted. It measures disagreement between the passes, and its resolution follows the number of passes. A single pass provides nothing to vote on, so `quality: low` writes no entropy and logs a warning. `native_scale: True` predicts at the volume's own slice size instead of resizing each slice to the training image size, and `downsample: True` predicts at half resolution and returns every output to the input volume's shape.
 
 A model trained with 2.5D slicing must be used with `use_2_5d_prediction: True` and the same `num_slices`; the checkpoint records its stack and a mismatch is refused with a message naming both values.
 
@@ -162,8 +164,7 @@ The default trainer is built on PyTorch Lightning and supports mixed precision, 
 
 `precision` in the training settings selects full precision (`32`, the default), automatic mixed precision in float16 (`16-mixed`, CUDA only) or in bfloat16 (`bf16-mixed`); `--precision` on the command line overrides it. The learning-rate sweep runs in full precision.
 
-Training runs in two phases set by `num_cyc_frozen` and `num_cyc_unfrozen`: first with the pre-trained encoder frozen, then with every layer trainable.Under the default trainer, early stopping watches the validation foreground Dice with the patience given by `patience`, and the same metric selects the saved checkpoint.
-
+Training runs in two phases set by `num_cyc_frozen` and `num_cyc_unfrozen`: first with the pre-trained encoder frozen, then with every layer trainable. Under the default trainer, early stopping watches the validation foreground Dice with the patience given by `patience` (`0` switches it off), and the same metric selects the saved checkpoint. 
 
 ### Models and encoders
 
