@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * Both learning-rate finders warn when a phase selects a rate below 1e-6, naming `lr_reduce_factor` and the search bounds.
 * `decoder_sharing: separate` under the default trainer gives every pipeline head its own decoder (for the pipeline U-Net and every other `model.type`); the checkpoint records the sharing and prediction rebuilds it. 
 * A `checkpoint-key` assertion in the test harness and an `architectures` smoke configuration that trains FPN, DeepLabV3+ with two heads and Segformer under the default trainer and predicts with each.
+* `pipeline_monai` smoke and `qa_pipeline_monai` QA harness configurations that train and predict with `augmentation_library: monai`, in 2D and 2.5D, through `model-predict-2d` and `model-predict-pipeline`.
+* `pipeline_monai_combined` smoke and `qa_pipeline_monai_combined` QA harness configurations that train with MONAI augmentations on four heads, with Mean Teacher and with pseudo-labelling (the backend named in `pipeline.yaml`), and predict with each model.
 * Explicit `precision` train setting and `--precision` option for the default trainer: `32` (full precision, the default), `16-mixed` or `bf16-mixed` for automatic mixed precision in float16 or bfloat16.
 
 ### Changed

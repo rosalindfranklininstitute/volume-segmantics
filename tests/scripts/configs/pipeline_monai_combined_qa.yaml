@@ -1,0 +1,279 @@
+# QA pair to pipeline_monai_combined_smoke.yaml: real training with MONAI
+# augmentations on the vessel data for a four-head model, a Mean Teacher
+# model and a pseudo-labelling model, with the segmentation Dice of each
+# prediction gated.
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+  unlabeled:
+  - training_data/vessels_256cube_DATA.h5
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_monai_combined_qa
+global_overrides:
+  train:
+    image_size: 512
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 5
+    patience: 4
+    starting_lr: 5.0e-05
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    augmentation_library: monai
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet
+    mean_teacher_vis_epoch_interval: 1
+    pseudo_labeling_vis_epoch_interval: 1
+  predict:
+    quality: low
+    output_probs: false
+    output_entropy: false
+    prediction_axis: Z
+    augmentation_library: monai
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: true
+        loss: boundary_bce_dice
+        loss_weight: 0.5
+        width: 2
+      distance:
+        enabled: true
+        loss: distance_l1
+        loss_weight: 0.25
+    targets:
+      boundary:
+        width: 2
+      distance:
+        distance_transform: edt
+tests:
+- name: qa_train_monai_multihead
+  type: train
+  model_key: qa_monai_multihead
+  overrides:
+    train:
+      model_output_fn: qa_monai_multihead
+    pipeline:
+      heads:
+        sdm:
+          enabled: true
+          loss: sdm_l1
+          loss_weight: 0.25
+          variant: binary
+      targets:
+        sdm:
+          distance_transform: edt
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: qa_assert_bn_trained_monai_multihead
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_monai_multihead}
+- name: qa_predict_monai_multihead_low
+  type: predict
+  model_key: qa_monai_multihead
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+    - '*_vol_pred_BND.*'
+    - '*_vol_pred_DIST.*'
+    - '*_vol_pred_SDM.*'
+- name: qa_assert_dice_monai_multihead
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:qa_predict_monai_multihead_low_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.5'
+- name: qa_predict_monai_multihead_zarr
+  type: pipeline_predict_zarr
+  model_key: qa_monai_multihead
+  inference_mode: single_axis
+  output_zarr: prediction.zarr
+  zarr_key: monai_multihead_zarr
+- name: qa_assert_zarr_keys_monai_multihead
+  type: pipeline_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:monai_multihead_zarr}
+  - --keys
+  - teacher_argmax
+- name: qa_assert_zarr_dice_monai_multihead
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:monai_multihead_zarr}
+  - --pred-key
+  - teacher_argmax
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.5'
+- name: qa_slice_unlabeled_pool
+  type: unlabeled_slicer
+  output_key: unlabeled_slices
+  output_dir: unlabeled_pool
+- name: qa_train_monai_mean_teacher
+  type: train
+  model_key: qa_monai_mean_teacher
+  args:
+  - --unlabeled_data_dir
+  - ${artifact:unlabeled_slices}
+  overrides:
+    train:
+      model_output_fn: qa_monai_mean_teacher
+      use_semi_supervised: true
+      ema_decay: 0.99
+      consistency_weight: 0.1
+      rampup_start: 0
+      rampup_end: 100
+    pipeline:
+      ema_teacher:
+        enabled: true
+        schedule:
+          alpha_warmup: 0.99
+          alpha_end: 0.999
+          warmup_steps: 100
+        consistency_weights:
+          semantic: 0.1
+          boundary: 0.05
+          distance: 0.05
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+    - '*_mean_teacher_epoch_*.png'
+- name: qa_assert_bn_trained_monai_mean_teacher
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_monai_mean_teacher}
+- name: qa_predict_monai_mean_teacher_low
+  type: predict
+  model_key: qa_monai_mean_teacher
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+    - '*_vol_pred_BND.*'
+    - '*_vol_pred_DIST.*'
+- name: qa_assert_dice_monai_mean_teacher
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:qa_predict_monai_mean_teacher_low_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.5'
+- name: qa_predict_monai_mean_teacher_zarr
+  type: pipeline_predict_zarr
+  model_key: qa_monai_mean_teacher
+  inference_mode: single_axis
+  output_zarr: prediction.zarr
+  zarr_key: monai_mean_teacher_zarr
+- name: qa_assert_zarr_keys_monai_mean_teacher
+  type: pipeline_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:monai_mean_teacher_zarr}
+  - --keys
+  - teacher_argmax
+- name: qa_assert_zarr_dice_monai_mean_teacher
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:monai_mean_teacher_zarr}
+  - --pred-key
+  - teacher_argmax
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.5'
+- name: qa_train_monai_pseudo_label
+  type: train
+  model_key: qa_monai_pseudo_label
+  args:
+  - --unlabeled_data_dir
+  - ${artifact:unlabeled_slices}
+  overrides:
+    train:
+      model_output_fn: qa_monai_pseudo_label
+      augmentation_library: albumentations
+      use_pseudo_labeling: true
+      pseudo_label_confidence_threshold: 0.9
+      pseudo_label_use_teacher: false
+      pseudo_label_weight: 0.5
+      pseudo_label_threshold_schedule: fixed
+    pipeline:
+      augmentations:
+        backend: monai
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+    - '*_pseudo_labeling_epoch_*.png'
+- name: qa_assert_bn_trained_monai_pseudo_label
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_monai_pseudo_label}
+- name: qa_predict_monai_pseudo_label_low
+  type: predict
+  model_key: qa_monai_pseudo_label
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+    - '*_vol_pred_BND.*'
+    - '*_vol_pred_DIST.*'
+- name: qa_assert_dice_monai_pseudo_label
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:qa_predict_monai_pseudo_label_low_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.5'
+- name: qa_predict_monai_pseudo_label_zarr
+  type: pipeline_predict_zarr
+  model_key: qa_monai_pseudo_label
+  inference_mode: single_axis
+  output_zarr: prediction.zarr
+  zarr_key: monai_pseudo_label_zarr
+- name: qa_assert_zarr_keys_monai_pseudo_label
+  type: pipeline_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:monai_pseudo_label_zarr}
+  - --keys
+  - teacher_argmax
+- name: qa_assert_zarr_dice_monai_pseudo_label
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:monai_pseudo_label_zarr}
+  - --pred-key
+  - teacher_argmax
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.5'

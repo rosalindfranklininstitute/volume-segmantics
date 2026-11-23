@@ -17,6 +17,8 @@ python tests/scripts/run_smoke.py multitask
 python tests/scripts/run_smoke.py 2.5d
 python tests/scripts/run_smoke.py semisup
 python tests/scripts/run_smoke.py architectures   # FPN, two-head DeepLabV3+, Segformer under the default trainer
+python tests/scripts/run_smoke.py pipeline_monai  # train and predict with augmentation_library: monai, 2D and 2.5D
+python tests/scripts/run_smoke.py pipeline_monai_combined  # MONAI with multiple heads, Mean Teacher and pseudo-labelling
 
 # Dry-run (print resolved commands, skip execution)
 python tests/scripts/run_smoke.py basic --dry-run
