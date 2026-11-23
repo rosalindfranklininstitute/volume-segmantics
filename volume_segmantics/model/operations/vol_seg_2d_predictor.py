@@ -905,9 +905,16 @@ class VolSeg2dImageDirPredictor:
         model_tuple = create_model_from_file(
             self.model_file_path, device_num=self.model_device_num, settings=settings
         )
-        self.model, self.num_labels, self.label_codes, _ = model_tuple
+        self.model, self.num_labels, self.label_codes, self.training_image_size = model_tuple
+        # As for a volume: every image is resized to the training image_size
+        # the checkpoint records, unless native_scale is set.
+        self.native_scale = bool(getattr(settings, "native_scale", False))
 
         self._last_additional_tasks = None
+
+    _to_training_scale = VolSeg2dPredictor._to_training_scale
+    _at_native_scale = VolSeg2dPredictor._at_native_scale
+    _from_training_scale = staticmethod(VolSeg2dPredictor._from_training_scale)
 
     def _get_model_from_trainer(self, trainer):
         self.model = trainer.model
@@ -972,7 +979,6 @@ class VolSeg2dImageDirPredictor:
 
         #data_vol = utils.rotate_array_to_axis(data_vol, axis)
         #yx_dims = list(data_vol.shape[1:])
-        print(self.settings)
         yx_dims = (self.settings.output_size, self.settings.output_size)
 
         s_max = nn.Softmax(dim=1)
@@ -987,8 +993,10 @@ class VolSeg2dImageDirPredictor:
             for batch in tqdm(
                 data_loader, desc="Prediction batch", bar_format=cfg.TQDM_BAR_FORMAT
             ):
-                model_output = self.model(batch.to(self.model_device_num))  # Forward pass
+                batch, frame = self._to_training_scale(batch.to(self.model_device_num), yx_dims)
+                model_output = self.model(batch)  # Forward pass
                 output, additional_outputs = self._get_model_outputs(model_output)
+                output, additional_outputs = self._at_native_scale(output, additional_outputs, frame)
 
                 probs = s_max(output)  # Convert the logits to probs
                 # TODO: Don't flatten channels if one-hot output is needed

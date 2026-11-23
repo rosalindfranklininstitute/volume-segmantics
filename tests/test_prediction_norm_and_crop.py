@@ -59,3 +59,53 @@ def test_monai_prediction_slices_match_albumentations(imagenet_norm, use_2_5d):
     top, left = (96 - height) // 2, (96 - width) // 2
     window = (slice(None), slice(top, top + height), slice(left, left + width))
     assert torch.allclose(ours[window], ref[window])
+
+
+@pytest.mark.parametrize("library", ["albumentations", "monai"])
+@pytest.mark.parametrize("imagenet_norm", [True, False])
+def test_image_dir_prediction_dataset_follows_the_predict_settings(tmp_path, library, imagenet_norm):
+    """A directory of images is prepared as a volume's slices are: under
+    either augmentation library, and with the predict settings'
+    ``use_imagenet_norm``. Before this the image-directory dataset always
+    applied the ImageNet statistics."""
+    from types import SimpleNamespace
+
+    import cv2
+
+    from volume_segmantics.data.datasets import (
+        get_2d_image_dir_prediction_dataset, get_2d_prediction_dataset)
+
+    size = 64
+    vol = np.random.default_rng(0).integers(0, 256, (3, size, size), dtype=np.uint8)
+    for index, image in enumerate(vol):
+        cv2.imwrite(str(tmp_path / f"img_{index}.png"), image)
+    settings = SimpleNamespace(
+        augmentation_library=library, use_imagenet_norm=imagenet_norm, output_size=size,
+        use_2_5d_prediction=False,
+    )
+    from_dir = get_2d_image_dir_prediction_dataset(tmp_path, settings)
+    from_vol = get_2d_prediction_dataset(vol, settings)
+    assert len(from_dir) == len(vol)
+    for index in range(len(vol)):
+        ours, ref = torch.as_tensor(from_dir[index]), torch.as_tensor(from_vol[index])
+        assert ours.shape == ref.shape == (1, size, size)
+        assert torch.allclose(ours, ref)
+
+
+def test_image_dir_predictor_resizes_to_the_training_image_size():
+    """The image-directory predictor shares the volume predictor's resize to
+    the ``image_size`` the checkpoint records. Before this it predicted at the
+    images' own size, at a scale the model was not trained at."""
+    from volume_segmantics.model.operations.vol_seg_2d_predictor import (
+        VolSeg2dImageDirPredictor)
+
+    predictor = VolSeg2dImageDirPredictor.__new__(VolSeg2dImageDirPredictor)
+    predictor.training_image_size = 128
+    predictor.native_scale = False
+    batch = torch.rand(1, 1, 64, 64)
+    scaled, frame = predictor._to_training_scale(batch, (64, 64))
+    assert scaled.shape == (1, 1, 128, 128)
+    output, extra = predictor._at_native_scale(scaled, {"boundary": scaled}, frame)
+    assert output.shape == extra["boundary"].shape == batch.shape
+    predictor.native_scale = True
+    assert predictor._to_training_scale(batch, (64, 64))[1] is None

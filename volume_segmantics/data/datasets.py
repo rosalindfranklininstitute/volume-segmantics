@@ -388,6 +388,7 @@ def get_2d_image_dir_prediction_dataset(image_dir: Path, settings: SimpleNamespa
     return VolSeg2dImageDirDataset(
         image_dir,
         preprocessing=aug_module.get_pred_preprocess_augs(img_size, img_size),
+        imagenet_norm=getattr(settings, "use_imagenet_norm", True),
         postprocessing=aug_module.get_postprocess_augs(),
     )
 
