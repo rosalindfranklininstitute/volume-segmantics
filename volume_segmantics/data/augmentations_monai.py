@@ -201,6 +201,26 @@ def get_padded_dimension(dimension: int) -> int:
     return (math.floor(dimension / image_divisor) + 1) * image_divisor
 
 
+def _channel_first_image(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Put the prediction slice in channel-first layout.
+
+    A 2D slice ``(H, W)`` becomes ``(1, H, W)``. A 2.5D stack of adjacent
+    slices ``(H, W, C)`` becomes ``(C, H, W)``.
+    """
+    result = dict(data)
+    image = np.asarray(data[IMAGE_KEY])
+    if image.ndim == 2:
+        image = image[np.newaxis]
+    elif image.ndim == 3:
+        image = np.moveaxis(image, -1, 0)
+    else:
+        raise ValueError(
+            f"Prediction slice must be (H, W) or (H, W, C); got shape {image.shape}."
+        )
+    result[IMAGE_KEY] = image
+    return result
+
+
 def get_pred_preprocess_augs(
     img_size_y: int, img_size_x: int
 ) -> AlbumentationsStyleCompose:
@@ -218,7 +238,7 @@ def get_pred_preprocess_augs(
     padded_x_dim = get_padded_dimension(img_size_x)
     return AlbumentationsStyleCompose(
         [
-            EnsureChannelFirstd(keys=[IMAGE_KEY], channel_dim="no_channel"),
+            _channel_first_image,
             SpatialPadd(
                 keys=[IMAGE_KEY],
                 spatial_size=(padded_y_dim, padded_x_dim),

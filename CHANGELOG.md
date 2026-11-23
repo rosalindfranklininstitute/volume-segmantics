@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+* Prediction with `augmentation_library: monai` in the predict settings no longer stops with "Cannot interpret 'torch.uint8' as a data type" (the ImageNet normalisation now accepts the MONAI tensor), and it works with `use_2_5d_prediction`.
 * `output_entropy: True` with `quality: low` logs a warning that no entropy volume is written (a single pass has no votes to disagree; use medium, high or z_only). Before this the file was silently absent.
 * The epoch summary line printed on the console carried the previous epoch's training loss, and none on the first epoch; it is now printed at the end of the training epoch with that epoch's own loss and validation metrics.
 * The default trainer builds the `model.type` the settings ask for. Before this it always built the pipeline U-Net and named the checkpoint `U_NET`, so `FPN`, `DeepLabV3`, `DeepLabV3_Plus`, `MA_Net`, `Linknet`, `PAN`, `Segformer`, `U_Net_Plus_plus` and `Vanilla_Unet` all trained as a U-Net. Each architecture is now built with its own decoder and the pipeline heads on it, the checkpoint is named after the type (`<date>_FPN_...`, or `PIPELINE_MULTITASK_FPN` with more than one head) and records it, and `model-predict-2d` rebuilds it; `Multitask_Unet` remains the legacy name of the pipeline U-Net.

@@ -31,3 +31,31 @@ def test_crop_undoes_the_prediction_padding_exactly(height, width):
     padded = get_pred_preprocess_augs(height, width)(image=image)["image"]
     cropped = utils.crop_tensor_to_array(torch.from_numpy(padded)[None], [height, width])
     assert np.array_equal(cropped[0], image)
+
+
+@pytest.mark.parametrize("imagenet_norm", [True, False])
+@pytest.mark.parametrize("use_2_5d", [False, True])
+def test_monai_prediction_slices_match_albumentations(imagenet_norm, use_2_5d):
+    """``augmentation_library: monai`` in the predict settings prepares the same
+    slice as albumentations inside the original image area. Before this, the
+    ImageNet normalisation raised "Cannot interpret 'torch.uint8' as a data
+    type" on the MONAI tensor, and a 2.5D stack failed in the padding."""
+    from types import SimpleNamespace
+
+    from volume_segmantics.data.datasets import get_2d_prediction_dataset
+
+    height, width = 65, 70
+    vol = np.random.default_rng(0).integers(0, 256, (5, height, width), dtype=np.uint8)
+    slices = {}
+    for library in ("albumentations", "monai"):
+        settings = SimpleNamespace(
+            augmentation_library=library, use_imagenet_norm=imagenet_norm,
+            use_2_5d_prediction=use_2_5d, num_slices=3,
+        )
+        slices[library] = torch.as_tensor(get_2d_prediction_dataset(vol, settings)[2])
+    ours, ref = slices["monai"], slices["albumentations"]
+    assert ours.shape == ref.shape == (3 if use_2_5d else 1, 96, 96)
+    assert ours.dtype == torch.float32
+    top, left = (96 - height) // 2, (96 - width) // 2
+    window = (slice(None), slice(top, top + height), slice(left, left + width))
+    assert torch.allclose(ours[window], ref[window])

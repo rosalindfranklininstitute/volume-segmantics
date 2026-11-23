@@ -223,10 +223,9 @@ class VolSeg2dPredictionDataset(BaseDataset):
             image = sample["image"]
 
         if self.imagenet_norm:
-            if np.issubdtype(image.dtype, np.integer):
-                # Convert to float
-                image = image.astype(np.float32)
-                image = image / 255
+            # The slice is a NumPy array (Albumentations pre-processing) or a
+            # tensor (MONAI pre-processing); both go to float in 0 to 1 first.
+            image = _integer_image_to_unit_range(image)
             image = image - self.imagenet_mean
             image = image / self.imagenet_std
         else:
@@ -300,10 +299,9 @@ class VolSeg2dImageDirDataset(BaseDataset):
             image = sample["image"]
 
         if self.imagenet_norm:
-            if np.issubdtype(image.dtype, np.integer):
-                # Convert to float
-                image = image.astype(np.float32)
-                image = image / 255
+            # The slice is a NumPy array (Albumentations pre-processing) or a
+            # tensor (MONAI pre-processing); both go to float in 0 to 1 first.
+            image = _integer_image_to_unit_range(image)
             image = image - self.imagenet_mean
             image = image / self.imagenet_std
         else:
