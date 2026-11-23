@@ -1,0 +1,230 @@
+# Non-square slices end to end. The harness volumes are cubes, so the code
+# that resizes a slice by its longest side, pads it to a square and crops the
+# prediction back never runs in the other configs. This one crops the vessel
+# data to 128 x 80 x 256 (z, y, x): no plane is square, and a z slice is
+# 80 x 256, where the pad on each side is wider than the slice. It trains a
+# semantic and boundary model under each augmentation backend and predicts
+# with the same backend along z (low), along all three axes (medium) and
+# through model-predict-pipeline.
+#
+# The segmentation-dice steps have a floor of 0: they are here for their
+# shape check, which fails a prediction that does not come back at the
+# cropped volume's shape. pipeline_nonsquare_qa.yaml gates the Dice itself.
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_nonsquare_smoke
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: low
+    output_probs: false
+    output_entropy: false
+    prediction_axis: Z
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: true
+        loss: boundary_bce_dice
+        loss_weight: 0.5
+        width: 2
+    targets:
+      boundary:
+        width: 2
+tests:
+- name: crop_non_square
+  type: crop_volume
+  shape:
+  - 128
+  - 80
+  - 256
+- name: train_nonsquare_albu
+  type: train
+  model_key: nonsquare_albu
+  overrides:
+    train:
+      model_output_fn: nonsquare_albu
+      augmentation_library: albumentations
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained_nonsquare_albu
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:nonsquare_albu}
+- name: predict_nonsquare_albu_low
+  type: predict
+  model_key: nonsquare_albu
+  overrides:
+    predict:
+      augmentation_library: albumentations
+      quality: low
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+    - '*_vol_pred_BND.*'
+- name: assert_dice_nonsquare_albu_low
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:predict_nonsquare_albu_low_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.0'
+- name: predict_nonsquare_albu_medium
+  type: predict
+  model_key: nonsquare_albu
+  overrides:
+    predict:
+      augmentation_library: albumentations
+      quality: medium
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+    - '*_vol_pred_BND.*'
+- name: assert_dice_nonsquare_albu_medium
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:predict_nonsquare_albu_medium_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.0'
+- name: predict_nonsquare_albu_zarr
+  type: pipeline_predict_zarr
+  model_key: nonsquare_albu
+  inference_mode: single_axis
+  output_zarr: prediction.zarr
+  zarr_key: nonsquare_albu_zarr
+  overrides:
+    predict:
+      augmentation_library: albumentations
+- name: assert_zarr_keys_nonsquare_albu
+  type: pipeline_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:nonsquare_albu_zarr}
+  - --keys
+  - teacher_argmax
+- name: assert_zarr_dice_nonsquare_albu
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:nonsquare_albu_zarr}
+  - --pred-key
+  - teacher_argmax
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.0'
+- name: train_nonsquare_monai
+  type: train
+  model_key: nonsquare_monai
+  overrides:
+    train:
+      model_output_fn: nonsquare_monai
+      augmentation_library: monai
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained_nonsquare_monai
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:nonsquare_monai}
+- name: predict_nonsquare_monai_low
+  type: predict
+  model_key: nonsquare_monai
+  overrides:
+    predict:
+      augmentation_library: monai
+      quality: low
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+    - '*_vol_pred_BND.*'
+- name: assert_dice_nonsquare_monai_low
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:predict_nonsquare_monai_low_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.0'
+- name: predict_nonsquare_monai_medium
+  type: predict
+  model_key: nonsquare_monai
+  overrides:
+    predict:
+      augmentation_library: monai
+      quality: medium
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+    - '*_vol_pred_BND.*'
+- name: assert_dice_nonsquare_monai_medium
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:predict_nonsquare_monai_medium_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.0'
+- name: predict_nonsquare_monai_zarr
+  type: pipeline_predict_zarr
+  model_key: nonsquare_monai
+  inference_mode: single_axis
+  output_zarr: prediction.zarr
+  zarr_key: nonsquare_monai_zarr
+  overrides:
+    predict:
+      augmentation_library: monai
+- name: assert_zarr_keys_nonsquare_monai
+  type: pipeline_assert
+  subcommand: zarr-keys
+  args:
+  - ${artifact:nonsquare_monai_zarr}
+  - --keys
+  - teacher_argmax
+- name: assert_zarr_dice_nonsquare_monai
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:nonsquare_monai_zarr}
+  - --pred-key
+  - teacher_argmax
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.0'

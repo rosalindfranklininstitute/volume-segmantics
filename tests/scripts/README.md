@@ -19,6 +19,7 @@ python tests/scripts/run_smoke.py semisup
 python tests/scripts/run_smoke.py architectures   # FPN, two-head DeepLabV3+, Segformer under the default trainer
 python tests/scripts/run_smoke.py pipeline_monai  # train and predict with augmentation_library: monai, 2D and 2.5D
 python tests/scripts/run_smoke.py pipeline_monai_combined  # MONAI with multiple heads, Mean Teacher and pseudo-labelling
+python tests/scripts/run_smoke.py pipeline_nonsquare  # non-square slices under both augmentation backends
 
 # Dry-run (print resolved commands, skip execution)
 python tests/scripts/run_smoke.py basic --dry-run
@@ -43,6 +44,7 @@ python tests/scripts/real_data_harness.py --config tests/scripts/configs/basic_s
  `train` - Run `train_2d_model` 
  `predict` - Run `predict_2d_model` with a registered model 
  `unlabeled_slicer` - Slice unlabeled volumes into 2D images 
+ `crop_volume` - Centre-crop the image and label volumes to a (z, y, x) `shape`; later steps train and predict on the crops
  `pytest` - Run targeted pytest checks 
 
 ### Token substitution

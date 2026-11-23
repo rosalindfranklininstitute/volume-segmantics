@@ -82,6 +82,7 @@ NAMED_CONFIGS = {
     "pipeline_instance_cell": "tests/scripts/configs/pipeline_instance_cell_smoke.yaml",
     "pipeline_monai": "tests/scripts/configs/pipeline_monai_smoke.yaml",
     "pipeline_monai_combined": "tests/scripts/configs/pipeline_monai_combined_smoke.yaml",
+    "pipeline_nonsquare": "tests/scripts/configs/pipeline_nonsquare_smoke.yaml",
     "qa_pipeline_multihead": "tests/scripts/configs/pipeline_multihead_qa.yaml",
     "qa_pipeline_instance_cell": "tests/scripts/configs/pipeline_instance_cell_qa.yaml",
     "qa_semantic_cell": "tests/scripts/configs/semantic_cell_qa.yaml",
@@ -90,6 +91,7 @@ NAMED_CONFIGS = {
     "qa_pipeline_tta_villi": "tests/scripts/configs/pipeline_tta_villi_qa.yaml",
     "qa_pipeline_monai": "tests/scripts/configs/pipeline_monai_qa.yaml",
     "qa_pipeline_monai_combined": "tests/scripts/configs/pipeline_monai_combined_qa.yaml",
+    "qa_pipeline_nonsquare": "tests/scripts/configs/pipeline_nonsquare_qa.yaml",
 }
 
 # Groups that expand to multiple configs run in sequence

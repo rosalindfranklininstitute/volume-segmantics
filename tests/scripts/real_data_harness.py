@@ -6,6 +6,7 @@ Supports reusable step types:
 - train          : run train_2d_model
 - predict        : run predict_2d_model with a registered model
 - unlabeled_slicer : slice unlabeled volumes into 2D images
+- crop_volume    : centre-crop the image and label volumes to a given shape
 - pytest         : run targeted pytest checks
 
 Assertion steps address a predict step's volume as ``${artifact:<step>_pred}``
@@ -697,6 +698,63 @@ def _run_derive_distance_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> 
     print(f"{status} Updated ${{path:task3}} -> {output_path}")
 
 
+def _read_volume(path: Path, hdf5_path: str):
+    """A volume from an HDF5 or a TIFF file as a NumPy array."""
+    if path.suffix.lower() in (".h5", ".hdf5", ".hdf"):
+        import h5py
+
+        with h5py.File(path, "r") as handle:
+            return handle[hdf5_path][()]
+    import tifffile
+
+    return tifffile.imread(path)
+
+
+def _run_crop_volume_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
+    """Centre-crop the image and label volumes and train and predict on the crops.
+
+    The harness volumes are cubes, so every slice is square and the code that
+    pads a slice to a square and crops the prediction back never runs. This
+    step writes crops of ``shape`` (z, y, x) as HDF5 into its run directory
+    and points ``${path:image}`` and ``${path:label}`` at them for the steps
+    that follow.
+
+    Config shape::
+
+        - name: crop_non_square
+          type: crop_volume
+          shape: [128, 80, 256]
+    """
+    name = str(step_cfg["name"])
+    run_dir = ctx.output_root / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    shape = [int(v) for v in step_cfg["shape"]]
+    if len(shape) != 3:
+        raise ValueError(f"crop_volume step '{name}' needs a (z, y, x) shape; got {shape}")
+    hdf5_path = str(step_cfg.get("hdf5_path", "/data"))
+
+    status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
+    for attr, source in (("image_path", ctx.image_path), ("label_path", ctx.label_path)):
+        if source is None:
+            continue
+        target = run_dir / f"{source.stem}_crop.h5"
+        if not ctx.dry_run:
+            import h5py
+
+            volume = _read_volume(source, hdf5_path)
+            if volume.ndim != 3 or any(c > s for c, s in zip(shape, volume.shape)):
+                raise ValueError(
+                    f"crop_volume step '{name}': cannot crop {source.name} of shape "
+                    f"{volume.shape} to {tuple(shape)}."
+                )
+            starts = [(s - c) // 2 for c, s in zip(shape, volume.shape)]
+            crop = volume[tuple(slice(a, a + c) for a, c in zip(starts, shape))]
+            with h5py.File(target, "w") as handle:
+                handle.create_dataset(hdf5_path, data=crop)
+        setattr(ctx, attr, target)
+        print(f"{status} Cropped {source.name} to {tuple(shape)} -> {target}")
+
+
 STEP_DISPATCH = {
     "train": _run_train_step,
     "predict": _run_predict_step,
@@ -706,6 +764,7 @@ STEP_DISPATCH = {
     "pytest": _run_pytest_step,
     "derive_boundary": _run_derive_boundary_step,
     "derive_distance": _run_derive_distance_step,
+    "crop_volume": _run_crop_volume_step,
 }
 
 
