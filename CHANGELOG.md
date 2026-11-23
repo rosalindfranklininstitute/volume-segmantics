@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * `pipeline_monai` smoke and `qa_pipeline_monai` QA harness configurations that train and predict with `augmentation_library: monai`, in 2D and 2.5D, through `model-predict-2d` and `model-predict-pipeline`.
 * `pipeline_nonsquare` smoke and `qa_pipeline_nonsquare` QA harness configurations that train and predict on a non-cubic crop of the vessel data under both augmentation backends, and a `crop_volume` harness step that makes the crop. Before these every harness volume was a cube, so the pad to a square and the crop back never ran end to end.
 * `pipeline_monai_combined` smoke and `qa_pipeline_monai_combined` QA harness configurations that train with MONAI augmentations on four heads, with Mean Teacher and with pseudo-labelling (the backend named in `pipeline.yaml`), and predict with each model.
+* `pipeline_image_dir` smoke and `qa_pipeline_image_dir` QA harness configurations that predict a directory of images (`predict_2d_model_imagedir`) under both augmentation backends, with a `predict_image_dir` harness step and a `--slice-glob` option on the `segmentation-dice` assertion to score the predicted slices.
+* `pipeline_downsample` smoke and `qa_pipeline_downsample` QA harness configurations that train and predict with `downsample: True` through `model-predict-2d` and `model-predict-pipeline`.
 * Explicit `precision` train setting and `--precision` option for the default trainer: `32` (full precision, the default), `16-mixed` or `bf16-mixed` for automatic mixed precision in float16 or bfloat16.
 
 ### Changed

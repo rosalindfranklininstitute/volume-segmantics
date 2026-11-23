@@ -1,0 +1,130 @@
+# QA pair to pipeline_image_dir_smoke.yaml: a really trained model predicts
+# the directory of slice images under each augmentation backend, with the
+# Dice of the stacked z slices gated. The same model also predicts the
+# volume with model-predict-2d, so the two Dice figures can be compared: an
+# image directory that is predicted at the wrong scale or with the wrong
+# normalisation scores below the volume.
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+  unlabeled:
+  - training_data/vessels_256cube_DATA.h5
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_image_dir_qa
+global_overrides:
+  train:
+    image_size: 512
+    num_cyc_frozen: 8
+    num_cyc_unfrozen: 5
+    patience: 4
+    starting_lr: 5.0e-05
+    end_lr: 0.001
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: imagenet
+  predict:
+    quality: low
+    output_probs: false
+    output_entropy: false
+    prediction_axis: Z
+    output_size: 256
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: true
+        loss: boundary_bce_dice
+        loss_weight: 0.5
+        width: 2
+    targets:
+      boundary:
+        width: 2
+tests:
+- name: qa_train_image_dir_model
+  type: train
+  model_key: qa_image_dir_model
+  overrides:
+    train:
+      model_output_fn: qa_image_dir_model
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: qa_assert_bn_trained_image_dir
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:qa_image_dir_model}
+- name: qa_slice_images
+  type: unlabeled_slicer
+  output_key: image_slices
+  output_dir: image_slices
+- name: qa_predict_image_dir_albu
+  type: predict_image_dir
+  model_key: qa_image_dir_model
+  image_dir: ${artifact:image_slices}
+  overrides:
+    predict:
+      augmentation_library: albumentations
+  assert_outputs:
+    should_exist_globs:
+    - predictions/*_z_stack_0.png
+- name: qa_assert_dice_image_dir_albu
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:qa_predict_image_dir_albu_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.7'
+  - --slice-glob
+  - '*_z_stack_*.png'
+- name: qa_predict_image_dir_monai
+  type: predict_image_dir
+  model_key: qa_image_dir_model
+  image_dir: ${artifact:image_slices}
+  overrides:
+    predict:
+      augmentation_library: monai
+  assert_outputs:
+    should_exist_globs:
+    - predictions/*_z_stack_0.png
+- name: qa_assert_dice_image_dir_monai
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:qa_predict_image_dir_monai_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.7'
+  - --slice-glob
+  - '*_z_stack_*.png'
+- name: qa_predict_image_dir_volume
+  type: predict
+  model_key: qa_image_dir_model
+  assert_outputs:
+    should_exist_globs:
+    - '*_vol_pred.*'
+- name: qa_assert_dice_image_dir_volume
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:qa_predict_image_dir_volume_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.7'

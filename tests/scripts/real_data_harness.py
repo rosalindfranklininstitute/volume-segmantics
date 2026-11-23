@@ -5,6 +5,7 @@ Config-driven real-data regression testing harness framework.
 Supports reusable step types:
 - train          : run train_2d_model
 - predict        : run predict_2d_model with a registered model
+- predict_image_dir : run predict_2d_model_imagedir over a directory of images
 - unlabeled_slicer : slice unlabeled volumes into 2D images
 - crop_volume    : centre-crop the image and label volumes to a given shape
 - pytest         : run targeted pytest checks
@@ -341,6 +342,55 @@ def _run_predict_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
     ctx.artifacts[pred_key] = run_dir / PREDICTION_GLOB
     status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
     print(f"{status} Registered artifact '{pred_key}' -> {ctx.artifacts[pred_key]}")
+
+    assert_cfg = step_cfg.get("assert_outputs", {})
+    _assert_globs(
+        run_dir=run_dir,
+        should_exist=assert_cfg.get("should_exist_globs", []),
+        should_not_exist=assert_cfg.get("should_not_exist_globs", []),
+        dry_run=ctx.dry_run,
+    )
+    print(f"{status} Assertions passed for '{name}'")
+
+
+def _run_predict_image_dir_step(ctx: HarnessContext, step_cfg: Dict[str, Any]) -> None:
+    """Predict a directory of 2D images with ``predict_2d_model_imagedir``.
+
+    ``image_dir`` is the directory to segment (usually an ``unlabeled_slicer``
+    step's ``${artifact:...}``). The predicted images go to ``predictions`` in
+    the run directory, registered as ``${artifact:<step name>_pred}``.
+    """
+    name = str(step_cfg["name"])
+    model_key = str(step_cfg["model_key"])
+    if model_key not in ctx.models:
+        raise KeyError(f"Predict step '{name}' references unknown model_key '{model_key}'")
+    run_dir = ctx.output_root / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    overrides = step_cfg.get("overrides", {})
+    _write_settings_pair(
+        ctx, run_dir, overrides.get("train", {}), overrides.get("predict", {}),
+        overrides.get("pipeline", {}),
+    )
+    output_dir = run_dir / "predictions"
+    cmd = [
+        sys.executable,
+        "-m",
+        "volume_segmantics.scripts.predict_2d_model_imagedir",
+        str(ctx.models[model_key]),
+        _resolve_token(str(step_cfg["image_dir"]), ctx, run_dir),
+        "--output",
+        str(output_dir),
+        "--data_dir",
+        str(run_dir),
+    ]
+    cmd.extend(_resolve_tokens(list(step_cfg.get("args", [])), ctx, run_dir))
+    _run_command(cmd, cwd=ctx.root_dir, root_dir=ctx.root_dir, dry_run=ctx.dry_run)
+
+    pred_key = str(step_cfg.get("pred_key", f"{name}_pred"))
+    ctx.artifacts[pred_key] = output_dir
+    status = "[DRY-RUN]" if ctx.dry_run else "[OK]"
+    print(f"{status} Registered artifact '{pred_key}' -> {output_dir}")
 
     assert_cfg = step_cfg.get("assert_outputs", {})
     _assert_globs(
@@ -765,6 +815,7 @@ STEP_DISPATCH = {
     "derive_boundary": _run_derive_boundary_step,
     "derive_distance": _run_derive_distance_step,
     "crop_volume": _run_crop_volume_step,
+    "predict_image_dir": _run_predict_image_dir_step,
 }
 
 

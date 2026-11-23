@@ -1,0 +1,118 @@
+# Prediction over a directory of 2D images
+# (volume_segmantics.scripts.predict_2d_model_imagedir), which no other
+# config and no unit test runs. A semantic and boundary model is trained,
+# the volume is sliced into PNG images, and the directory is predicted
+# under each augmentation backend.
+#
+# The segmentation-dice steps stack the predicted z slices and have a floor
+# of 0: they are here for their shape check. pipeline_image_dir_qa.yaml
+# gates the Dice itself.
+paths:
+  image: training_data/vessels_256cube_DATA.h5
+  label: training_data/vessels_256cube_LABELS.h5
+  unlabeled:
+  - training_data/vessels_256cube_DATA.h5
+settings_templates:
+  train: volseg-settings/2d_model_train_settings.yaml
+  predict: volseg-settings/2d_model_predict_settings.yaml
+output_root: tmp/pipeline_image_dir_smoke
+global_overrides:
+  train:
+    image_size: 64
+    num_cyc_frozen: 1
+    num_cyc_unfrozen: 0
+    patience: 1
+    starting_lr: 0.0001
+    end_lr: 0.0005
+    plot_lr_graph: false
+    use_multitask: false
+    use_semi_supervised: false
+    use_pseudo_labeling: false
+    model:
+      type: U_Net
+      encoder_name: resnet34
+      encoder_weights: null
+  predict:
+    quality: low
+    output_probs: false
+    output_entropy: false
+    prediction_axis: Z
+    output_size: 256
+  pipeline:
+    schema_version: pipeline_v1
+    heads:
+      semantic:
+        enabled: true
+        loss: dice_ce
+        loss_weight: 1.0
+      boundary:
+        enabled: true
+        loss: boundary_bce_dice
+        loss_weight: 0.5
+        width: 2
+    targets:
+      boundary:
+        width: 2
+tests:
+- name: train_image_dir_model
+  type: train
+  model_key: image_dir_model
+  overrides:
+    train:
+      model_output_fn: image_dir_model
+  assert_outputs:
+    should_exist_globs:
+    - '*_loss_plot.png'
+    - '*_train_stats.csv'
+    - '*_prediction_image.png'
+- name: assert_bn_trained_image_dir
+  type: pipeline_assert
+  subcommand: checkpoint-trained
+  args:
+  - ${model:image_dir_model}
+- name: slice_images
+  type: unlabeled_slicer
+  output_key: image_slices
+  output_dir: image_slices
+- name: predict_image_dir_albu
+  type: predict_image_dir
+  model_key: image_dir_model
+  image_dir: ${artifact:image_slices}
+  overrides:
+    predict:
+      augmentation_library: albumentations
+  assert_outputs:
+    should_exist_globs:
+    - predictions/*_z_stack_0.png
+- name: assert_dice_image_dir_albu
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:predict_image_dir_albu_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.0'
+  - --slice-glob
+  - '*_z_stack_*.png'
+- name: predict_image_dir_monai
+  type: predict_image_dir
+  model_key: image_dir_model
+  image_dir: ${artifact:image_slices}
+  overrides:
+    predict:
+      augmentation_library: monai
+  assert_outputs:
+    should_exist_globs:
+    - predictions/*_z_stack_0.png
+- name: assert_dice_image_dir_monai
+  type: pipeline_assert
+  subcommand: segmentation-dice
+  args:
+  - ${artifact:predict_image_dir_monai_pred}
+  - --gt-label
+  - ${path:label}
+  - --min-dice
+  - '0.0'
+  - --slice-glob
+  - '*_z_stack_*.png'

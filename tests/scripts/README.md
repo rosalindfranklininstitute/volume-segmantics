@@ -20,6 +20,8 @@ python tests/scripts/run_smoke.py architectures   # FPN, two-head DeepLabV3+, Se
 python tests/scripts/run_smoke.py pipeline_monai  # train and predict with augmentation_library: monai, 2D and 2.5D
 python tests/scripts/run_smoke.py pipeline_monai_combined  # MONAI with multiple heads, Mean Teacher and pseudo-labelling
 python tests/scripts/run_smoke.py pipeline_nonsquare  # non-square slices under both augmentation backends
+python tests/scripts/run_smoke.py pipeline_image_dir  # predict a directory of images under both augmentation backends
+python tests/scripts/run_smoke.py pipeline_downsample  # downsample: True at training and prediction
 
 # Dry-run (print resolved commands, skip execution)
 python tests/scripts/run_smoke.py basic --dry-run
@@ -44,6 +46,7 @@ python tests/scripts/real_data_harness.py --config tests/scripts/configs/basic_s
  `train` - Run `train_2d_model` 
  `predict` - Run `predict_2d_model` with a registered model 
  `unlabeled_slicer` - Slice unlabeled volumes into 2D images 
+ `predict_image_dir` - Run `predict_2d_model_imagedir` over a directory of images (`image_dir`)
  `crop_volume` - Centre-crop the image and label volumes to a (z, y, x) `shape`; later steps train and predict on the crops
  `pytest` - Run targeted pytest checks 
 

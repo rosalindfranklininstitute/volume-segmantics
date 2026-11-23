@@ -636,6 +636,30 @@ def _resolve_pred_path(pred_arg: str) -> Path:
     return Path(pred_arg)
 
 
+def _load_slice_stack(directory: Path, slice_glob: str) -> np.ndarray:
+    """Stack a directory's predicted slice images into a volume.
+
+    The files matching ``slice_glob`` are ordered by the last number in
+    their name (``..._z_stack_12.png`` is slice 12).
+    """
+    import re
+
+    import cv2
+
+    def index(path: Path) -> int:
+        numbers = re.findall(r"\d+", path.stem)
+        if not numbers:
+            raise AssertionError(f"segmentation-dice: no slice number in {path.name!r}")
+        return int(numbers[-1])
+
+    files = sorted(directory.glob(slice_glob), key=index)
+    if not files:
+        raise AssertionError(
+            f"segmentation-dice: no file matches {slice_glob!r} in {directory}"
+        )
+    return np.stack([cv2.imread(str(f), cv2.IMREAD_UNCHANGED) for f in files])
+
+
 def assert_segmentation_dice(
     pred_path: str,
     *,
@@ -644,6 +668,7 @@ def assert_segmentation_dice(
     min_fg_fraction: Optional[float] = None,
     max_fg_fraction: Optional[float] = None,
     pred_key: Optional[str] = None,
+    slice_glob: Optional[str] = None,
 ) -> None:
     """Foreground/background Dice between a predicted volume and the GT mask.
 
@@ -652,9 +677,15 @@ def assert_segmentation_dice(
     cell bodies. ``pred_path`` may be a glob; the newest match is used. When
     ``pred_key`` is given, ``pred_path`` is treated as a zarr store and the named
     array (e.g. ``teacher_argmax``) is read -- this lets the same assertion check
-    the pipeline's semantic output, not just a legacy ``*_vol_pred`` tiff.
+    the pipeline's semantic output, not just a legacy ``*_vol_pred`` tiff. When
+    ``slice_glob`` is given, ``pred_path`` is a directory of predicted slice
+    images (the output of ``predict_2d_model_imagedir``) and the files matching
+    the glob are stacked along z.
     """
-    if pred_key is not None:
+    if slice_glob is not None:
+        pred = Path(pred_path)
+        pv = _load_slice_stack(pred, slice_glob)
+    elif pred_key is not None:
         g = _open_zarr(_resolve_pred_path(pred_path))
         pv = np.squeeze(np.asarray(g[pred_key][:]))
         pred = Path(pred_path)
@@ -795,6 +826,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="If set, treat 'pred' as a zarr store and read this array (e.g. teacher_argmax).",
     )
+    sp.add_argument(
+        "--slice-glob",
+        default=None,
+        help="If set, treat 'pred' as a directory of predicted slice images and "
+        "stack the files matching this glob along z (e.g. '*_z_stack_*.png').",
+    )
 
     return p
 
@@ -871,6 +908,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             min_fg_fraction=args.min_fg_fraction,
             max_fg_fraction=args.max_fg_fraction,
             pred_key=args.pred_key,
+            slice_glob=args.slice_glob,
         )
     else:
         raise SystemExit(f"unknown subcommand {args.cmd!r}")
