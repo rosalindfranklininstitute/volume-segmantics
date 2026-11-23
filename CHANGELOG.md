@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 * `eval_metric` reaches the default trainer. Validation Dice is still always reported and the foreground Dice still selects the checkpoint; `MeanIoU` adds the per-class and mean IoU to the epoch summary line, the training stats CSV (`Seg_IoU`, `IoU_<class>`) and the loss plot. `dice_averaging` (`macro` or `weighted`) and `exclude_background_from_dice` shape the reported mean as they did under the legacy trainer, and an unknown `eval_metric` or `dice_averaging` is refused
+* The MONAI pipeline augmentations pad a non-square slice to a square by mirroring it (`symmetric`), as the Albumentations backend does, where they padded with zeros. The mirror repeats the edge pixel, which Albumentations' does not. The MONAI prediction pre-processing pads the same way; with a zero border there a model trained on mirrored padding lost Dice at the slice edges (0.90 against 0.95 on the non-square QA volume).
 * The default trainer no longer slices the volumes given to `--task2` / `--task3` (it derives the heads' targets from the semantic labels and never read those slices) and no longer switches on the legacy `use_multitask` mode for them.
 * A file path in `model.encoder_weights` no longer initialises a DINO encoder (it loaded with `strict=False`, dropping missing tensors silently). Use `dinov2`/`dinov3` for the hub backbone, or load a full saved model via `full_weights_path`.
 

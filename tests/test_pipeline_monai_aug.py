@@ -196,6 +196,30 @@ class TestSpecTranslator:
         # Sizing + the one supported transform; the unknown is dropped.
         assert names == ["Resized", "SpatialPadd", "RandFlipd"], names
 
+    @pytest.mark.parametrize("width", [48, 16])  # 16: the pad is wider than the slice
+    def test_pad_to_square_mirrors_the_slice(self, width):
+        """The pad to square is a mirror of the slice (as with Albumentations),
+        on the image and the mask together, also for a very elongated slice."""
+        import torch
+
+        comp = build_pipeline_monai_transforms(
+            IMG, ["image", "mask"], ["bilinear", "nearest"],
+            train_transforms=[TransformSpec(name="HorizontalFlip", params={"p": 0.0})],
+        )
+        ramp = torch.arange(1, width + 1, dtype=torch.float32)
+        image = ramp[None, None, :].repeat(1, IMG, 1)  # (C, H=IMG, W=width)
+        out = comp({"image": image, "mask": image.clone()})
+        for key in ("image", "mask"):
+            row = torch.as_tensor(out[key])[0, 0]
+            assert row.shape == (IMG,)
+            left = (IMG - width) // 2
+            assert torch.equal(row[left:left + width], ramp), key
+            assert row.min() >= 1, f"{key}: the pad holds zeros"
+            # The pixels beside the slice repeat its edge, mirrored outwards.
+            assert row[left - 1] == ramp[0] and row[left + width] == ramp[-1], key
+            if left >= 2:
+                assert row[left - 2] == ramp[1], key
+
     def test_empty_list_uses_default_recipe(self):
         comp = build_pipeline_monai_transforms(
             IMG, self.KEYS, self.MODES, train_transforms=[],

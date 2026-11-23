@@ -242,7 +242,9 @@ def get_pred_preprocess_augs(
             SpatialPadd(
                 keys=[IMAGE_KEY],
                 spatial_size=(padded_y_dim, padded_x_dim),
-                mode="constant",
+                # Mirror, as the training pad and the Albumentations
+                # prediction pad do; a zero border costs Dice at the edge.
+                mode="symmetric",
             ),
         ],
         keys=[IMAGE_KEY],
@@ -619,9 +621,12 @@ def build_pipeline_monai_transforms(
     image_only = [image_key]
     transforms: List = [
         # Resize longest edge then pad to square: the MONAI equivalent of the
-        # Albumentations LongestMaxSize + PadIfNeeded sizing step.
+        # Albumentations LongestMaxSize + PadIfNeeded sizing step. The pad
+        # mirrors the slice as Albumentations' does; "symmetric" (which repeats
+        # the edge pixel) and not "reflect", which fails when the pad is as
+        # wide as the slice (aspect ratio of about 3:1 and above).
         Resized(keys=keys, spatial_size=img_size, size_mode="longest", mode=modes),
-        SpatialPadd(keys=keys, spatial_size=(img_size, img_size), mode="constant"),
+        SpatialPadd(keys=keys, spatial_size=(img_size, img_size), mode="symmetric"),
     ]
     if train_transforms:
         for spec in train_transforms:
