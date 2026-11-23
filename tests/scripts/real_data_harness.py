@@ -122,6 +122,10 @@ def _write_settings_pair(
         _deep_update(train_cfg, copy.deepcopy(train_overrides))
     if pred_overrides:
         _deep_update(pred_cfg, copy.deepcopy(pred_overrides))
+    # A setting may name an earlier step's output, such as
+    # full_weights_path: ${model:<key>}.
+    train_cfg = _resolve_setting_tokens(train_cfg, ctx, run_dir)
+    pred_cfg = _resolve_setting_tokens(pred_cfg, ctx, run_dir)
 
     train_settings = settings_dir / "2d_model_train_settings.yaml"
     pred_settings = settings_dir / "2d_model_predict_settings.yaml"
@@ -206,6 +210,17 @@ def _resolve_token(raw: str, ctx: HarnessContext, run_dir: Path) -> str:
             return [str(item) for item in value]
         return str(value)
     return raw
+
+
+def _resolve_setting_tokens(value: Any, ctx: HarnessContext, run_dir: Path) -> Any:
+    """Resolve ``${model:...}`` and ``${artifact:...}`` tokens in a settings tree."""
+    if isinstance(value, dict):
+        return {key: _resolve_setting_tokens(item, ctx, run_dir) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_setting_tokens(item, ctx, run_dir) for item in value]
+    if isinstance(value, str) and value.startswith(("${model:", "${artifact:")):
+        return _resolve_token(value, ctx, run_dir)
+    return value
 
 
 def _resolve_tokens(values: List[str], ctx: HarnessContext, run_dir: Path) -> List[str]:

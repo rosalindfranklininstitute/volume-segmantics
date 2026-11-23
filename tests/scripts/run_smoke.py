@@ -85,6 +85,8 @@ NAMED_CONFIGS = {
     "pipeline_nonsquare": "tests/scripts/configs/pipeline_nonsquare_smoke.yaml",
     "pipeline_image_dir": "tests/scripts/configs/pipeline_image_dir_smoke.yaml",
     "pipeline_downsample": "tests/scripts/configs/pipeline_downsample_smoke.yaml",
+    "pipeline_predict_settings": "tests/scripts/configs/pipeline_predict_settings_smoke.yaml",
+    "pipeline_train_settings": "tests/scripts/configs/pipeline_train_settings_smoke.yaml",
     "qa_pipeline_multihead": "tests/scripts/configs/pipeline_multihead_qa.yaml",
     "qa_pipeline_instance_cell": "tests/scripts/configs/pipeline_instance_cell_qa.yaml",
     "qa_semantic_cell": "tests/scripts/configs/semantic_cell_qa.yaml",
@@ -96,6 +98,8 @@ NAMED_CONFIGS = {
     "qa_pipeline_nonsquare": "tests/scripts/configs/pipeline_nonsquare_qa.yaml",
     "qa_pipeline_image_dir": "tests/scripts/configs/pipeline_image_dir_qa.yaml",
     "qa_pipeline_downsample": "tests/scripts/configs/pipeline_downsample_qa.yaml",
+    "qa_pipeline_predict_settings": "tests/scripts/configs/pipeline_predict_settings_qa.yaml",
+    "qa_pipeline_train_settings": "tests/scripts/configs/pipeline_train_settings_qa.yaml",
 }
 
 # Groups that expand to multiple configs run in sequence

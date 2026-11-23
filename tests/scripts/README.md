@@ -22,6 +22,8 @@ python tests/scripts/run_smoke.py pipeline_monai_combined  # MONAI with multiple
 python tests/scripts/run_smoke.py pipeline_nonsquare  # non-square slices under both augmentation backends
 python tests/scripts/run_smoke.py pipeline_image_dir  # predict a directory of images under both augmentation backends
 python tests/scripts/run_smoke.py pipeline_downsample  # downsample: True at training and prediction
+python tests/scripts/run_smoke.py pipeline_predict_settings  # native_scale, multi_axis, clip_data: False, use_imagenet_norm: False
+python tests/scripts/run_smoke.py pipeline_train_settings  # lr_policy: constant, training_axes, dice_averaging, bf16-mixed, weight paths
 
 # Dry-run (print resolved commands, skip execution)
 python tests/scripts/run_smoke.py basic --dry-run
@@ -63,6 +65,9 @@ Tokens in step `args` are resolved automatically:
 - `${artifact:<artifact_key>}` — path to an artifact from a previous step
 - `${artifact:<predict step>_pred}` — the volume a `predict` step wrote, as a glob
   (`*_vol_pred.*`), registered automatically; `pred_key` on the step renames it
+
+`${model:...}` and `${artifact:...}` are also resolved in a step's train and
+predict settings `overrides`, for example `full_weights_path: ${model:base}`.
 
 Step args must use these tokens rather than literal `tmp/...` or
 `training_data/...` paths: a `--data-profile` moves every run directory to

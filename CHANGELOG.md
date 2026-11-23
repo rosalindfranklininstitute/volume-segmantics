@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 * `pipeline_monai_combined` smoke and `qa_pipeline_monai_combined` QA harness configurations that train with MONAI augmentations on four heads, with Mean Teacher and with pseudo-labelling (the backend named in `pipeline.yaml`), and predict with each model.
 * `pipeline_image_dir` smoke and `qa_pipeline_image_dir` QA harness configurations that predict a directory of images (`predict_2d_model_imagedir`) under both augmentation backends, with a `predict_image_dir` harness step and a `--slice-glob` option on the `segmentation-dice` assertion to score the predicted slices.
 * `pipeline_downsample` smoke and `qa_pipeline_downsample` QA harness configurations that train and predict with `downsample: True` through `model-predict-2d` and `model-predict-pipeline`.
+* `pipeline_predict_settings` smoke and `qa_pipeline_predict_settings` QA harness configurations for the predict settings no other configuration set: `native_scale`, `clip_data: False`, `use_imagenet_norm: False` and the `multi_axis` inference mode.
+* `pipeline_train_settings` smoke and `qa_pipeline_train_settings` QA harness configurations for the train settings no other configuration set: `lr_policy: constant`, `training_axes`, `dice_averaging: weighted`, `precision: bf16-mixed`, `full_weights_path` and `encoder_weights_path`. A harness settings override may now name an earlier step's model as `${model:<key>}`.
 * Explicit `precision` train setting and `--precision` option for the default trainer: `32` (full precision, the default), `16-mixed` or `bf16-mixed` for automatic mixed precision in float16 or bfloat16.
 
 ### Changed
