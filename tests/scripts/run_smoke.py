@@ -108,11 +108,14 @@ NAMED_GROUPS = {
     "all_qa": ["qa_basic", "qa_losses", "qa_multitask", "qa_semisup", "qa_2.5d"],
     "all_dino_smoke": ["dino_basic", "dino_multitask", "dino_semisup", "dino_2.5d"],
     "all_dino_qa": ["qa_dino_basic", "qa_dino_multitask", "qa_dino_semisup", "qa_dino_2.5d"],
-    # pipeline version release gate (all 8 must be green for the pipeline version tag).
+    # pipeline version release gate (all 15 must be green for the pipeline version tag).
     "pipeline_all": [
         "pipeline_semantic", "pipeline_multihead", "pipeline_instance_seg",
         "pipeline_semisup", "pipeline_tta_uncertainty", "pipeline_trainer_parity",
         "pipeline_2.5d", "pipeline_dino",
+        "pipeline_monai", "pipeline_monai_combined", "pipeline_nonsquare",
+        "pipeline_image_dir", "pipeline_downsample",
+        "pipeline_predict_settings", "pipeline_train_settings",
     ],
 }
 
